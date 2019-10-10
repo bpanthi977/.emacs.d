@@ -5,15 +5,17 @@
 			'projectile
 			'uniquify
 			'ace-window
-			'saveplace))		
+			'saveplace))
 
+;; turn on CUA-mode globally
+(cua-mode t)
 ;; Newline at end of file
 (setq require-final-newline t)
 ;; delete the selection with a keypress
 (delete-selection-mode t)
-;; store all backup and autosave files in the tmp dir
+;; Backup and autosave files
 (setq backup-directory-alist
-      `((".*" . ,temporary-file-directory)))
+      `(("." . ,(concat savefile-dir "/backups"))))
 (setq auto-save-file-name-transforms
       `((".*" ,temporary-file-directory t)))
 ;; revert buffers automatically when underlying files are changed externally
@@ -106,3 +108,5 @@ buffer is not visiting a file."
   :mode "\\.md\\'"
   :config 
   (setf markdown-command "/home/bpanthi/.local/bin/pandoc -f gfm"))
+
+(global-set-key (kbd "M-.") 'find-function-at-point)

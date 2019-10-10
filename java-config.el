@@ -2,7 +2,23 @@
 			'javadoc-lookup))
 	
 ;; Java
+					;
 
+;; CUSTOM VARIABLES SET THEM UP
+;; (jdee-compiler (quote ("javac")))
+;;  '(jdee-complete-function (quote jdee-complete-minibuf))
+;;  '(jdee-complete-insert-method-signature nil)
+;;  '(jdee-help-docsets
+;;    (quote
+;;     (("nil" "file:///usr/lib/jvm/java-8-openjdk-amd64/docs/api" "1.8")
+;;      ("nil" "file:///usr/lib/jvm/java-9-openjdk-amd64/docs/api" "1.9")
+;;      (nil "file:///opt/WTK2.5.2/docs/api" "WTK2.5.2"))))
+;;  '(jdee-jdk (quote ("1.8")))
+;;  '(jdee-jdk-registry
+;;    (quote
+;;     (("1.8" . "/usr/lib/jvm/java-8-openjdk-amd64")
+;;      ("1.9" . "/usr/lib/jvm/java-9-openjdk-amd64"))))
+;;  '(jdee-server-dir "~/.emacs.d/elpa/jdee-20170217.22/")
 (defun my-java-make-compile ()
   (compile (format "make -k %s" (file-name-base (buffer-file-name)))))
 

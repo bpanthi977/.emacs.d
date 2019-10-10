@@ -1,4 +1,17 @@
 (use-package android-mode
+  :custom
+  (android-mode-build-command-alist
+   (quote
+    ((ant . "ant -e")
+     (gradle . "gradle")
+     (maven . "mvn"))))
+  (android-mode-built-command-alist
+   (quote
+    ((ant . "ant -e")
+     (maven . "mvn")
+     (gradle . "gradle"))))
+  (android-mode-sdk-dir "/home/bpanthi/Apps/android-sdk-linux")
+  (android-mode-sdk-tool-subdirs (list "tools"))
   :config 
   (setf android-mode-sdk-dir "/home/bpanthi/Apps/android-sdk-linux"
 	android-mode-sdk-tool-subdirs (list "tools")
