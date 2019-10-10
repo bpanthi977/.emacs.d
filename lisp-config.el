@@ -1,3 +1,4 @@
+;; Common Lisp
 (use-package slime
   :config 
   (setq inferior-lisp-program "/usr/bin/sbcl --core /home/bpanthi/.cache/common-lisp/core" ;; --dynamic-space-size 2560"
@@ -12,5 +13,9 @@
     (setq inferior-lisp-program "sbcl"
 	  common-lisp-hyperspec-root "d:/home/bpanthi/HyperSpec-7-0/HyperSpec/")))
 
-
-
+;; Emacs Lisp
+(use-package elisp-slime-nav
+  :hook ((emacs-lisp-mode ielm-mode) . turn-on-elisp-slime-nav-mode)
+  ;; Enable slime like M-. navigation in elisp source
+  :bind (:map emacs-lisp-mode-map 
+	      ("C-c C-c" . eval-defun)))
