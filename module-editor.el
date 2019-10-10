@@ -5,10 +5,7 @@
 			'projectile
 			'uniquify
 			'ace-window
-			'markdown-mode
-			'saveplace
-			'yasnippet
-			'yasnippet-snippets))
+			'saveplace))		
 
 ;; Newline at end of file
 (setq require-final-newline t)
@@ -92,6 +89,20 @@ buffer is not visiting a file."
 (setf aw-dispatch-always t)
 (setq aw-keys '(?a ?s ?d ?f ?g ?h ?j ?k ?l))
 
-(add-to-list 'company-backends 'company-yasnippet)
+(use-package yasnippet
+  :preface
+  (defun company-mode/backend-with-yas (backend)
+    (if (and (listp backend) (member 'company-yasnippet backend))
+	backend
+      (append (if (consp backend) backend (list backend))
+	      '(:with company-yasnippet))))
 
-(setf markdown-command "/home/bpanthi/.local/bin/pandoc -f gfm")
+  :after (yasnippet-snippets company-yasnippet)
+  :config
+  (add-to-list 'company-backends 'company-yasnippet)
+  (setq company-backends (mapcar #'company-mode/backend-with-yas company-backends)))
+
+(use-package markdown-mode
+  :mode "\\.md\\'"
+  :config 
+  (setf markdown-command "/home/bpanthi/.local/bin/pandoc -f gfm"))

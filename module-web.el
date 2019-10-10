@@ -1,53 +1,28 @@
-(install-packages (list 'web-mode
-			'ac-php
-			'helm-dash
-			'company
-			'company-web))
+(use-package web-mode
+  :mode (("\\.html\\'" . web-mode)
+	 ("\\.phtml\\'" . web-mode)
+	 ("\\.tpl\\'" . web-mode)
+	 ("\\.php\\'" . web-mode)
+	 ("\\.[agj]sp\\'" . web-mode)
+	 ("\\.as[cp]x\\'" . web-mode)
+	 ("\\.erb\\'" . web-mode)
+	 ("\\.mustache\\'" . web-mode)
+	 ("\\.djhtml\\'" . web-mode)))
 
+(use-package ac-php
+  :after (helm-dash)
+  :mode "\\.php\\'"
+  :commands (ac-php-find-symbol-at-point ac-php-location-stack-back helm-dash-at-point)
+  :bind (:map php-mode-map
+	      ("M-." . ac-php-find-symbol-at-point)
+	      ("C-t" . ac-php-location-stack-back)
+	      ("C-." . helm-dash-at-point))
+  :hook (php-mode . (lambda () 
+		      (add-local-company-backend 'company-ac-php-backend)
+		      (ac-php-core-eldoc-setup ) ;; enable eldoc
+		      (ac-php-remake-tags)
+		      (helm-dash-activate-docset "PHP"))))
 
-(add-to-list 'auto-mode-alist '("\\.phtml\\'" . web-mode))
-(add-to-list 'auto-mode-alist '("\\.tpl\\'" .web-mode))
-(add-to-list 'auto-mode-alist '("\\.php\\'" . web-mode))
-(add-to-list 'auto-mode-alist '("\\.[agj]sp\\'" . web-mode))
-(add-to-list 'auto-mode-alist '("\\.as[cp]x\\'" . web-mode))
-(add-to-list 'auto-mode-alist '("\\.erb\\'" . web-mode))
-(add-to-list 'auto-mode-alist '("\\.mustache\\'" . web-mode))
-(add-to-list 'auto-mode-alist '("\\.djhtml\\'" . web-mode))
-
-
-;; (defun my-web-mode-hook ()
-;;   (interactive)
-;;  
-;;   )
-;; (add-hook 'web-mode-hook 'my-web-mode-hook)
-
-
-(defun my-php-file-hook ()
-  (interactive)
-  (require 'web-mode)
-  (web-mode)
-  ;; (require 'lsp-php)
-  ;; (lsp-php-enable)
-  (require 'ac-php)
-  (make-local-variable 'company-backends)
-  (add-to-list 'company-backends 'company-ac-php-backend)
-  (ac-php-core-eldoc-setup ) ;; enable eldoc
-  (ac-php-remake-tags)
-  (local-set-key  (kbd "M-.") 'ac-php-find-symbol-at-point)   ;goto define
-  (local-set-key  (kbd "C-t") 'ac-php-location-stack-back) 
-  (require 'helm-dash)
-  (helm-dash-activate-docset "PHP")
-  (local-set-key (kbd "C-.") 'helm-dash-at-point))
-
-(defun my-html-file-hook ()
-  (interactive)
-  (require 'web-mode)
-  (require 'company)
-  (require 'company-web)
-  (web-mode)
-  (add-to-list 'company-backends 'company-web-html))
-
-(add-to-list 'auto-mode-alist '("\\.php\\'" . my-php-file-hook))
-(add-to-list 'auto-mode-alist '("\\.html\\'" . my-html-file-hook))
-
-
+(use-package company-web 
+  :hook (web-mode . (lambda ()
+		      (add-local-company-backend 'company-web-html))))

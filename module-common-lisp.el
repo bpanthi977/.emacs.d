@@ -8,10 +8,9 @@
     (interactive)
     (browse-url "/home/bpanthi/software/lispbuilder-20160825-git/lispbuilder-sdl/documentation/lispbuilder-sdl.html"))
   
-  :if (string-equal system-type "windows-nt")
-  :config 
-  (setq inferior-lisp-program "sbcl"
-	common-lisp-hyperspec-root "d:/home/bpanthi/HyperSpec-7-0/HyperSpec/"))
+  (when  (string-equal system-type "windows-nt")
+    (setq inferior-lisp-program "sbcl"
+	  common-lisp-hyperspec-root "d:/home/bpanthi/HyperSpec-7-0/HyperSpec/")))
 
 
 
