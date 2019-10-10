@@ -1,0 +1,36 @@
+;; (require 'elpy)
+;; (elpy-enable)
+
+;; (when (require 'flycheck nil t)
+;;   (setq elpy-modules (delq 'elpy-module-flymake elpy-modules))
+;; (add-hook 'elpy-mode-hook 'flycheck-mode))
+
+(defun my-python-mode-hook ()
+  (require 'flycheck nil t)
+;  (require 'anaconda-mode)
+;  (require 'company-anaconda)
+;  (add-to-list 'company-backends 'company-anaconda)
+;  (add-hook 'anaconda-mode-hook 'anaconda-eldoc-mode)
+  (require 'helm-dash)
+;  (anaconda-mode t)
+  (helm-dash-activate-docset "Python_3")
+  (helm-dash-activate-docset "OpenCV_C++")
+  (local-set-key (kbd "C-.") 'helm-dash-at-point))
+
+;; (defun my-python-mode-hook ()
+;;   (require 'elpy)
+;;   (elpy-enable)
+;;   )
+  
+(add-hook 'python-mode-hook 'my-python-mode-hook)
+
+(setq python-shell-interpreter "python3")
+
+;; WINDOWS CONFIG
+(when (string-equal system-type "windows-nt")
+  (setq python-shell-interpreter "bash -c python"))
+
+
+
+
+
