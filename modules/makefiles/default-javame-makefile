@@ -1,0 +1,34 @@
+# Declaration of variables
+CC = javac
+CP =  -classpath /opt/WTK2.5.2/lib/lib/cldcapi11.jar:/opt/WTK2.5.2/lib/midpapi21.jar:/opt/WTK2.5.2/lib/jsr135.jar:/opt/WTK2.5.2/lib/mmapi.jar
+CC_FLAGS = -target 1.3 -source 1.3 $(CP)
+EMULATOR = /opt/WTK2.5.2/bin/emulator
+EMULATOR_FLAGS = -cp ../classes:../res
+PREVERIFY =/opt/WTK2.5.2/bin/preverify
+# File names
+OUTDIR = ../classes # directory for output
+#EXEC = bin/run	 # main executable file
+SOURCE_EXTENSION = java	# extension of source files
+OBJECT_EXTENSION = class # extension of compiled files
+SOURCES = $(wildcard *.$(SOURCE_EXTENSION))
+OBJECTS = $(SOURCES:.$(SOURCE_EXTENSION)=.$(OBJECT_EXTENSION))
+
+#ALL
+ALL: $(SOURCES)
+
+# To exec class file in emulator
+execute-%: %.$(SOURCE_EXTENSION)
+	$(EMULATOR) $(EMULATOR_FLAGS) -Xdescriptor:../bin/$(@:execute-%=%).jad
+
+# To exec class file in emulator
+preverify:
+	$(PREVERIFY) $(CP) -target CLDC1.1 $(OUTDIR)
+
+# To compile java file
+%: %.$(SOURCE_EXTENSION)
+	$(CC) $(CC_FLAGS) $(LINKER_FLAGS) -d $(OUTDIR) $@.$(SOURCE_EXTENSION)
+
+# To remove generated files
+clean:
+	rm -f $(EXEC) $(addperfix $(OUTDIR)/, $(OBJECTS))
+

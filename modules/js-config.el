@@ -28,7 +28,11 @@
 ;; (flycheck-select-checker 'javascript-eslint)
 ;; (add-to-list 'company-backends 'ac-js2-company)
 ;; (add-to-list 'company-backends 'company-yasnippet)
-;; (add-to-list 'load-path "~/.emacs.d/tern/emacs/")
-;; (add-to-list 'exec-path "/home/bpanthi/.emacs.d/tern/bin/")
+(use-package tern
+  :config
+  (add-to-list 'load-path "~/.emacs.d/tern/emacs/")
+  (add-to-list 'exec-path "/home/bpanthi/.emacs.d/tern/bin/"))
+
+  
 ;; (autoload 'tern-mode "tern.el" nil t)
 

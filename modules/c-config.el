@@ -54,7 +54,7 @@
 ;;   (flycheck-select-checker 'irony)
 ;;   (require 'helm-dash)
 ;;   (helm-dash-activate-docset "C++")
-
+;;    (setf company-irony-ignore-case t)
 ;;   (setup-c-make)
 ;;   (setup-irony-keys)
   

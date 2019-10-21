@@ -8,7 +8,6 @@
 (defvar bpanthi-keys-minor-mode-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "C-/") 'comment-or-uncomment-region)
-    (define-key map (kbd "M-o") 'ace-window)
     (define-key map (kbd "C->") 'enlarge-window-horizontally)
     (define-key map (kbd "C-<") 'shrink-window-horizontally)
     (define-key map (kbd "M->") 'enlarge-window)
@@ -23,9 +22,7 @@
     (define-key map (kbd "<f12>") 'menu-bar-mode)
     (define-key map (kbd "C-x g") 'magit-status)
     (define-key map (kbd "C-SPC") 'shift-modifier)
-    ;; Smartparens
-    (define-key map (kbd "C-M-f") 'sp-forward-slurp-sexp)
-    (define-key map (kbd "C-M-b") 'sp-backward-slurp-sexp)
+  
     map))
 
 

@@ -4,11 +4,9 @@
   (company-auto-complete-chars nil)
   (company-frontends
    (quote
-    (company-pseudo-tooltip-frontend company-echo-metadata-frontend company-preview-if-just-one-frontend company-quickhelp-frontend company-echo-frontend)))
+    (company-pseudo-tooltip-frontend company-echo-metadata-frontend company-preview-if-just-one-frontend company-echo-frontend)))
   (company-idle-delay 0.1)
-  (company-irony-ignore-case t)
   (company-minimum-prefix-length 1)
-  (company-idle-delay 0.5)
   (company-tooltip-limit 10)
   (company-minimum-prefix-length 2)
   (company-require-match nil)
@@ -27,12 +25,13 @@
   :custom
   (company-quickhelp-color-background "#4F4F4F")
   (company-quickhelp-color-foreground "#DCDCCC")
-  (company-quickhelp-delay 0.2)
+  (company-quickhelp-delay 0.1)
   (company-quickhelp-mode t)
   (company-quickhelp-use-propertized-text t)
   :config 
   (add-to-list 'company-frontends 'company-quickhelp-frontend))
 
+
 (use-package helm-dash
-  :config
+  :custom
   (helm-dash-docsets-path "/home/bpanthi/.local/share/Zeal/Zeal/docsets/"))

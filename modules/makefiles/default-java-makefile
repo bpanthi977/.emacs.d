@@ -1,0 +1,27 @@
+# Declaration of variables
+CC = javac
+CP =
+CC_FLAGS =
+
+# File names
+OUTDIR = ../classes # directory for output
+#EXEC = bin/run	 # main executable file
+SOURCE_EXTENSION = java	# extension of source files
+OBJECT_EXTENSION = class # extension of compiled files
+SOURCES = $(wildcard *.$(SOURCE_EXTENSION))
+OBJECTS = $(SOURCES:.$(SOURCE_EXTENSION)=.$(OBJECT_EXTENSION))
+
+#ALL
+ALL: $(SOURCES)
+
+# To exec class file 
+execute-%: %.$(SOURCE_EXTENSION)
+	java -cp $(OUTDIR) $(@:execute-%=%) $(execargs)
+
+# To compile java file
+%: %.$(SOURCE_EXTENSION)
+	$(CC) $(CC_FLAGS) $(LINKER_FLAGS) -d $(OUTDIR) $@.$(SOURCE_EXTENSION)
+
+# To remove generated files
+clean:
+	rm -f $(EXEC) $(addperfix $(OUTDIR)/, $(OBJECTS))
