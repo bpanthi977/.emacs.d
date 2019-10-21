@@ -124,3 +124,5 @@ buffer is not visiting a file."
 (setq tramp-persistency-file-name (concat init-dir "cache/tramp"))
 ;; Abbrev 
 (setq abbrev-file-name (concat savefile-dir "/abbrev_defs"))
+;; Magit
+(custom-set-variables `(transient-history-file ,(concat savefile-dir "/transient/history.el")))
