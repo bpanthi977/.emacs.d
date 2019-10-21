@@ -1,7 +1,7 @@
 (use-package omnisharp
   :after (company flycheck)
   :config
-  (setf omnisharp-server-executable-path "/home/bpanthi/.emacs.d/omnisharp/server/v1.26.3/run")
+  (setf omnisharp-server-executable-path "/home/bpanthi/.emacs.d/extra/omnisharp/server/v1.26.3/run")
   :hook (csharp-mode .
 		     (lambda ()
 		       (omnisharp-mode)
