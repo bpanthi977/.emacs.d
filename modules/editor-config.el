@@ -55,8 +55,8 @@
   (smartparens-global-mode)
   (setq sp-autoskip-closing-pair 'always)
   (setq sp-hybrid-kill-entire-symbol nil)
-  (show-smartparens-global-mode +1)
-  (smartparens-strict-mode nil)
+  (smartparens-global-mode +1)
+  (smartparens-global-strict-mode nil)
   :bind (("C-M-f" . sp-forward-slurp-sexp)
 	 ("C-M-b" . sp-backward-slurp-sexp)))
 
@@ -90,7 +90,7 @@ buffer is not visiting a file."
   :bind-keymap ("M-P" . projectile-command-map))
 
 (use-package counsel-projectile
-  :init
+  :config
   (counsel-projectile-mode 1))
 
 ;; Ace Window
