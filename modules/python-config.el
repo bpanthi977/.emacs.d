@@ -22,6 +22,7 @@
   ;; (elpy-modules-global-init)
   ;; (elpy-mode t)
   ;; (add-to-list 'company-backends 'company-elpy)
+  (setf python-environment-directory (concat init-dir "extra/python-environment"))
   (require 'helm-dash)
   (require 'company-jedi)
   (require 'jedi-core)

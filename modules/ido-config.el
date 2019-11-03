@@ -3,6 +3,7 @@
 
 
 ;; (use-package ido
+;;   :bind (("C-x C-f" . ido-find-file))
 ;;   :config 
 ;;   (ido-vertical-mode)
 ;;   (setq ido-virtual-buffers t  
@@ -13,9 +14,7 @@
 ;; 	ido-max-prospects 10
 ;; 	ido-save-directory-list-file (expand-file-name "ido.hist" savefile-dir)
 ;; 	ido-default-file-method 'selected-window
-;; 	ido-auto-merge-work-directories-length -1)
-;;   :init 
-;;   (ido-mode +1))
+;; 	ido-auto-merge-work-directories-length -1))
 
 ;; (use-package ido-ubiquitous
 ;;   :after (ido)
@@ -31,28 +30,35 @@
 ;;   :init
 ;;   (flx-ido-mode +1))
 
-;;; smex, remember recently and most frequently used commands
-;; (use-package smex
-;;   :bind (("M-x" . smex)
-;; 	 ("M-X" . smex-major-mode-commands))
-;;   :config 
-;;   (setq smex-save-file (expand-file-name ".smex-items" savefile-dir))
-;;   (smex-initialize))
+;; smex, remember recently and most frequently used commands
+(use-package smex
+  :config 
+  (setq smex-save-file (expand-file-name ".smex-items" savefile-dir)))
+
 
 ;;; Ivy
 (use-package ivy :demand
   :config
   (setq ivy-use-virtual-buffers t
 	ivy-count-format "%d/%d ")
+  
   :init
   (ivy-mode 1))
 
 (use-package counsel
-  :bind (("M-x" . counsel-M-x)				
+  :bind (("C-x C-f" . counsel-find-file)
+	 ("M-x" . counsel-M-x)				
 	 ("C-c u" . counsel-unicode-char)
-	 ("C-c s" . counsel-rg)))
+	 ("C-c s" . counsel-rg))
+  :config
+  (setf (alist-get 'counsel-M-x ivy-initial-inputs-alist) " ")
+  ;; enable opening file as sudo
+  (defadvice counsel-find-file (after find-file-sudo activate)
+    "Find file as root if necessary."
+    (when (and buffer-file-name
+	       (file-exists-p buffer-file-name)
+	       (not (file-writable-p buffer-file-name)))
+      (find-alternate-file (concat "/sudo:root@localhost:" buffer-file-name)))))
 
 (use-package swiper
   :bind ("C-s" . swiper))
-
-(setf use-package-always-ensure t)

@@ -23,7 +23,9 @@
 ;; revert buffers automatically when underlying files are changed externally
 (global-auto-revert-mode t)
 ;; smart tab behavior - indent or complete
-(setq tab-always-indent 'complete)
+(setq-default tab-always-indent 'complete)
+(setq-default tab-width 4)
+(setq-default indent-tabs-mode t)
 ;; disable annoying blink-matching-paren
 (setq blink-matching-paren nil)
 
@@ -49,24 +51,15 @@
 (global-hl-line-mode +1)
 
 ;;smart pairing for all
-(use-package smartparens
+(use-package smartparens :demand
   :config
   (require 'smartparens-config)
-  (smartparens-global-mode)
   (setq sp-autoskip-closing-pair 'always)
   (setq sp-hybrid-kill-entire-symbol nil)
-  (smartparens-global-mode +1)
-  (smartparens-global-strict-mode nil)
+  (show-smartparens-global-mode t)
   :bind (("C-M-f" . sp-forward-slurp-sexp)
-	 ("C-M-b" . sp-backward-slurp-sexp)))
-
-;; enable opening file as sudo
-(defadvice ido-find-file (after find-file-sudo activate)
-  "Find file as root if necessary."
-  (when (and buffer-file-name
-	     (file-exists-p buffer-file-name)
-	     (not (file-writable-p buffer-file-name)))
-    (find-alternate-file (concat "/sudo:root@localhost:" buffer-file-name))))
+	 ("C-M-b" . sp-backward-slurp-sexp))
+  :hook ((prog-mode . smartparens-mode)))
 
 (defun sudo-edit (&optional arg)
   "Edit currently visited file as root.
@@ -126,3 +119,42 @@ buffer is not visiting a file."
 (setq abbrev-file-name (concat savefile-dir "/abbrev_defs"))
 ;; Magit
 (custom-set-variables `(transient-history-file ,(concat savefile-dir "/transient/history.el")))
+;; Avy
+(use-package avy
+  :bind (("C-:" . avy-goto-char)
+	 ("M-g C-c" . avy-goto-char)
+	 ("M-s" . avy-goto-char-timer)
+	 ("M-g C-g" . avy-goto-line))
+  :config
+  (setf avy-timeout-seconds 0.3))
+
+(use-package god-mode
+  :bind (("C-SPC" . god-local-mode)
+	 ("C-q" . god-local-mode)
+	 ("M-q" . god-mode-all)))
+
+(defun my-update-cursor ()
+  (setq cursor-type (if (or god-local-mode buffer-read-only)
+                        'bar
+                      'box)))
+
+(add-hook 'god-mode-enabled-hook 'my-update-cursor )
+(add-hook 'god-mode-disabled-hook 'my-update-cursor)
+
+(org-babel-do-load-languages
+ 'org-babel-load-languages
+ '((R . t)
+   (ditaa . t)
+   (dot . t)
+   (emacs-lisp . t)
+   (gnuplot . t)
+   (haskell . nil)
+   (latex . t)
+   (ledger . t)         ;this is the important one for this tutorial
+   (ocaml . nil)
+   (octave . t)
+   (python . t)
+   (ruby . t)
+   (screen . nil)
+   (sql . nil)
+   (sqlite . t)))

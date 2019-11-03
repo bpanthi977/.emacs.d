@@ -3,18 +3,18 @@
   :mode "\\.js\\'"
   :config
   (setq exec-path (append '("/home/bpanthi/.node_modules/bin"
-  			    "/home/bpanthi/.yarn/bin")
-  			  exec-path))
+							"/home/bpanthi/.yarn/bin")
+						  exec-path))
   (setenv "PATH" (concat "/home/bpanthi/.yarn/bin:/home/bpanthi/.node_modules/bin:"
-  			 (getenv "PATH")))
+						 (getenv "PATH")))
   (setq js2-strict-missing-semi-warning nil
-  	js2-missing-semi-one-line-override t
-  	js2-highlight-level 3)
+		js2-missing-semi-one-line-override t
+		js2-highlight-level 3)
   :hook (rjsx-mode . (lambda () 
-  		       (js2-mode-idle-reparse (current-buffer))
-  		       (company-mode-on)
-  		       ;; (add-hook 'before-save-hook 'jsfmt-before-save))
-  		       )))
+					   (js2-mode-idle-reparse (current-buffer))
+					   (company-mode-on)
+					   ;; (add-hook 'before-save-hook 'jsfmt-before-save))
+					   )))
 
 (use-package flycheck
   :config 
@@ -33,6 +33,7 @@
   (add-to-list 'load-path "~/.emacs.d/extra/tern/emacs/")
   (add-to-list 'exec-path "/home/bpanthi/.emacs.d/extra/tern/bin/"))
 
-  
-;; (autoload 'tern-mode "tern.el" nil t)
 
+;; (autoload 'tern-mode "tern.el" nil t)
+(use-package prettier-js
+  :hook ((js-mode . prettier-js-mode)))

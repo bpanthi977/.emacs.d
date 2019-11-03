@@ -5,6 +5,10 @@
 	slime-contribs '(slime-asdf slime-banner slime-fancy slime-hyperdoc slime-macrostep slime-mrepl slime-quicklisp slime-sbcl-exts slime-scratch slime-sprof slime-xref-browser slime-company)
 	common-lisp-hyperspec-root "/home/bpanthi/HyperSpec-7-0/HyperSpec/")
 
+  (defun slime-ecl ()
+    (interactive)
+    (slime "/usr/bin/ecl"))
+  
   (defun view-sdl-doc ()
     (interactive)
     (browse-url "/home/bpanthi/software/lispbuilder-20160825-git/lispbuilder-sdl/documentation/lispbuilder-sdl.html"))

@@ -12,8 +12,7 @@
     (define-key map (kbd "C-<") 'shrink-window-horizontally)
     (define-key map (kbd "M->") 'enlarge-window)
     (define-key map (kbd "M-<") 'shrink-window)
-    (define-key map (kbd "M-g M-g") 'avy-goto-line)
-    (define-key map (kbd "M-g M-c") 'avy-goto-char)
+
     (define-key map (kbd "C-c C-e") 'flycheck-list-errors)
     ;; Font size
     (define-key map (kbd "C-+") 'text-scale-increase)
@@ -21,7 +20,7 @@
     ;; toggle menu-bar visibility
     (define-key map (kbd "<f12>") 'menu-bar-mode)
     (define-key map (kbd "C-x g") 'magit-status)
-    (define-key map (kbd "C-SPC") 'shift-modifier)
+    ;; (define-key map (kbd "C-SPC") 'shift-modifier)
   
     map))
 
