@@ -46,6 +46,7 @@
    "web-config"
    "latex-config"
    "js-config"
+   "rclone-sync"
    ))
 
 ;; Load the modules
