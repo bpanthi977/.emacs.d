@@ -40,25 +40,24 @@
 (use-package ivy :demand
   :config
   (setq ivy-use-virtual-buffers t
-	ivy-count-format "%d/%d ")
-  
-  :init
+		ivy-count-format "%d/%d "
+		ivy-re-builders-alist '( (t . ivy--regex-ignore-order)))
   (ivy-mode 1))
 
-(use-package counsel
+(use-package counsel :demand
   :bind (("C-x C-f" . counsel-find-file)
-	 ("M-x" . counsel-M-x)				
-	 ("C-c u" . counsel-unicode-char)
-	 ("C-c s" . counsel-rg))
+		 ("M-x" . counsel-M-x)				
+		 ("C-c u" . counsel-unicode-char)
+		 ("C-c s" . counsel-rg))
   :config
   (setf (alist-get 'counsel-M-x ivy-initial-inputs-alist) " ")
   ;; enable opening file as sudo
   (defadvice counsel-find-file (after find-file-sudo activate)
     "Find file as root if necessary."
     (when (and buffer-file-name
-	       (file-exists-p buffer-file-name)
-	       (not (file-writable-p buffer-file-name)))
+			   (file-exists-p buffer-file-name)
+			   (not (file-writable-p buffer-file-name)))
       (find-alternate-file (concat "/sudo:root@localhost:" buffer-file-name)))))
 
-(use-package swiper
+(use-package swiper :demand
   :bind ("C-s" . swiper))

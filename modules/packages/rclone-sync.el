@@ -51,3 +51,5 @@
 (defun rclone-copy-directory ()
   (interactive)
   (rclone--copy-file/directory (buffer-file-name) t))
+
+(provide 'rclone-sync)

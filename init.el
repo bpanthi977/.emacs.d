@@ -17,6 +17,7 @@
   "This stores savefiles like smex,recentf,...")
 
 (add-to-list 'load-path modules-dir)
+(add-to-list 'load-path (expand-file-name "packages" modules-dir))
 
 ;; reduce the frequency of garbage collection by making it happen on
 ;; each 20MB of allocated data (the default is on every 0.76MB)
@@ -46,7 +47,7 @@
    "web-config"
    "latex-config"
    "js-config"
-   "rclone-sync"
+   "tools"
    ))
 
 ;; Load the modules
