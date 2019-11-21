@@ -1,4 +1,5 @@
 (use-package omnisharp
+  :ensure t
   :after (company flycheck)
   :config
   (setf omnisharp-server-executable-path "/home/bpanthi/.emacs.d/extra/omnisharp/server/v1.26.3/run")

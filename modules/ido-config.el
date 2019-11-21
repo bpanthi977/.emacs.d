@@ -32,19 +32,24 @@
 
 ;; smex, remember recently and most frequently used commands
 (use-package smex
+  :ensure t
   :config 
   (setq smex-save-file (expand-file-name ".smex-items" savefile-dir)))
 
 
 ;;; Ivy
-(use-package ivy :demand
+(use-package ivy
+  :demand
+  :ensure t
   :config
   (setq ivy-use-virtual-buffers t
 		ivy-count-format "%d/%d "
 		ivy-re-builders-alist '( (t . ivy--regex-ignore-order)))
   (ivy-mode 1))
 
-(use-package counsel :demand
+(use-package counsel
+  :demand
+  :ensure t
   :bind (("C-x C-f" . counsel-find-file)
 		 ("M-x" . counsel-M-x)				
 		 ("C-c u" . counsel-unicode-char)
@@ -59,5 +64,7 @@
 			   (not (file-writable-p buffer-file-name)))
       (find-alternate-file (concat "/sudo:root@localhost:" buffer-file-name)))))
 
-(use-package swiper :demand
+(use-package swiper
+  :demand
+  :ensure t
   :bind ("C-s" . swiper))

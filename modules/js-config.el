@@ -1,4 +1,5 @@
 (use-package rjsx-mode
+  :ensure t
   :after (lsp-mode)
   :mode "\\.js\\'"
   :config
@@ -17,6 +18,7 @@
 					   )))
 
 (use-package flycheck
+  :ensure t
   :config 
   (setf flycheck-javascript-eslint-executable "/home/bpanthi/.node_modules/bin/eslint"))
 
@@ -29,6 +31,7 @@
 ;; (add-to-list 'company-backends 'ac-js2-company)
 ;; (add-to-list 'company-backends 'company-yasnippet)
 (use-package tern
+  :ensure t
   :config
   (add-to-list 'load-path "~/.emacs.d/extra/tern/emacs/")
   (add-to-list 'exec-path "/home/bpanthi/.emacs.d/extra/tern/bin/"))
@@ -36,4 +39,5 @@
 
 ;; (autoload 'tern-mode "tern.el" nil t)
 (use-package prettier-js
+  :ensure t
   :hook ((js-mode . prettier-js-mode)))

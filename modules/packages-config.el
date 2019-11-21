@@ -23,6 +23,11 @@
       (package-install package)
       (require package))))
 
-(require 'use-package)
+(when (string-equal (nth 0 command-line-args) "/usr/bin/emacs")
+  (setf use-package-always-demand t))
+
+(unless (require 'use-package nil t)
+  (package-refresh-contents nil)
+  (require-packages '(use-package)))
 
 

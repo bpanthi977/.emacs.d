@@ -1,4 +1,5 @@
 (use-package company
+  :ensure t
   :custom
   (company-auto-complete t)
   (company-auto-complete-chars nil)
@@ -21,6 +22,7 @@
     (add-to-list (make-local-variable 'company-backends) backend)))
 
 (use-package company-quickhelp
+  :ensure t
   :after company
   :custom
   (company-quickhelp-color-background "#4F4F4F")
@@ -33,5 +35,6 @@
 
 
 (use-package helm-dash
+  :ensure t
   :custom
   (helm-dash-docsets-path "/home/bpanthi/.local/share/Zeal/Zeal/docsets/"))

@@ -51,7 +51,9 @@
 (global-hl-line-mode +1)
 
 ;;smart pairing for all
-(use-package smartparens :demand
+(use-package smartparens
+  :demand
+  :ensure t
   :config
   (require 'smartparens-config)
   (setq sp-autoskip-closing-pair 'always)
@@ -75,6 +77,7 @@ buffer is not visiting a file."
 
 ;; Projectile
 (use-package projectile
+  :ensure t
   :config 
   (setq projectile-indexing-method 'alien)
   (setq projectile-enable-caching t)
@@ -83,17 +86,20 @@ buffer is not visiting a file."
   :bind-keymap ("M-P" . projectile-command-map))
 
 (use-package counsel-projectile
+  :ensure t 
   :config
   (counsel-projectile-mode 1))
 
 ;; Ace Window
 (use-package ace-window
+  :ensure t
   :bind ("C-c o" . ace-window)
   :config
   (setf aw-dispatch-always t)
   (setq aw-keys '(?a ?s ?d ?f ?g ?h ?j ?k ?l)))
 
 (use-package yasnippet
+  :ensure t
   :preface
   (defun company-mode/backend-with-yas (backend)
     (if (and (listp backend) (member 'company-yasnippet backend))
@@ -107,6 +113,7 @@ buffer is not visiting a file."
   (setq company-backends (mapcar #'company-mode/backend-with-yas company-backends)))
 
 (use-package markdown-mode
+  :ensure t 
   :mode "\\.md\\'"
   :config 
   (setf markdown-command "/home/bpanthi/.local/bin/pandoc -f gfm"))
@@ -121,6 +128,7 @@ buffer is not visiting a file."
 (custom-set-variables `(transient-history-file ,(concat savefile-dir "/transient/history.el")))
 ;; Avy
 (use-package avy
+  :ensure t
   :bind (("C-:" . avy-goto-char)
 	 ("M-g C-c" . avy-goto-char)
 	 ("M-s" . avy-goto-char-timer)
@@ -129,6 +137,7 @@ buffer is not visiting a file."
   (setf avy-timeout-seconds 0.3))
 
 (use-package god-mode
+  :ensure t
   :bind (("C-SPC" . god-local-mode)
 	 ("C-q" . god-local-mode)
 	 ("M-q" . god-mode-all)))

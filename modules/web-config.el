@@ -1,4 +1,5 @@
 (use-package web-mode
+  :ensure t
   :mode (("\\.html\\'" . web-mode)
 	 ("\\.phtml\\'" . web-mode)
 	 ("\\.tpl\\'" . web-mode)
@@ -10,6 +11,7 @@
 	 ("\\.djhtml\\'" . web-mode)))
 
 (use-package ac-php
+  :ensure t
   :after (helm-dash)
   :mode "\\.php\\'"
   :commands (ac-php-find-symbol-at-point ac-php-location-stack-back helm-dash-at-point)
@@ -23,6 +25,7 @@
 		      (ac-php-remake-tags)
 		      (helm-dash-activate-docset "PHP"))))
 
-(use-package company-web 
+(use-package company-web
+  :ensure t 
   :hook (web-mode . (lambda ()
 		      (add-local-company-backend 'company-web-html))))

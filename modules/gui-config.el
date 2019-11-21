@@ -33,13 +33,19 @@
                                         "%b"))))
 
 ;; show available keybindings after you start typing
-(require 'which-key)
-(which-key-mode +1)
+(use-package which-key
+  :ensure t
+  :config 
+  (which-key-mode +1))
 
 
 
 ;; Theme
-(load-theme 'zenburn t)
+(use-package zenburn-theme
+  :ensure t
+  :demand
+  :config 
+  (load-theme 'zenburn t))
 
 ;; Symbola font does the job for emoji
 ;; t = for default fontset , nil = for character not found in other fonts

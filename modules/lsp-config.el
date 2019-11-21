@@ -1,1 +1,2 @@
-(use-package lsp-mode)
+(use-package lsp-mode
+  :ensure t)

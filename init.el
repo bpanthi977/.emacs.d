@@ -5,8 +5,6 @@
 ;; just comment it out by adding a semicolon to the start of the line.
 ;; You may delete these explanatory comments.
 
-(when (string-equal (nth 0 command-line-args) "/usr/bin/emacs")
-  (setf use-package-always-demand t))
 (setq load-prefer-newer t)
 
 (defvar init-dir (file-name-directory load-file-name)
@@ -30,6 +28,7 @@
 ;; Declare modules to load 
 (defvar load-modules-list
   (list
+   "packages-config"
    "company-config"
    "ido-config"
    "editor-config"
@@ -52,15 +51,9 @@
 
 ;; Load the modules
 (message "Loading modules")
-(load "packages-config")
-
 (dolist (module load-modules-list)
    (message (format "loading %s" module))
    (load module))
-
-(defun load-module (module)
-  (interactive)
-  (load (format "module-%s" module)))
 
 ;; Load custom file
 (setf custom-file (expand-file-name "custom.el" init-dir))
