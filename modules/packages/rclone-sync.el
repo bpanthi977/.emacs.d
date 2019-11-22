@@ -1,9 +1,8 @@
 (defun rclone--read-target-from-config (config-dir)
   "Read the target directory from config file"
   (with-temp-buffer
-	(insert-file-contents (concatenate 'string
-									   config-dir
-									   ".rclone"))
+	(insert-file-contents (concat  config-dir
+								   ".rclone"))
 	(first (split-string (buffer-string) "\n" t))))
 
 (defun rclone--find-config-or-error (root)
@@ -22,8 +21,8 @@
 
 (defun rclone--async-copy (source target)
   (let ((output-buffer (generate-new-buffer "*Async shell command*"))
-		(command (concatenate 'string "rclone -P copy "
-							  source " " target)))
+		(command (concat "rclone -P copy "
+						 source " " target)))
 	  (async-shell-command command output-buffer)
 	  (with-current-buffer output-buffer
 		(insert command))
@@ -35,10 +34,9 @@
 (defun rclone--copy-file/directory (filepath directory-p)
   (let* ((config (rclone--find-config-or-error filepath))
 		 (target-root (rclone--read-target-from-config config))
-		 (target (concatenate 'string
-							  target-root
-							  (subseq (file-name-directory filepath)
-									  (length config)))))
+		 (target (concat target-root
+						 (subseq (file-name-directory filepath)
+								 (length config)))))
 	(rclone--async-copy (if directory-p
 							(file-name-directory filepath)
 						  filepath)

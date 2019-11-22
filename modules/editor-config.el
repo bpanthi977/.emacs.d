@@ -167,3 +167,7 @@ buffer is not visiting a file."
    (screen . nil)
    (sql . nil)
    (sqlite . t)))
+
+(use-package multiple-cursors
+  :ensure t
+  :demand t)
