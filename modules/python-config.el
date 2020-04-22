@@ -1,10 +1,12 @@
-(install-packages (list ;; 'flycheck
+;;(install-packages (list ;; 'flycheck
+
+				 
 		   ;; 'anaconda-mode
 		   ;; 'company-anaconda
 		   ;; 'elpy
-		   'company-jedi
-		   'jedi-core
-		   'helm-dash))
+		  ;; 'company-jedi
+;;		   'jedi-core
+;;		   'helm-dash))
 
 ;; (require 'elpy)
 ;; (elpy-enable)
@@ -24,9 +26,9 @@
   ;; (add-to-list 'company-backends 'company-elpy)
   (setf python-environment-directory (concat init-dir "extra/python-environment"))
   (require 'helm-dash)
-  (require 'company-jedi)
-  (require 'jedi-core)
-  (setq jedi:complete-on-dot t)
+  ;; (require 'company-jedi)
+  ;; (require 'jedi-core)
+  ;; (setq jedi:complete-on-dot t)
   (add-to-list 'company-backends 'company-jedi)
   ;; (add-to-list 'company-backends 'company-anaconda)
   ;; (anaconda-eldoc-mode t)
@@ -34,22 +36,29 @@
   (helm-dash-activate-docset "Python_3")
   (helm-dash-activate-docset "OpenCV_C++")
   (local-set-key (kbd "C-.") 'helm-dash-at-point)
-  (local-set-key (kbd "M-.") 'jedi:goto-definition)
-  (local-set-key (kbd "M-,") 'jedi:goto-definition-pop-marker))
+   (local-set-key (kbd "M-.") 'jedi:goto-definition)
+   (local-set-key (kbd "M-,") 'jedi:goto-definition-pop-marker)
+  )
 
-;; (defun my-python-mode-hook ()
+;; (add-hook 'python-mode-hook 'my-python-mode-hook)
 
-;;   )
-
-(add-hook 'python-mode-hook 'my-python-mode-hook)
-
-(setq python-shell-interpreter "python3")
-
-;; WINDOWS CONFIG
-(when (string-equal system-type "windows-nt")
-  (setq python-shell-interpreter "bash -c python"))
+(setq python-shell-interpreter "python")
 
 
+(use-package jedi-core
+  :ensure t
+  :hook (python-mode . my-python-mode-hook))
+
+(use-package company-jedi
+  :ensure t
+  :after (company jedi-core))
 
 
-
+(use-package lsp-python-ms
+  :ensure t
+  :config
+  (setf lsp-python-ms-executable "c:/Users/hp/.emacs.d/.cache/lsp/mspyls/Microsoft.Python.LanguageServer.exe")
+  ;; :hook (python-mode . (lambda ()
+  ;; 						 (my-python-mode-hook)
+  ;; 						 (lsp))))  ; or lsp-deferred
+  )

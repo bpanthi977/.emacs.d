@@ -60,3 +60,9 @@
 (load-file (expand-file-name "custom.el" init-dir))
 (put 'upcase-region 'disabled nil)
 (put 'downcase-region 'disabled nil)
+
+;;Start Server
+(require 'server)
+(unless (server-running-p)
+  (server-start))
+

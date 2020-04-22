@@ -16,7 +16,7 @@
     (define-key map (kbd "C-c C-e") 'flycheck-list-errors)
     ;; Font size
     (define-key map (kbd "C-+") 'text-scale-increase)
-    (define-key map (kbd "C--") 'text-scale-decrease)
+    (define-key map (kbd "C-_") 'text-scale-decrease)
     ;; toggle menu-bar visibility
     (define-key map (kbd "<f12>") 'menu-bar-mode)
     (define-key map (kbd "C-x g") 'magit-status)

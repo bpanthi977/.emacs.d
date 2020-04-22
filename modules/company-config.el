@@ -1,12 +1,15 @@
 (use-package company
   :ensure t
+  :bind (:map company-active-map
+			  ("C-n" . company-select-next)
+			  ("C-p" . company-select-previous))
   :custom
   (company-auto-complete t)
   (company-auto-complete-chars nil)
   (company-frontends
    (quote
     (company-pseudo-tooltip-frontend company-echo-metadata-frontend company-preview-if-just-one-frontend company-echo-frontend)))
-  (company-idle-delay 0.1)
+  (company-idle-delay 0.5)
   (company-minimum-prefix-length 1)
   (company-tooltip-limit 10)
   (company-minimum-prefix-length 2)
@@ -27,7 +30,7 @@
   :custom
   (company-quickhelp-color-background "#4F4F4F")
   (company-quickhelp-color-foreground "#DCDCCC")
-  (company-quickhelp-delay 0.1)
+  (company-quickhelp-delay 0)
   (company-quickhelp-mode t)
   (company-quickhelp-use-propertized-text t)
   :config 

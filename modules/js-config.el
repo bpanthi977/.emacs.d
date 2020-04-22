@@ -40,4 +40,8 @@
 ;; (autoload 'tern-mode "tern.el" nil t)
 (use-package prettier-js
   :ensure t
-  :hook ((js-mode . prettier-js-mode)))
+  :hook ((js-mode . prettier-js-mode))
+  :config
+  (setq prettier-js-args '("--trailing-comma" "all"
+						   "--bracket-spacing" "false"
+						   "--tab-width" "4")))

@@ -20,11 +20,12 @@
  '(company-tooltip-limit 10)
  '(dash-docs-docsets-path "/home/bpanthi/.local/share/Zeal/Zeal/docsets/")
  '(helm-dash-docsets-path "/home/bpanthi/.local/share/Zeal/Zeal/docsets/")
+ '(ivy-virtual-abbreviate (quote full))
  '(package-selected-packages
    (quote
-	(ggtags prettier-js ledger-mode hledger-mode god-mode smex smartparens counsel-tramp dictionary counsel-projectile counsel scribble-mode slime-company yasnippet company-lsp lsp-mode slime lsp-javascript-typescript tide magit-filenotify virtualenvwrapper company-rtags dirtree company-jedi py-autopep8 basic-mode rjsx-mode dap-mode lsp-ui use-package lsp-java company-box treemacs-projectile treemacs haskell-mode tex evil cider clojure-mode save-place uniquify smartparens-config auctex flyspell-popup eglot lsp-clangd company-tern yasnippet-snippets ac-js2 js2-mode jsfmt company-web cmake-mode yaml-mode gotest company-go go-complete go-eldoc go-errcheck go-guru go-mode anaconda-mode sage-shell-mode julia-repl ac-php lsp-python lsp-php zenburn-theme zeal-at-point which-key websocket web-mode w3m uuidgen python-environment php+-mode omnisharp multiple-cursors minimap markdown-mode magit lua-mode kotlin-mode key-chord json-mode javadoc-lookup irony-eldoc ido-vertical-mode ido-ubiquitous htmlize helm-dash groovy-mode gradle-mode flymd flycheck-kotlin flycheck-irony flx-ido elpy elisp-slime-nav dash-at-point ctable concurrent company-quickhelp company-php company-irony-c-headers company-irony company-anaconda anything-tramp android-mode ace-window)))
+	(pyenv-mode sly edit-server powershell lsp-python-ms ccls gnuplot-mode gnuplot unicode-math-input org-download expand-region ivy-rich string-utils ggtags prettier-js ledger-mode hledger-mode god-mode smex smartparens counsel-tramp dictionary counsel-projectile counsel scribble-mode yasnippet company-lsp lsp-mode lsp-javascript-typescript tide magit-filenotify virtualenvwrapper company-rtags dirtree company-jedi py-autopep8 basic-mode rjsx-mode dap-mode lsp-ui use-package lsp-java company-box treemacs-projectile treemacs haskell-mode tex evil cider clojure-mode save-place uniquify smartparens-config auctex flyspell-popup eglot lsp-clangd company-tern yasnippet-snippets ac-js2 js2-mode jsfmt company-web cmake-mode yaml-mode gotest company-go go-complete go-eldoc go-errcheck go-guru go-mode anaconda-mode sage-shell-mode julia-repl ac-php lsp-python lsp-php zenburn-theme zeal-at-point which-key websocket web-mode w3m uuidgen python-environment php+-mode omnisharp multiple-cursors minimap markdown-mode magit lua-mode kotlin-mode key-chord json-mode javadoc-lookup irony-eldoc ido-vertical-mode ido-ubiquitous htmlize helm-dash groovy-mode gradle-mode flymd flycheck-kotlin flycheck-irony flx-ido elpy elisp-slime-nav dash-at-point ctable concurrent company-quickhelp company-php company-irony-c-headers company-irony company-anaconda anything-tramp android-mode ace-window)))
  '(tab-width 4)
- '(transient-history-file "/home/bpanthi/.emacs.d/savefile/transient/history.el"))
+ )
 ;;  '(pdf-view-midnight-colors (quote ("#DCDCCC" . "#383838")))
 ;;  '(prelude-auto-save nil)
 ;;  '(prelude-flyspell nil)
@@ -77,3 +78,9 @@
 
 ;; (setq browse-url-browser-function 'w3m-browse-url)
 
+(custom-set-faces
+ ;; custom-set-faces was added by Custom.
+ ;; If you edit it by hand, you could mess it up, so be careful.
+ ;; Your init file should contain only one such instance.
+ ;; If there is more than one, they won't work right.
+ '(default ((t (:inherit nil :stipple nil :inverse-video nil :box nil :strike-through nil :overline nil :underline nil :slant normal :weight normal :width normal :foundry "ADBO" :family "Source Code Pro")))))

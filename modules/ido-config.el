@@ -47,10 +47,22 @@
 		ivy-re-builders-alist '( (t . ivy--regex-ignore-order)))
   (ivy-mode 1))
 
+(use-package ivy-rich
+  :ensure t
+  :after ivy
+  :custom
+  (ivy-virtual-abbreviate 'full
+                          ivy-rich-switch-buffer-align-virtual-buffer t
+                          ivy-rich-path-style 'full)
+  :config
+  (ivy-rich-mode 1))
+
+
 (use-package counsel
   :demand
   :ensure t
   :bind (("C-x C-f" . counsel-find-file)
+		 ("C-x M-f" . counsel-recentf)
 		 ("M-x" . counsel-M-x)				
 		 ("C-c u" . counsel-unicode-char)
 		 ("C-c s" . counsel-rg))

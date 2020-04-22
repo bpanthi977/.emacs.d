@@ -3,13 +3,44 @@
 
 (setq mc/cmds-to-run-for-all
       '(
+		Buffer-menu-delete
+		Buffer-menu-execute
+		LaTeX-insert-left-brace
+		TeX-command-master
+		TeX-insert-backslash
+		backward-sexp
+		c-electric-delete-forward
 		counsel-M-x
 		cua--prefix-override-handler
+		cua-copy-region
+		cua-exchange-point-and-mark
+		cua-paste
+		delete-selection-repeat-replace-region
+		electric-newline-and-maybe-indent
+		end-of-visual-line
+		eval-print-last-sexp
+		forward-sentence
+		forward-sexp
+		indent-for-tab-command
+		kill-visual-line
+		magit-discard
+		mouse-set-region
+		org-beginning-of-line
 		org-delete-char
 		org-end-of-line
+		org-kill-line
+		org-return-indent
 		org-self-insert-command
+		python-shell-send-buffer
+		slime-autodoc-space
+		slime-compile-defun
+		sly-compile-defun
+		sp-forward-slurp-sexp
+		transpose-sexps
+		transpose-words
 		))
 
 (setq mc/cmds-to-run-once
       '(
+		text-scale-increase
 		))

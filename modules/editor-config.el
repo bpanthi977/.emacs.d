@@ -49,7 +49,10 @@
 (recentf-mode +1)
 ;; highlight the current line
 (global-hl-line-mode +1)
-
+;; Don't save last deleted region or rectangle to register 0
+(setf cua-delete-copy-to-register-0 nil)
+;; Truncate lines
+(setq-default truncate-lines t)
 ;;smart pairing for all
 (use-package smartparens
   :demand
@@ -59,8 +62,48 @@
   (setq sp-autoskip-closing-pair 'always)
   (setq sp-hybrid-kill-entire-symbol nil)
   (show-smartparens-global-mode t)
-  :bind (("C-M-f" . sp-forward-slurp-sexp)
-	 ("C-M-b" . sp-backward-slurp-sexp))
+  :bind (;; ("C-M-f" . sp-forward-slurp-sexp)
+		 ;;("C-M-b" . sp-backward-slurp-sexp)
+		 ( "C-M-f" . sp-forward-sexp)
+		 ( "C-M-b" . sp-backward-sexp)
+
+		 ( "C-M-d" . sp-down-sexp)
+		 ( "C-M-a" . sp-backward-down-sexp)
+		 ( "C-S-d" . sp-beginning-of-sexp)
+		 ( "C-S-a" . sp-end-of-sexp)
+
+		 ( "C-M-e" . sp-up-sexp)
+		 ( "C-M-u" . sp-backward-up-sexp)
+		 ( "C-M-t" . sp-transpose-sexp)
+
+		 ( "C-M-n" . sp-forward-hybrid-sexp)
+		 ( "C-M-p" . sp-backward-hybrid-sexp)
+
+		 ( "C-M-k" . sp-kill-sexp)
+		 ( "C-M-w" . sp-copy-sexp)
+
+		 ( "M-<delete>" . sp-unwrap-sexp)
+		 ( "M-<backspace>" . sp-backward-unwrap-sexp)
+
+		 ( "C-<right>" . sp-forward-slurp-sexp)
+		 ( "C-<left>" . sp-forward-barf-sexp)
+		 ( "C-M-<left>" . sp-backward-slurp-sexp)
+		 ( "C-M-<right>" . sp-backward-barf-sexp)
+
+		 ( "M-D" . sp-splice-sexp)
+		 ( "C-M-<delete>" . sp-splice-sexp-killing-forward)
+		 ( "C-M-<backspace>" . sp-splice-sexp-killing-backward)
+		 ( "C-S-<backspace>" . sp-splice-sexp-killing-around)
+
+		 ( "C-]" . sp-select-next-thing-exchange)
+		 ( "C-<left_bracket>" . sp-select-previous-thing)
+		 ( "C-M-]" . sp-select-next-thing)
+
+		 ( "M-F" . sp-forward-symbol)
+		 ( "M-B" . sp-backward-symbol)
+
+		 ( "C-\"" . sp-change-inner)
+		 ( "M-i" . sp-change-enclosing))
   :hook ((prog-mode . smartparens-mode)))
 
 (defun sudo-edit (&optional arg)
@@ -129,10 +172,10 @@ buffer is not visiting a file."
 ;; Avy
 (use-package avy
   :ensure t
-  :bind (("C-:" . avy-goto-char)
-	 ("M-g C-c" . avy-goto-char)
+  :bind (("C-;" . avy-goto-char)
+	 ("M-g M-c" . avy-goto-char)
 	 ("M-s" . avy-goto-char-timer)
-	 ("M-g C-g" . avy-goto-line))
+	 ("M-g M-g" . avy-goto-line))
   :config
   (setf avy-timeout-seconds 0.3))
 
@@ -150,6 +193,8 @@ buffer is not visiting a file."
 (add-hook 'god-mode-enabled-hook 'my-update-cursor )
 (add-hook 'god-mode-disabled-hook 'my-update-cursor)
 
+(eval-after-load "org" '(progn (setcdr (assoc "\\.pdf\\'" org-file-apps) "e:/Programs/SumatraPDF/SumatraPDF.exe %s")))
+
 (org-babel-do-load-languages
  'org-babel-load-languages
  '((R . t)
@@ -166,8 +211,66 @@ buffer is not visiting a file."
    (ruby . t)
    (screen . nil)
    (sql . nil)
-   (sqlite . t)))
+   (sqlite . t)
+   (lisp . t)))
+
+(use-package org-download
+  :ensure t
+  :demand t)
+
+(use-package gnuplot
+  :ensure t)
+(use-package gnuplot-mode
+  :ensure t)
+
+(setq org-image-actual-width 300)
+
 
 (use-package multiple-cursors
   :ensure t
+  :bind (("C-{" . mc/mark-previous-like-this)
+		 ("C-}" . mc/mark-next-like-this))
   :demand t)
+
+(use-package expand-region
+  :ensure t
+  :bind (("C--" . er/contract-region)
+		 ("C-=" . er/expand-region)))
+
+(use-package ox-latex
+  :config
+  ;; For proper rendering of unicode symbols on latex
+  (setq org-latex-inputenc-alist '(("utf8" . "utf8x")))
+  (setq org-latex-default-packages-alist (cons '("mathletters" "ucs" nil) org-latex-default-packages-alist)))
+
+(use-package org-mode
+  :bind ("C-c C-s C-l" . org-store-link)
+  :config
+  (setq-default fill-column 80)
+  :hook (org-mode . auto-fill-mode))
+
+;; This interfered with company completion display
+;; (use-package fill-column-indicator
+;;   :ensure t
+;;   :config
+;;   (fci-mode t))
+
+(use-package unicode-math-input
+  :ensure t
+  :demand t)
+
+;; spell checking
+(use-package ispell
+  :ensure t
+  :config 
+  (setq ispell-program-name "hunspell")
+  (setq ispell-dictionary "en_US")
+  (add-to-list 'ispell-local-dictionary-alist '(("en_US"
+												 "[[:alpha:]]"
+												 "[^[:alpha:]]"
+												 "[']"
+												 t
+												 ("-d" "en_US")
+												 nil
+												 utf-8)))
+  (setq ispell-hunspell-dictionary-alist ispell-local-dictionary-alist))

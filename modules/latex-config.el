@@ -1,11 +1,3 @@
-(install-packages (list 'auctex))
-(require-packages (list 'tex 'latex))
-
-(setq exec-path (append '("/usr/local/texlive/2019/bin/x86_64-linux/") exec-path))
-(setenv "PATH" (concat "/usr/local/texlive/2019/bin/x86_64-linux:" (getenv "PATH")))
-(setq org-image-actual-width nil)
-
-
 ;; copied from https://www.emacswiki.org/emacs/AUCTeX
 (defun guess-TeX-master (filename)
   "Guess the master file for FILENAME from currently open .tex files."
@@ -27,19 +19,33 @@
         (message "TeX master document: %s" (file-name-nondirectory candidate)))
     candidate))
 
-(defun my-tex-mode ()
-  (latex-math-mode)
-  (latex-electric-env-pair-mode)
-  (visual-line-mode)
-  (turn-on-reftex)
-  (tex-source-correlate-mode)
-  (local-set-key (kbd "C-c e") 'LaTeX-environment)
-  ;; (setq TeX-master (guess-TeX-master (buffer-file-name)))
-  )
- 
-(add-hook 'LaTeX-mode-hook 'my-tex-mode)
+(use-package latex
+  :ensure auctex
+  :hook ((LaTeX-mode .  (lambda () 
+						  (latex-math-mode)
+						  (latex-electric-env-pair-mode)
+						  (visual-line-mode)
+						  (turn-on-reftex)
+						  (tex-source-correlate-mode)
+						  (local-set-key (kbd "C-c e") 'LaTeX-environment)
+						  ;; (setq TeX-master (guess-TeX-master (buffer-file-name)))
+						  )))
+  :config
+  (require 'tex-mik)
+  (setq org-preview-latex-image-directory "E:/tmp/ltximg/")
+  (org-toggle-latex-fragment)
+  (setf org-startup-with-inline-images t
+		org-startup-with-latex-preview t)
+  (setq TeX-auto-save t)
+  (setq TeX-parse-self t)
+  (setq-default TeX-master nil)
+  (setq reftex-plug-into-AUCTeX t)	
+  ;; (load "preview-latex.el" nil t t)
+  (when (string-equal system-type "windows-nt")
+	
+	(setq org-preview-latex-default-process 'dvisvgm))
 
-(setq TeX-auto-save t)
-(setq TeX-parse-self t)
-(setq-default TeX-master nil)
-(setq reftex-plug-into-AUCTeX t)
+  ;; Is this required? add these path to your system path
+  ;;(setq exec-path (append '("/usr/local/texlive/2019/bin/x86_64-linux/") exec-path))
+  ;;(setenv "PATH" (concat "/usr/local/texlive/2019/bin/x86_64-linux:" (getenv "PATH")))))
+  (setq org-image-actual-width nil))

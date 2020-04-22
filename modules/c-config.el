@@ -20,8 +20,9 @@
 (defun my-c-make-run ()
   (let* ((name (file-name-base (buffer-file-name)))
          (args (read-string (format "bin/%s " name))))
-    (async-shell-command (format "bin/%s %s" name args)
-                   (get-buffer-create "output"))
+	(let ((default-directory (concat default-directory "/bin")))
+	  (async-shell-command (format "%s %s" name args)
+						   (get-buffer-create "output")))
     (set-window-buffer (car (last (window-list-1))) "output")
     (switch-to-buffer-other-window "output" )))
 
@@ -38,7 +39,7 @@
   (setq-local make-run-func #'my-c-make-run)
   (setq-local make-link-func #'my-c-make-link)
   (setq-local make-compile-run-func #'my-make-compile-link-run-file)
-  (setq-local make-default-makefile "/home/bpanthi/.emacs.d/default-c-makefile"))
+  (setq-local make-default-makefile "~/.emacs.d/modules/makefiles/default-c-makefile"))
 
 ;; (defun setup-irony-keys ()
 ;;   (interactive)
@@ -112,4 +113,5 @@
 (add-hook 'kill-emacs-hook 'rtags-quit-rdm)
 (add-hook 'c++-mode-hook 'my-rtags-on)
 (add-hook 'c-mode-hook 'my-rtags-on)
+(add-hook 'c-mode-hook 'setup-c-make)
 (add-hook 'objc-mode-hook 'my-rtags-on)
