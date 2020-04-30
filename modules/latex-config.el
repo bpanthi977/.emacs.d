@@ -21,6 +21,9 @@
 
 (use-package latex
   :ensure auctex
+  :defer t
+  :mode "\\.tex\\"
+  :after (tex-mik)
   :hook ((LaTeX-mode .  (lambda () 
 						  (latex-math-mode)
 						  (latex-electric-env-pair-mode)
@@ -31,11 +34,6 @@
 						  ;; (setq TeX-master (guess-TeX-master (buffer-file-name)))
 						  )))
   :config
-  (require 'tex-mik)
-  (setq org-preview-latex-image-directory "E:/tmp/ltximg/")
-  (org-toggle-latex-fragment)
-  (setf org-startup-with-inline-images t
-		org-startup-with-latex-preview t)
   (setq TeX-auto-save t)
   (setq TeX-parse-self t)
   (setq-default TeX-master nil)

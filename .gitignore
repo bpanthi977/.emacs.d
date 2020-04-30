@@ -17,3 +17,5 @@ modules/*.elc
 /server/
 /url/
 
+/bookmarks
+/recentf

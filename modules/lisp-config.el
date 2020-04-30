@@ -29,7 +29,7 @@
 
 
 (use-package sly
-  :demand
+  :defer t 
   :ensure t
   ;; :requires (smartparens)
   :commands (sly)
@@ -43,8 +43,10 @@
 
 ;; Emacs Lisp
 (use-package elisp-slime-nav
-  :ensure t 
+  :ensure t
+  :defer t 
   :hook ((emacs-lisp-mode ielm-mode) . turn-on-elisp-slime-nav-mode)
   ;; Enable slime like M-. navigation in elisp source
   :bind (:map emacs-lisp-mode-map 
-	      ("C-c C-c" . eval-defun)))
+			  ("C-c C-c" . eval-defun)
+			  ("C-c C-l" . eval-buffer)))

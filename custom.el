@@ -3,29 +3,66 @@
  ;; If you edit it by hand, you could mess it up, so be careful.
  ;; Your init file should contain only one such instance.
  ;; If there is more than one, they won't work right.
+ '(and nil t)
+ '(ansi-color-names-vector
+   ["#3F3F3F" "#CC9393" "#7F9F7F" "#F0DFAF" "#8CD0D3" "#DC8CC3" "#93E0E3" "#DCDCCC"])
  '(company-auto-complete t)
  '(company-auto-complete-chars nil)
  '(company-frontends
    (quote
 	(company-pseudo-tooltip-frontend company-echo-metadata-frontend company-preview-if-just-one-frontend company-echo-frontend)))
- '(company-idle-delay 0.1)
+ '(company-idle-delay 0.5)
  '(company-minimum-prefix-length 2)
  '(company-quickhelp-color-background "#4F4F4F")
  '(company-quickhelp-color-foreground "#DCDCCC")
- '(company-quickhelp-delay 0.1)
+ '(company-quickhelp-delay 0)
  '(company-quickhelp-mode t)
  '(company-quickhelp-use-propertized-text t)
  '(company-require-match nil)
  '(company-tooltip-flip-when-above t)
  '(company-tooltip-limit 10)
+ '(custom-safe-themes
+   (quote
+	("fa2b58bb98b62c3b8cf3b6f02f058ef7827a8e497125de0254f56e373abee088" "bffa9739ce0752a37d9b1eee78fc00ba159748f50dc328af4be661484848e476" "d5aec3a39364bc4c6c13f472b2d0cdaebd5cff7a6e4839749be2156fcc075006" "7aaee3a00f6eb16836f5b28bdccde9e1079654060d26ce4b8f49b56689c51904" default)))
  '(dash-docs-docsets-path "/home/bpanthi/.local/share/Zeal/Zeal/docsets/")
- '(helm-dash-docsets-path "/home/bpanthi/.local/share/Zeal/Zeal/docsets/")
+ '(electric-pair-mode t)
+ '(fci-rule-color "#383838")
+ '(helm-dash-docsets-path "/home/bpanthi/.local/share/Zeal/Zeal/docsets/" t)
  '(ivy-virtual-abbreviate (quote full))
+ '(nrepl-message-colors
+   (quote
+	("#CC9393" "#DFAF8F" "#F0DFAF" "#7F9F7F" "#BFEBBF" "#93E0E3" "#94BFF3" "#DC8CC3")))
+ '(org-agenda-files
+   (quote
+	("~/org/notes.org" "~/org/tasks.org" "~/org/ml.org" "~/org/lct.org")))
  '(package-selected-packages
    (quote
-	(pyenv-mode sly edit-server powershell lsp-python-ms ccls gnuplot-mode gnuplot unicode-math-input org-download expand-region ivy-rich string-utils ggtags prettier-js ledger-mode hledger-mode god-mode smex smartparens counsel-tramp dictionary counsel-projectile counsel scribble-mode yasnippet company-lsp lsp-mode lsp-javascript-typescript tide magit-filenotify virtualenvwrapper company-rtags dirtree company-jedi py-autopep8 basic-mode rjsx-mode dap-mode lsp-ui use-package lsp-java company-box treemacs-projectile treemacs haskell-mode tex evil cider clojure-mode save-place uniquify smartparens-config auctex flyspell-popup eglot lsp-clangd company-tern yasnippet-snippets ac-js2 js2-mode jsfmt company-web cmake-mode yaml-mode gotest company-go go-complete go-eldoc go-errcheck go-guru go-mode anaconda-mode sage-shell-mode julia-repl ac-php lsp-python lsp-php zenburn-theme zeal-at-point which-key websocket web-mode w3m uuidgen python-environment php+-mode omnisharp multiple-cursors minimap markdown-mode magit lua-mode kotlin-mode key-chord json-mode javadoc-lookup irony-eldoc ido-vertical-mode ido-ubiquitous htmlize helm-dash groovy-mode gradle-mode flymd flycheck-kotlin flycheck-irony flx-ido elpy elisp-slime-nav dash-at-point ctable concurrent company-quickhelp company-php company-irony-c-headers company-irony company-anaconda anything-tramp android-mode ace-window)))
+	(esup evil-surround pyenv-mode sly edit-server powershell ccls gnuplot-mode unicode-math-input string-utils ggtags prettier-js ledger-mode hledger-mode smex counsel-tramp dictionary counsel-projectile counsel scribble-mode company-lsp lsp-javascript-typescript tide magit-filenotify virtualenvwrapper company-rtags dirtree company-jedi py-autopep8 basic-mode rjsx-mode dap-mode lsp-java company-box treemacs-projectile treemacs haskell-mode tex evil cider clojure-mode save-place uniquify smartparens-config auctex flyspell-popup eglot lsp-clangd company-tern yasnippet-snippets ac-js2 jsfmt company-web cmake-mode yaml-mode gotest company-go go-complete go-eldoc go-errcheck go-guru go-mode anaconda-mode sage-shell-mode julia-repl ac-php lsp-python lsp-php zeal-at-point websocket w3m uuidgen python-environment php+-mode omnisharp multiple-cursors minimap lua-mode kotlin-mode key-chord json-mode javadoc-lookup irony-eldoc ido-vertical-mode ido-ubiquitous htmlize helm-dash groovy-mode gradle-mode flymd flycheck-kotlin flycheck-irony flx-ido elpy elisp-slime-nav dash-at-point ctable concurrent company-quickhelp company-php company-irony-c-headers company-irony company-anaconda anything-tramp android-mode ace-window)))
+ '(pdf-view-midnight-colors (quote ("#DCDCCC" . "#383838")))
  '(tab-width 4)
- )
+ '(transient-history-file "c:/Users/hp/.emacs.d/savefile/transient/history.el")
+ '(vc-annotate-background "#2B2B2B")
+ '(vc-annotate-color-map
+   (quote
+	((20 . "#BC8383")
+	 (40 . "#CC9393")
+	 (60 . "#DFAF8F")
+	 (80 . "#D0BF8F")
+	 (100 . "#E0CF9F")
+	 (120 . "#F0DFAF")
+	 (140 . "#5F7F5F")
+	 (160 . "#7F9F7F")
+	 (180 . "#8FB28F")
+	 (200 . "#9FC59F")
+	 (220 . "#AFD8AF")
+	 (240 . "#BFEBBF")
+	 (260 . "#93E0E3")
+	 (280 . "#6CA0A3")
+	 (300 . "#7CB8BB")
+	 (320 . "#8CD0D3")
+	 (340 . "#94BFF3")
+	 (360 . "#DC8CC3"))))
+ '(vc-annotate-very-old-color "#DC8CC3"))
 ;;  '(pdf-view-midnight-colors (quote ("#DCDCCC" . "#383838")))
 ;;  '(prelude-auto-save nil)
 ;;  '(prelude-flyspell nil)
@@ -78,9 +115,21 @@
 
 ;; (setq browse-url-browser-function 'w3m-browse-url)
 
+;;(custom-set-faces
+ ;; custom-set-faces was added by Custom.
+ ;; If you edit it by hand, you could mess it up, so be careful.
+ ;; Your init file should contain only one such instance.
+ ;; If there is more than one, they won't work right.
+;; '(default ((t (:inherit nil :stipple nil :inverse-video nil :box nil :strike-through nil :overline nil :underline nil :slant normal :weight normal :width normal :foundry "ADBO" :family "Source Code Pro")))))
+;; (custom-set-faces
+;;  ;; custom-set-faces was added by Custom.
+;;  ;; If you edit it by hand, you could mess it up, so be careful.
+;;  ;; Your init file should contain only one such instance.
+;;  ;; If there is more than one, they won't work right.
+;;  '(default ((t (:inherit nil :stipple nil :inverse-video nil :box nil :strike-through nil :overline nil :underline nil :slant normal :weight normal :width normal :foundry "ADBO" :family "Source Code Pro")))))
 (custom-set-faces
  ;; custom-set-faces was added by Custom.
  ;; If you edit it by hand, you could mess it up, so be careful.
  ;; Your init file should contain only one such instance.
  ;; If there is more than one, they won't work right.
- '(default ((t (:inherit nil :stipple nil :inverse-video nil :box nil :strike-through nil :overline nil :underline nil :slant normal :weight normal :width normal :foundry "ADBO" :family "Source Code Pro")))))
+ )

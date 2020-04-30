@@ -30,23 +30,31 @@
 (setq blink-matching-paren nil)
 
 ;; meaningful names for buffers with the same name
+(require 'uniquify)
 (setq uniquify-buffer-name-style 'forward)
 (setq uniquify-separator "/")
 (setq uniquify-after-kill-buffer-p t)    ; rename after killing uniquified
 (setq uniquify-ignore-buffers-re "^\\*") ; don't muck with special buffers
 
 ;; save point position in buffers
+(require 'saveplace)
 (setq save-place-file (expand-file-name "saveplace" savefile-dir))
-(setq-default save-place t)
+(save-place-mode t)
+  
 
 ;; save recent files
-(setq recentf-save-file (expand-file-name "recentf" savefile-dir)
-      recentf-max-saved-items 500
-      recentf-max-menu-items 15
-      ;; disable recentf-cleanup on Emacs start, because it can cause
-      ;; problems with remote files
-      recentf-auto-cleanup 'never)
-(recentf-mode +1)
+(use-package recentf
+  :ensure t
+  :config
+  (setq recentf-save-file (expand-file-name "recentf" savefile-dir)
+		recentf-max-saved-items 500
+		recentf-max-menu-items 15
+		;; disable recentf-cleanup on Emacs start, because it can cause
+		;; problems with remote files
+		recentf-auto-cleanup 'never)
+  :init 
+  (recentf-mode +1))
+
 ;; highlight the current line
 (global-hl-line-mode +1)
 ;; Don't save last deleted region or rectangle to register 0
@@ -54,8 +62,8 @@
 ;; Truncate lines
 (setq-default truncate-lines t)
 ;;smart pairing for all
+
 (use-package smartparens
-  :demand
   :ensure t
   :config
   (require 'smartparens-config)
@@ -99,8 +107,8 @@
 		 ( "C-<left_bracket>" . sp-select-previous-thing)
 		 ( "C-M-]" . sp-select-next-thing)
 
-		 ( "M-F" . sp-forward-symbol)
-		 ( "M-B" . sp-backward-symbol)
+;;		 ( "M-F" . sp-forward-symbol)
+;;		 ( "M-B" . sp-backward-symbol)
 
 		 ( "C-\"" . sp-change-inner)
 		 ( "M-i" . sp-change-enclosing))
@@ -121,6 +129,7 @@ buffer is not visiting a file."
 ;; Projectile
 (use-package projectile
   :ensure t
+  :defer t
   :config 
   (setq projectile-indexing-method 'alien)
   (setq projectile-enable-caching t)
@@ -129,7 +138,9 @@ buffer is not visiting a file."
   :bind-keymap ("M-P" . projectile-command-map))
 
 (use-package counsel-projectile
-  :ensure t 
+  :ensure t
+  :defer t 
+  :after '(projectile counsel)
   :config
   (counsel-projectile-mode 1))
 
@@ -137,12 +148,19 @@ buffer is not visiting a file."
 (use-package ace-window
   :ensure t
   :bind ("C-c o" . ace-window)
+  :bind (:map bp/global-prefix-map
+			 ("w w" . ace-window))
   :config
   (setf aw-dispatch-always t)
-  (setq aw-keys '(?a ?s ?d ?f ?g ?h ?j ?k ?l)))
-
+  (setq aw-keys '(?a ?s ?d ?f ?g ?h ?j ?k ?l))
+  :init
+  (smartrep-define-key bp/global-prefix-map
+	  "w"
+	'(("o" . other-window))))
+ 
 (use-package yasnippet
   :ensure t
+  :defer t 
   :preface
   (defun company-mode/backend-with-yas (backend)
     (if (and (listp backend) (member 'company-yasnippet backend))
@@ -156,7 +174,8 @@ buffer is not visiting a file."
   (setq company-backends (mapcar #'company-mode/backend-with-yas company-backends)))
 
 (use-package markdown-mode
-  :ensure t 
+  :ensure t
+  :defer t
   :mode "\\.md\\'"
   :config 
   (setf markdown-command "/home/bpanthi/.local/bin/pandoc -f gfm"))
@@ -168,86 +187,39 @@ buffer is not visiting a file."
 ;; Abbrev 
 (setq abbrev-file-name (concat savefile-dir "/abbrev_defs"))
 ;; Magit
-(custom-set-variables `(transient-history-file ,(concat savefile-dir "/transient/history.el")))
+(use-package magit
+  :defer t
+  :config 
+  (custom-set-variables `(transient-history-file ,(concat savefile-dir "/transient/history.el"))))
+
 ;; Avy
 (use-package avy
   :ensure t
-  :bind (("C-;" . avy-goto-char)
-	 ("M-g M-c" . avy-goto-char)
-	 ("M-s" . avy-goto-char-timer)
-	 ("M-g M-g" . avy-goto-line))
+  :defer t 
+  :bind (:map bp/global-prefix-map
+			  ("g c" . avy-goto-char)
+			  ("g s" . avy-goto-char-timer)
+			  ("g l" . avy-goto-line))
   :config
   (setf avy-timeout-seconds 0.3))
 
 (use-package god-mode
   :ensure t
-  :bind (("C-SPC" . god-local-mode)
-	 ("C-q" . god-local-mode)
-	 ("M-q" . god-mode-all)))
-
-(defun my-update-cursor ()
-  (setq cursor-type (if (or god-local-mode buffer-read-only)
-                        'bar
-                      'box)))
-
-(add-hook 'god-mode-enabled-hook 'my-update-cursor )
-(add-hook 'god-mode-disabled-hook 'my-update-cursor)
-
-(eval-after-load "org" '(progn (setcdr (assoc "\\.pdf\\'" org-file-apps) "e:/Programs/SumatraPDF/SumatraPDF.exe %s")))
-
-(org-babel-do-load-languages
- 'org-babel-load-languages
- '((R . t)
-   (ditaa . t)
-   (dot . t)
-   (emacs-lisp . t)
-   (gnuplot . t)
-   (haskell . nil)
-   (latex . t)
-   (ledger . t)         ;this is the important one for this tutorial
-   (ocaml . nil)
-   (octave . t)
-   (python . t)
-   (ruby . t)
-   (screen . nil)
-   (sql . nil)
-   (sqlite . t)
-   (lisp . t)))
-
-(use-package org-download
-  :ensure t
-  :demand t)
-
-(use-package gnuplot
-  :ensure t)
-(use-package gnuplot-mode
-  :ensure t)
-
-(setq org-image-actual-width 300)
-
-
-(use-package multiple-cursors
-  :ensure t
-  :bind (("C-{" . mc/mark-previous-like-this)
-		 ("C-}" . mc/mark-next-like-this))
-  :demand t)
-
-(use-package expand-region
-  :ensure t
-  :bind (("C--" . er/contract-region)
-		 ("C-=" . er/expand-region)))
-
-(use-package ox-latex
+  :defer t 
+  :bind (("C-q" . god-local-mode)
+		 ("M-q" . god-mode-all)
+		 :map bp/global-prefix-map
+		 ("q" . god-local-mode))
   :config
-  ;; For proper rendering of unicode symbols on latex
-  (setq org-latex-inputenc-alist '(("utf8" . "utf8x")))
-  (setq org-latex-default-packages-alist (cons '("mathletters" "ucs" nil) org-latex-default-packages-alist)))
+  (define-key god-local-mode-map (kbd ".") #'repeat)
 
-(use-package org-mode
-  :bind ("C-c C-s C-l" . org-store-link)
-  :config
-  (setq-default fill-column 80)
-  :hook (org-mode . auto-fill-mode))
+  (defun my-update-cursor ()
+	(setq cursor-type (if (or god-local-mode buffer-read-only)
+						  'bar
+						'box)))
+
+  (add-hook 'god-mode-enabled-hook 'my-update-cursor )
+  (add-hook 'god-mode-disabled-hook 'my-update-cursor))
 
 ;; This interfered with company completion display
 ;; (use-package fill-column-indicator
@@ -255,13 +227,16 @@ buffer is not visiting a file."
 ;;   :config
 ;;   (fci-mode t))
 
-(use-package unicode-math-input
-  :ensure t
-  :demand t)
+;; (use-package unicode-math-input
+;;   :ensure t
+;;   :defer t)
+  
 
 ;; spell checking
 (use-package ispell
   :ensure t
+  :defer t
+  :commands (ispell ispell-buffer)
   :config 
   (setq ispell-program-name "hunspell")
   (setq ispell-dictionary "en_US")
@@ -274,3 +249,25 @@ buffer is not visiting a file."
 												 nil
 												 utf-8)))
   (setq ispell-hunspell-dictionary-alist ispell-local-dictionary-alist))
+
+(use-package multiple-cursors
+  :ensure t
+  :defer t 
+  :init
+  (smartrep-define-key bp/global-prefix-map
+	  "m"
+	  '(("p" . mc/mark-previous-like-this)
+		("n" . mc/mark-next-like-this))))
+
+(use-package expand-region
+  :ensure t
+  :defer t 
+  :bind (("C--" . er/contract-region)
+		 ("C-=" . er/expand-region)))
+
+(use-package unfill
+  :ensure t
+  :commands (unfill-paragraph unfill-toggle unfill-region))
+
+(add-hook 'text-mode-hook (lambda ()
+							(visual-line-mode t)))

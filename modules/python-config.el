@@ -47,15 +47,21 @@
 
 (use-package jedi-core
   :ensure t
+  :defer t
+  :after (helm-dash)
   :hook (python-mode . my-python-mode-hook))
 
 (use-package company-jedi
   :ensure t
+  :defer t 
   :after (company jedi-core))
 
 
 (use-package lsp-python-ms
   :ensure t
+  :defer t
+  :after (lsp)
+  :mode "\\.py\\"
   :config
   (setf lsp-python-ms-executable "c:/Users/hp/.emacs.d/.cache/lsp/mspyls/Microsoft.Python.LanguageServer.exe")
   ;; :hook (python-mode . (lambda ()

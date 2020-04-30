@@ -1,5 +1,6 @@
 (use-package rjsx-mode
   :ensure t
+  :defer t 
   :after (lsp-mode)
   :mode "\\.js\\'"
   :config
@@ -19,6 +20,8 @@
 
 (use-package flycheck
   :ensure t
+  :defer t
+  :commands (flycheck-mode)
   :config 
   (setf flycheck-javascript-eslint-executable "/home/bpanthi/.node_modules/bin/eslint"))
 
@@ -32,6 +35,8 @@
 ;; (add-to-list 'company-backends 'company-yasnippet)
 (use-package tern
   :ensure t
+  :defer t
+  :commands (tern-mode)
   :config
   (add-to-list 'load-path "~/.emacs.d/extra/tern/emacs/")
   (add-to-list 'exec-path "/home/bpanthi/.emacs.d/extra/tern/bin/"))

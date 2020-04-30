@@ -33,14 +33,15 @@
 ;; smex, remember recently and most frequently used commands
 (use-package smex
   :ensure t
+  :defer t
   :config 
   (setq smex-save-file (expand-file-name ".smex-items" savefile-dir)))
 
 
 ;;; Ivy
 (use-package ivy
-  :demand
   :ensure t
+  :defer 60
   :config
   (setq ivy-use-virtual-buffers t
 		ivy-count-format "%d/%d "
@@ -50,6 +51,7 @@
 (use-package ivy-rich
   :ensure t
   :after ivy
+  :defer 60
   :custom
   (ivy-virtual-abbreviate 'full
                           ivy-rich-switch-buffer-align-virtual-buffer t
@@ -59,8 +61,8 @@
 
 
 (use-package counsel
-  :demand
   :ensure t
+  :defer 60
   :bind (("C-x C-f" . counsel-find-file)
 		 ("C-x M-f" . counsel-recentf)
 		 ("M-x" . counsel-M-x)				
@@ -77,6 +79,6 @@
       (find-alternate-file (concat "/sudo:root@localhost:" buffer-file-name)))))
 
 (use-package swiper
-  :demand
   :ensure t
+  :defer 70
   :bind ("C-s" . swiper))

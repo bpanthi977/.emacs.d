@@ -1,7 +1,7 @@
 ;; Line-number of left margin
-(global-linum-mode 1)
-(add-hook 'text-mode-hook 'linum-mode)
-(add-hook 'prog-mode-hook 'linum-mode)
+;;(global-linum-mode nil)
+;;(add-hook 'text-mode-hook 'linum-mode)
+;;(add-hook 'prog-mode-hook 'linum-mode)
 
 ;; Tool bar and menu bar are unnecessary
 (when (fboundp 'tool-bar-mode)
@@ -18,7 +18,7 @@
 (setq inhibit-startup-screen t)
 
 ;; mode line settings
-(line-number-mode t)
+(line-number-mode nil)
 (column-number-mode t)
 (size-indication-mode t)
 
@@ -41,23 +41,39 @@
 
 
 ;; Theme
-(use-package zenburn-theme
-  :ensure t
-  :demand
-  :config 
-  (load-theme 'zenburn t))
+(require 'calendar)
+(defun load-todays-theme () 
+  (let* ((theme-list '((spacemacs-theme spacemacs-dark)
+					   (spacemacs-theme spacemacs-light)
+					   (chyla-theme chyla)
+					   (zenburn-theme zenburn)))
+		 (n (length theme-list))
+		 (day (calendar-day-of-week (calendar-current-date)))
+		 theme)
+	(if (>= day n)
+		(setf day (random n)))
+	(setf theme (nth day theme-list))
+;;	(require (nth 0 theme))
+	(load-theme (nth 1 theme) t)))
+
+(load-todays-theme)
+;; (use-package zenburn-theme
+;;   :ensure t
+;;   :demand
+;;   :config 
+;;   (load-theme 'zenburn t))
 
 ;; Symbola font does the job for emoji
 ;; t = for default fontset , nil = for character not found in other fonts
 ;; (font-sp.. ) = use Symbola font
 ;; (set-fontset-font t nil (font-spec :family "Noto Color Emoji"))
 
-(custom-set-faces
- ;; custom-set-faces was added by Custom.
- ;; If you edit it by hand, you could mess it up, so be careful.
- ;; Your init file should contain only one such instance.
- ;; If there is more than one, they won't work right.
- '(default ((t (:inherit nil :stipple nil
-			 ;;:background "#3F3F3F" :foreground "#DCDCCC"
-			 :inverse-video nil :box nil :strike-through nil :overline nil :underline nil :slant normal :weight normal ;; :height 90
-			 :width normal :foundry "ADBO" :family "Source Code Pro")))))
+;; (custom-set-faces
+;;  ;; custom-set-faces was added by Custom.
+;;  ;; If you edit it by hand, you could mess it up, so be careful.
+;;  ;; Your init file should contain only one such instance.
+;;  ;; If there is more than one, they won't work right.
+;;  '(default ((t (:inherit nil :stipple nil
+;; 			 ;;:background "#3F3F3F" :foreground "#DCDCCC"
+;; 			 :inverse-video nil :box nil :strike-through nil :overline nil :underline nil :slant normal :weight semibold ;; :height 90
+;; 			 :width normal :foundry "ADBO" :family "Source Code Pro")))))

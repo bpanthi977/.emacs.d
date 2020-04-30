@@ -52,5 +52,12 @@
   (lambda () (bpanthi-keys-mode 1)))
 
 (bpanthi-global-keys-mode)
+(use-package smartrep
+  :ensure t
+  :demand t)
 
+(define-prefix-command 'bp/global-prefix-map)
+(define-key global-map (kbd "M-m") 'bp/global-prefix-map)
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(global-set-key (kbd "C-x C-K") #'kill-buffer-and-window)
