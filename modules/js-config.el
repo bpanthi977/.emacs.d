@@ -1,9 +1,9 @@
 (use-package rjsx-mode
   :ensure t
   :defer t 
-  :after (lsp-mode)
   :mode "\\.js\\'"
   :config
+  (require 'lsp-mode)
   (setq exec-path (append '("/home/bpanthi/.node_modules/bin"
 							"/home/bpanthi/.yarn/bin")
 						  exec-path))

@@ -1,10 +1,10 @@
 ;;(install-packages (list ;; 'flycheck
 
-				 
-		   ;; 'anaconda-mode
-		   ;; 'company-anaconda
-		   ;; 'elpy
-		  ;; 'company-jedi
+
+;; 'anaconda-mode
+;; 'company-anaconda
+;; 'elpy
+;; 'company-jedi
 ;;		   'jedi-core
 ;;		   'helm-dash))
 
@@ -26,6 +26,7 @@
   ;; (add-to-list 'company-backends 'company-elpy)
   (setf python-environment-directory (concat init-dir "extra/python-environment"))
   (require 'helm-dash)
+  (require 'company-jedi)
   ;; (require 'company-jedi)
   ;; (require 'jedi-core)
   ;; (setq jedi:complete-on-dot t)
@@ -36,8 +37,8 @@
   (helm-dash-activate-docset "Python_3")
   (helm-dash-activate-docset "OpenCV_C++")
   (local-set-key (kbd "C-.") 'helm-dash-at-point)
-   (local-set-key (kbd "M-.") 'jedi:goto-definition)
-   (local-set-key (kbd "M-,") 'jedi:goto-definition-pop-marker)
+  (local-set-key (kbd "M-.") 'jedi:goto-definition)
+  (local-set-key (kbd "M-,") 'jedi:goto-definition-pop-marker)
   )
 
 ;; (add-hook 'python-mode-hook 'my-python-mode-hook)
@@ -47,24 +48,31 @@
 
 (use-package jedi-core
   :ensure t
+  :commands (jedi-mode)
   :defer t
-  :after (helm-dash)
-  :hook (python-mode . my-python-mode-hook))
+  :hook (python-mode . my-python-mode-hook)
+  :config
+  (bind-keys :map python-mode-map
+			 ("M-." . jedi:goto-definition)
+			 ("M-," . jedi:goto-definition-pop-marker)
+			 ("M-m d" . jedi:show-doc)))
 
 (use-package company-jedi
   :ensure t
   :defer t 
   :after (company jedi-core))
 
-
 (use-package lsp-python-ms
   :ensure t
   :defer t
-  :after (lsp)
-  :mode "\\.py\\"
+  :after (python)
   :config
   (setf lsp-python-ms-executable "c:/Users/hp/.emacs.d/.cache/lsp/mspyls/Microsoft.Python.LanguageServer.exe")
   ;; :hook (python-mode . (lambda ()
   ;; 						 (my-python-mode-hook)
   ;; 						 (lsp))))  ; or lsp-deferred
   )
+
+(defmacro rm-nth (n var)
+  `(setf ,var (remove (nth ,n ,var) ,var) ))
+

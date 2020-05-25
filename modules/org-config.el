@@ -1,23 +1,32 @@
-(install-packages '(org-plus-contrib))
 (use-package org-tempo
   :ensure nil
   :defer t
   :after (org tempo)
+  :hook (org-mode . (lambda () (require 'org-tempo)))
   :config 
   (add-to-list 'org-tempo-tags '("<f" . tempo-template-fact-with-source))
+  (add-to-list 'org-tempo-tags '("<L" . tempo-template-latex-named-equation))
   (add-to-list 'org-tempo-tags '("!s" . tempo-template-source)))
 
 (use-package org
-  :mode "\\.org\\'"
-  :hook (org-mode . auto-fill-mode)
+  :mode (("\\.org$" . org-mode))
+;;  :hook (org-mode . auto-fill-mode)
   :bind (:map bp/global-prefix-map
 			  ("o l" . org-store-link)
 			  ("o e" . org-emphasize))
   :bind (:map org-mode-map
 			  ("M-m o s". 'tempo-template-source)
-			  ("M-m o t". 'bp/org-capture-thought))
+			  ("M-m o c t". 'bp/org-capture-thought)
+			  ("M-m o c n" . 'bp/org-capture-notes))
+  :bind (:map org-src-mode-map
+			  ("C-c C-c" . org-edit-src-exit))
+  :hook (org-mode . (lambda ()
+					  (setq ispell-parser 'tex)))
+  :after (tempo)
   :config
-
+  (setq org-hide-emphasis-markers t)
+  (smartrep-define-key org-mode-map "M-m o"
+	'(("t" . org-todo)))
   ;; Whenever a TODO entry is created, I want a timestamp
   ;; Advice org-insert-todo-heading to insert a created timestamp using org-expiry
   (defadvice org-insert-todo-heading (after bp/created-timestamp-advice activate)
@@ -30,15 +39,22 @@
 	(interactive)
 	(org-capture nil "thoughts"))
 
+  (defun bp/org-capture-notes ()
+	(interactive)
+	(org-capture nil "notes"))
+
   (add-hook 'org-mode-hook (lambda ()
+							 (electric-indent-local-mode nil)
 							 (modify-syntax-entry ?< ".")
 							 (modify-syntax-entry ?> ".")))
-  (progn (setcdr (assoc "\\.pdf\\'" org-file-apps) "e:/Programs/SumatraPDF/SumatraPDF.exe %s"))
-
+  (setcdr (assoc "\\.pdf\\'" org-file-apps) "e:/Programs/SumatraPDF/SumatraPDF.exe %s")
+  (pushnew '("\\.pdf::\\([0-9]+\\)?\\'" .  "e:/Programs/SumatraPDF/SumatraPDF.exe %s -page %1")
+		   org-file-apps)
+  (require 'ox-latex)
   (setq org-preview-latex-image-directory "E:/tmp/ltximg/")
   (setf org-startup-with-inline-images t
 		org-startup-with-latex-preview t)
-
+  
   (org-babel-do-load-languages
    'org-babel-load-languages
    '((R . t)
@@ -57,12 +73,50 @@
 	 (sql . nil)
 	 (sqlite . t)
 	 (lisp . t)))
+  (setf org-babel-lisp-eval-fn 'sly-eval)
   (setq org-image-actual-width 300)
 
   (setq org-directory "~/Documents/synced/Notes/org/")
   (setq org-default-notes-file (concat org-directory "/notes.org"))
 
   (setq org-log-done t)
+  
+  (let ((last-input ""))
+	(defun bp/org-insert-inline-latex (latex-fragment)
+	  (interactive "sLatex:")
+	  (insert-char ?$)
+	  (insert latex-fragment)
+	  (setf last-input latex-fragment)
+	  (insert-char ?$)
+	  (insert-char ? )
+	  (org-latex-preview))
+
+	(defun bp/org-insert-last-inline-latex ()
+	  (interactive)
+	  (bp/org-insert-inline-latex last-input))
+
+	(defun bp/org-insert-latex-equation (name latex)
+	  "Insert a latex equation that can be referenced"
+	  (interactive "sName:\nsLatex:")
+	  (if (not (string= name ""))
+		  (insert "#+NAME: eqn:"
+				  name
+				  "\n\\begin{equation}\n"
+				  latex
+				  "\n\\tag{"
+				  name
+				  "}\n\\end{equation}\n")
+		(insert "\\begin{equation*}\n"
+				latex
+				"\n\\end{equation*}\n"))
+		(org-latex-preview)))
+
+
+  (bind-keys :map org-mode-map
+			 ("M-m o i l" . bp/org-insert-inline-latex)
+			 ("M-m o i i" . bp/org-insert-last-inline-latex )
+			 ("M-m o i e" . bp/org-insert-latex-equation)
+			 ("M-l" . bp/org-insert-inline-latex))
 
   )
 
@@ -72,7 +126,8 @@
   :after (org)
   :commands (org-capture)
   :bind (:map bp/global-prefix-map
-			  ("o c" . org-capture))
+			  ("o c c" . org-capture)
+			  ("o c l" . org-capture-goto-last-stored))
   :config
   (defun transform-square-brackets-to-round-ones(string-to-transform)
 	"Transforms [ into ( and ] into ), other chars left unchanged."
@@ -86,7 +141,15 @@
 	  (if (search-forward-regexp "^\* Thoughts" nil t)
 		  (forward-line)
 		(progn (goto-char (point-max))
-			   (insert "\n* Thoughts")))))		 
+			   (insert "\n* Thoughts")))))
+
+  (defun capture-note-in-current-heading ()
+	(let* ((buffer (current-buffer))
+		   (current-point (point)))
+	  (if (search-forward-regexp "^\*+ Notes" nil t)
+		  (forward-line)
+		(progn (goto-char (point-max))
+			   (insert "\n* Notes")))))
 
   (setq org-capture-templates `(
 								("p" "Protocol" entry (file+headline ,(concat org-directory "notes.org") "Inbox")
@@ -102,7 +165,9 @@
 								("k" "Quote" item (file+headline "~/org/notes.org" "Quotes")
 								 "%? :: %x")
 								("thoughts" "Capture Thoughts in a heading at bottom of file" item (function capture-in-visited-org-file)
-								 "+ %?")								   
+								 "+ %?")
+								("notes" "Capture notes below current heading" item (function capture-note-in-current-heading)
+								 "+ %?")
 								)))
 
 (use-package tempo
@@ -134,6 +199,10 @@
   :config
   ;; For proper rendering of unicode symbols on latex
   (setq org-latex-inputenc-alist '(("utf8" . "utf8x")))
+  ;; You also need to bug fix the working of `Tranparent' in org.el.
+  ;; See personal notes and also install librsvg-2-2.dll 
+  (setq org-preview-latex-default-process 'dvisvgm)
+  (plist-put org-format-latex-options :background "Transparent")
   (setq org-latex-default-packages-alist (cons '("mathletters" "ucs" nil) org-latex-default-packages-alist)))
 
 (use-package org-agenda
@@ -144,6 +213,7 @@
 							   "~/org/tasks.org"
 							   "~/org/programming.org"
 							   )))
+
 ;; Allow automatically handing of created/expired meta data.
 ;; in TODOs 
 
@@ -166,3 +236,20 @@
 	(org-end-of-line)
 	(insert " ")
 	))
+
+(use-package org-roam
+  :ensure t
+  :defer t 
+  :custom
+  (org-roam-directory "~/Documents/synced/Notes/org/")
+  :bind (
+		 :map org-roam-mode-map
+		 (("M-m r l" . org-roam)
+		  ("M-m r f" . org-roam-find-file)
+		  ("M-m r j" . org-roam-jump-to-index)
+		  ("M-m r b" . org-roam-switch-to-buffer)
+		  ("M-m r g" . org-roam-graph))
+		 :map bp/global-prefix-map
+		 (("r f" . org-roam-find-file))
+		 :map org-mode-map
+		 (("M-m o r" . org-roam-insert))))

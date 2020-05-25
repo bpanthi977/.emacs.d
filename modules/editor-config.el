@@ -7,6 +7,15 @@
 ;; 			'ace-window
 ;; 			'saveplace))
 
+;; Keymaps
+
+(bind-keys :map bp/global-prefix-map
+		   ;; editingb
+		   ("e e" . hippie-expand)
+		   ;; file 
+		   ("f r" . recover-this-file)
+		   ("f d" . diff-buffer-with-file))
+
 ;; turn on CUA-mode globally
 (cua-mode t)
 ;; Newline at end of file
@@ -28,6 +37,7 @@
 (setq-default indent-tabs-mode t)
 ;; disable annoying blink-matching-paren
 (setq blink-matching-paren nil)
+(show-paren-mode t)
 
 ;; meaningful names for buffers with the same name
 (require 'uniquify)
@@ -45,14 +55,14 @@
 ;; save recent files
 (use-package recentf
   :ensure t
-  :config
+  :demand t 
+  :init
   (setq recentf-save-file (expand-file-name "recentf" savefile-dir)
 		recentf-max-saved-items 500
 		recentf-max-menu-items 15
 		;; disable recentf-cleanup on Emacs start, because it can cause
 		;; problems with remote files
 		recentf-auto-cleanup 'never)
-  :init 
   (recentf-mode +1))
 
 ;; highlight the current line
@@ -65,20 +75,17 @@
 
 (use-package smartparens
   :ensure t
+  :defer nil
   :config
-  (require 'smartparens-config)
-  (setq sp-autoskip-closing-pair 'always)
-  (setq sp-hybrid-kill-entire-symbol nil)
-  (show-smartparens-global-mode t)
   :bind (;; ("C-M-f" . sp-forward-slurp-sexp)
 		 ;;("C-M-b" . sp-backward-slurp-sexp)
 		 ( "C-M-f" . sp-forward-sexp)
 		 ( "C-M-b" . sp-backward-sexp)
 
-		 ( "C-M-d" . sp-down-sexp)
+		 ( "C-M-d" . kill-sexp)
 		 ( "C-M-a" . sp-backward-down-sexp)
-		 ( "C-S-d" . sp-beginning-of-sexp)
-		 ( "C-S-a" . sp-end-of-sexp)
+;;		 ( "C-S-d" . sp-beginning-of-sexp)
+;;		 ( "C-S-a" . sp-end-of-sexp)
 
 		 ( "C-M-e" . sp-up-sexp)
 		 ( "C-M-u" . sp-backward-up-sexp)
@@ -112,7 +119,14 @@
 
 		 ( "C-\"" . sp-change-inner)
 		 ( "M-i" . sp-change-enclosing))
-  :hook ((prog-mode . smartparens-mode)))
+  :hook ((prog-mode . smartparens-mode))
+  :init
+  (require 'smartparens-config)
+  (smartparens-global-strict-mode -1)
+  (setq sp-autoskip-closing-pair nil)
+  (setq sp-hybrid-kill-entire-symbol nil)
+  )
+
 
 (defun sudo-edit (&optional arg)
   "Edit currently visited file as root.
@@ -130,17 +144,18 @@ buffer is not visiting a file."
 (use-package projectile
   :ensure t
   :defer t
-  :config 
+  :config
+  (require 'counsel-projectile)
+  :init 
   (setq projectile-indexing-method 'alien)
   (setq projectile-enable-caching t)
   (setq projectile-cache-file (concat init-dir "cache/projectile.cache")
-	projectile-known-projects-file (concat savefile-dir "/projectil-bookmarks.eld"))
+	projectile-known-projects-file (concat savefile-dir "/projectile-bookmarks.eld"))
   :bind-keymap ("M-P" . projectile-command-map))
 
 (use-package counsel-projectile
   :ensure t
   :defer t 
-  :after '(projectile counsel)
   :config
   (counsel-projectile-mode 1))
 
@@ -149,14 +164,17 @@ buffer is not visiting a file."
   :ensure t
   :bind ("C-c o" . ace-window)
   :bind (:map bp/global-prefix-map
-			 ("w w" . ace-window))
-  :config
-  (setf aw-dispatch-always t)
-  (setq aw-keys '(?a ?s ?d ?f ?g ?h ?j ?k ?l))
+			  ("w w" . ace-window)
+			  ("w d" . ace-delete-window))
   :init
+  (setf aw-dispatch-always t)
+  (setq aw-keys '(?a ?s ?d ?f ?j ?k ?l))
   (smartrep-define-key bp/global-prefix-map
 	  "w"
 	'(("o" . other-window))))
+
+(bind-keys :map bp/global-prefix-map 
+		  ("w n" . make-frame))
  
 (use-package yasnippet
   :ensure t
@@ -189,7 +207,7 @@ buffer is not visiting a file."
 ;; Magit
 (use-package magit
   :defer t
-  :config 
+  :init 
   (custom-set-variables `(transient-history-file ,(concat savefile-dir "/transient/history.el"))))
 
 ;; Avy
@@ -197,10 +215,15 @@ buffer is not visiting a file."
   :ensure t
   :defer t 
   :bind (:map bp/global-prefix-map
+			  ("g g" . bp/avy-goto-char-end)
 			  ("g c" . avy-goto-char)
 			  ("g s" . avy-goto-char-timer)
 			  ("g l" . avy-goto-line))
   :config
+  (defun bp/avy-goto-char-end ()
+	(interactive)
+	(when (avy-goto-char-timer)
+	  (forward-char 1)))
   (setf avy-timeout-seconds 0.3))
 
 (use-package god-mode
@@ -237,22 +260,44 @@ buffer is not visiting a file."
   :ensure t
   :defer t
   :commands (ispell ispell-buffer)
-  :config 
+  :init 
   (setq ispell-program-name "hunspell")
-  (setq ispell-dictionary "en_US")
-  (add-to-list 'ispell-local-dictionary-alist '(("en_US"
-												 "[[:alpha:]]"
-												 "[^[:alpha:]]"
-												 "[']"
-												 t
-												 ("-d" "en_US")
-												 nil
-												 utf-8)))
-  (setq ispell-hunspell-dictionary-alist ispell-local-dictionary-alist))
+  (setq ispell-dictionary "english")
+  (bind-keys :map bp/global-prefix-map
+			 ("e i i" . ispell)
+			 ("e i w" . ispell-word)
+			 ("e i c" . ispell-continue))
+  :config
+  (add-to-list 'ispell-dictionary-alist
+             '("english" "[[:alpha:]]" "[^[:alpha:]]" "'" t ("-d" "en_US") nil utf-8))
+
+;;  :config 
+  ;; (add-to-list 'ispell-dictionary-alist '(("american"
+  ;; 										   "[[:alpha:]]"
+  ;; 										   "[^[:alpha:]]"
+  ;; 										   "[']"
+  ;; 										   t
+  ;; 										   ("-d" "english")
+  ;; 										   nil
+  ;; 										   utf-8)))
+  ;; (setq ispell-dictionary-alist 
+
+  ;; ispell-hunspell-dict-paths-alist)
+  ;; (ispell-find-hunspell-dictionaries))
+  )
+
+(use-package flyspell
+  :ensure t
+  :demand nil
+  :config
+  (setq flyspell-issue-message-flag nil))
+
+
 
 (use-package multiple-cursors
   :ensure t
-  :defer t 
+  :defer t
+  :commands (mc/mark-previous-like-this mc/mark-next-like-this)
   :init
   (smartrep-define-key bp/global-prefix-map
 	  "m"
@@ -267,6 +312,8 @@ buffer is not visiting a file."
 
 (use-package unfill
   :ensure t
+  :bind (:map bp/global-prefix-map
+			  ("e u" . unfill-paragraph))
   :commands (unfill-paragraph unfill-toggle unfill-region))
 
 (add-hook 'text-mode-hook (lambda ()

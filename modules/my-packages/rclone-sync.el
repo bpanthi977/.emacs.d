@@ -23,12 +23,13 @@
 		   (kill-buffer (process-buffer process))
 		   (message "rclone copy done")))))
 
-(defun rclone--async (command source target &optional process-sentinel)
+(defun rclone--async (command source target &optional extra-commands process-sentinel)
   "Run rclone process to copy/sync source to target"
   (let ;; prepare command
 	   ((command (concat "rclone -P " command " \""
 						source "\" \"" target
-						"\" -L --exclude-if-present .ignore"))
+						"\" -L --exclude-if-present .ignore "
+						(or extra-commands "")))
 		(process-sentinel (or process-sentinel 'rclone--process-sentinel)))
 	(message command)
 	(if rclone--defer-run
@@ -85,6 +86,8 @@
 	(cond 
 	 ((string-equal backuptype "copy")
 	  (rclone--async "copy" source target))
+	 ((string-equal backuptype "rcopy")
+	  (rclone--async "copy" target source "--immutable"))
 	 ((string-equal backuptype "2way")
 	  (rclone--async "copy" source target)
 	  (rclone--async "copy" target source))
@@ -100,6 +103,14 @@
 (defun rclone-copy-directory ()
   (interactive)
   (rclone--backup-file/directory (buffer-file-name) t "copy"))
+
+(defun rclone-sync-directory ()
+  (interactive)
+  (rclone--backup-file/directory (buffer-file-name) t "sync"))
+
+(defun rclone-reverse-copy-directory ()
+  (interactive)
+  (rclone--backup-file/directory (buffer-file-name) t "rcopy"))
 
 (defun rclone-run-backup-tasks ()
   "Run backup tasks from rclone-sync file at emacs.d

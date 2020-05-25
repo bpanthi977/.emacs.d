@@ -36,9 +36,10 @@
   :bind (:map sly-prefix-map
 			  ("M-p" . sly-mrepl-set-package))
   :config
-  ;; (setf inferior-lisp-program "sbcl --core C:/Users/hp/.cache/common-lisp/core" ;; --dynamic-space-size 2560
-  ;; 		)
-  (setf inferior-lisp-program "sbcl --core c:/Users/hp/lack-core"))
+ (setf inferior-lisp-program "sbcl --core C:/Users/hp/.cache/common-lisp/core" ;; --dynamic-space-size 2560
+  		))
+;;  (setf inferior-lisp-program "clisp"))
+ ;; (setf inferior-lisp-program "sbcl --core c:/Users/hp/lack-core"))
   ;; :hook ((mrepl-mode . smartparens-mode)))
 
 ;; Emacs Lisp

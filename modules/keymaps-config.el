@@ -13,7 +13,6 @@
     (define-key map (kbd "M->") 'enlarge-window)
     (define-key map (kbd "M-<") 'shrink-window)
 
-    (define-key map (kbd "C-c C-e") 'flycheck-list-errors)
     ;; Font size
     (define-key map (kbd "C-+") 'text-scale-increase)
     (define-key map (kbd "C-_") 'text-scale-decrease)
@@ -40,8 +39,6 @@
       (insert (capitalize (char-to-string char)))
       (sp-insert-pair))))
 
-
-
 (define-minor-mode bpanthi-keys-mode
   "A minor mode so that my key-bindings override annoying major-modes"
   :init-value t
@@ -58,6 +55,12 @@
 
 (define-prefix-command 'bp/global-prefix-map)
 (define-key global-map (kbd "M-m") 'bp/global-prefix-map)
+
+(use-package bind-key
+  :ensure t
+  :defer nil)
+
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (global-set-key (kbd "C-x C-K") #'kill-buffer-and-window)

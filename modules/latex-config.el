@@ -22,7 +22,7 @@
 (use-package latex
   :ensure auctex
   :defer t
-  :mode "\\.tex\\"
+  :mode "\\.tex\\'"
   :after (tex-mik)
   :hook ((LaTeX-mode .  (lambda () 
 						  (latex-math-mode)

@@ -42,11 +42,16 @@
 (use-package ivy
   :ensure t
   :defer 60
-  :config
+  :bind (("C-x b" . ivy-switch-buffer))
+  :config 
+  (require 'smex)
+  (ivy-mode t)
+  :init
   (setq ivy-use-virtual-buffers t
 		ivy-count-format "%d/%d "
-		ivy-re-builders-alist '( (t . ivy--regex-ignore-order)))
-  (ivy-mode 1))
+		ivy-re-builders-alist '( (t . ivy--regex-ignore-order))))
+  
+
 
 (use-package ivy-rich
   :ensure t

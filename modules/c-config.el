@@ -89,29 +89,29 @@
 ;; (add-hook 'objc-mode-hook 'my-irony-mode-on)
 
 
-(defun my-rtags-on ()
-  (require 'rtags)
+;; (defun my-rtags-on ()
+;;   (require 'rtags)
   
-  (unless (rtags-executable-find "rc") (error "Binary rc is not installed!"))
-  (unless (rtags-executable-find "rdm") (error "Binary rdm is not installed!"))
+;;   (unless (rtags-executable-find "rc") (error "Binary rc is not installed!"))
+;;   (unless (rtags-executable-find "rdm") (error "Binary rdm is not installed!"))
 
-  (define-key c-mode-base-map (kbd "M-.") 'rtags-find-symbol-at-point)
-  (define-key c-mode-base-map (kbd "M-,") 'rtags-find-references-at-point)
-  (define-key c-mode-base-map (kbd "M-?") 'rtags-display-summary)
-  (rtags-enable-standard-keybindings)
+;;   (define-key c-mode-base-map (kbd "M-.") 'rtags-find-symbol-at-point)
+;;   (define-key c-mode-base-map (kbd "M-,") 'rtags-find-references-at-point)
+;;   (define-key c-mode-base-map (kbd "M-?") 'rtags-display-summary)
+;;   (rtags-enable-standard-keybindings)
 
-  ;;(setq rtags-use-helm t)
-  (require 'company-rtags)
-  (setq rtags-autostart-diagnostics t)
-  (rtags-diagnostics)
-  (setq rtags-completions-enabled t)
-  (ad 'company-rtags company-backends)
+;;   ;;(setq rtags-use-helm t)
+;;   (require 'company-rtags)
+;;   (setq rtags-autostart-diagnostics t)
+;;   (rtags-diagnostics)
+;;   (setq rtags-completions-enabled t)
+;;   (ad 'company-rtags company-backends)
 
-  (rtags-start-process-unless-running))
+;;   (rtags-start-process-unless-running))
 
-;; Shutdown rdm when leaving emacs.
-(add-hook 'kill-emacs-hook 'rtags-quit-rdm)
-(add-hook 'c++-mode-hook 'my-rtags-on)
-(add-hook 'c-mode-hook 'my-rtags-on)
+;; ;; Shutdown rdm when leaving emacs.
+;; (add-hook 'kill-emacs-hook 'rtags-quit-rdm)
+;; (add-hook 'c++-mode-hook 'my-rtags-on)
+;; (add-hook 'c-mode-hook 'my-rtags-on)
 (add-hook 'c-mode-hook 'setup-c-make)
-(add-hook 'objc-mode-hook 'my-rtags-on)
+;; (add-hook 'objc-mode-hook 'my-rtags-on)

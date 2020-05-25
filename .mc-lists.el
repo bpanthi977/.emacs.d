@@ -9,6 +9,7 @@
 		TeX-command-master
 		TeX-insert-backslash
 		backward-sexp
+		beginning-of-visual-line
 		c-electric-delete-forward
 		counsel-M-x
 		cua--prefix-override-handler
@@ -18,6 +19,8 @@
 		delete-selection-repeat-replace-region
 		electric-newline-and-maybe-indent
 		end-of-visual-line
+		eval-defun
+		eval-last-sexp
 		eval-print-last-sexp
 		forward-sentence
 		forward-sexp
@@ -26,8 +29,10 @@
 		magit-discard
 		mouse-set-region
 		org-beginning-of-line
+		org-cycle
 		org-delete-char
 		org-end-of-line
+		org-force-self-insert
 		org-kill-line
 		org-return-indent
 		org-self-insert-command
@@ -35,7 +40,9 @@
 		slime-autodoc-space
 		slime-compile-defun
 		sly-compile-defun
+		sp-forward-sexp
 		sp-forward-slurp-sexp
+		sp-transpose-sexp
 		transpose-sexps
 		transpose-words
 		))
