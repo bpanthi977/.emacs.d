@@ -73,10 +73,10 @@
 ;; (unless (server-running-p)
 ;;   (server-start))
 
-(add-hook! 'emacs-startup-hook
-  (setq gc-cons-threshold 16777216
-        gc-cons-percentage 0.1
-        file-name-handler-alist last-file-name-handler-alist))
+
+(setq gc-cons-threshold 16777216
+	  gc-cons-percentage 0.1
+	  file-name-handler-alist last-file-name-handler-alist)
 
 (custom-set-variables
  ;; custom-set-variables was added by Custom.
