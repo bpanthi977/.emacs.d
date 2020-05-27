@@ -126,10 +126,7 @@
 (use-package org-capture
   :defer t
   :after (org)
-  :commands (org-capture)
-  :bind (:map bp/global-prefix-map
-			  ("o c c" . org-capture)
-			  ("o c l" . org-capture-goto-last-stored))
+  :commands (org-capture org-capture-goto-last-saved)
   :config
   (defun transform-square-brackets-to-round-ones(string-to-transform)
 	"Transforms [ into ( and ] into ), other chars left unchanged."
@@ -170,7 +167,11 @@
 								 "+ %?")
 								("notes" "Capture notes below current heading" item (function capture-note-in-current-heading)
 								 "+ %?")
-								)))
+								))
+  :init
+  (bind-keys :map bp/global-prefix-map
+			 ("o c c" . org-capture)
+			 ("o c l" . org-capture-goto-last-stored)))
 
 (use-package tempo
   :config
@@ -277,4 +278,4 @@
 		(goto-line 2)
 		(insert "#+ROAM_TAGS: \n")
 		(move-end-of-line 0)))))
-	 
+
