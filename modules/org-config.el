@@ -51,8 +51,9 @@
   (pushnew '("\\.pdf::\\([0-9]+\\)?\\'" .  "e:/Programs/SumatraPDF/SumatraPDF.exe %s -page %1")
 		   org-file-apps)
   (require 'ox-latex)
-  (setq org-preview-latex-image-directory "E:/tmp/ltximg/")
+  (setq org-preview-latex-image-directory (if windows-system? "E:/tmp/ltximg/" "/mnt/Data/tmp/ltximg/"))
   (setf org-startup-with-inline-images t
+		org-image-actual-width 600
 		org-startup-with-latex-preview t)
   
   (org-babel-do-load-languages
@@ -60,6 +61,7 @@
    '((R . t)
 	 (ditaa . t)
 	 (dot . t)
+	 (shell . t)
 	 (emacs-lisp . t)
 	 (gnuplot . t)
 	 (haskell . nil)
@@ -72,7 +74,8 @@
 	 (screen . nil)
 	 (sql . nil)
 	 (sqlite . t)
-	 (lisp . t)))
+	 (lisp . t)
+	 ))
   (setf org-babel-lisp-eval-fn 'sly-eval)
   (setq org-image-actual-width 300)
 
@@ -117,7 +120,6 @@
 			 ("M-m o i i" . bp/org-insert-last-inline-latex )
 			 ("M-m o i e" . bp/org-insert-latex-equation)
 			 ("M-l" . bp/org-insert-inline-latex))
-
   )
 
 ;; TODO (require 'org-protocol)
@@ -239,11 +241,12 @@
 
 (use-package org-roam
   :ensure t
-  :defer t 
+  :defer t
   :custom
-  (org-roam-directory "~/Documents/synced/Notes/org/")
-  :bind (
-		 :map org-roam-mode-map
+  (org-roam-directory (if windows-system? "E:/Documents/synced/Notes/org/" "~/Documents/synced/Notes/org/"))
+  (when windows-system?
+	(setq org-roam-list-files-commands '((find . "C:/tools/msys64/usr/bin/find.exe") rg)))
+  :bind (:map org-roam-mode-map
 		 (("M-m r l" . org-roam)
 		  ("M-m r f" . org-roam-find-file)
 		  ("M-m r j" . org-roam-jump-to-index)
@@ -252,4 +255,26 @@
 		 :map bp/global-prefix-map
 		 (("r f" . org-roam-find-file))
 		 :map org-mode-map
-		 (("M-m o r" . org-roam-insert))))
+		 (("M-m o r" . org-roam-insert)
+		  ("M-m r t" . bp/org-roam-tags)
+		  ("M-m r d" . org-roam-db-build-cache)
+		  ("M-m r l" . org-roam)))
+  :config
+  (require 'ivy)
+  (setq org-roam-db-location (cond
+							  ((string-equal system-type "gnu/linux") (expand-file-name "dbs/linux/org-roam.db" org-roam-directory))
+							  ((string-equal system-type "windows-nt") (expand-file-name "dbs/windows/org-roam.db" org-roam-directory))))
+  (defun bp/org-roam-tags ()
+	(interactive)
+	(goto-char 0)
+	(xref-push-marker-stack)
+	(if (search-forward "\n#+ROAM_TAGS:" nil t)
+		(progn
+		  (move-end-of-line 1)
+		  (unless (eql (char-before) ?\ )
+			(insert " ")))
+	  (progn
+		(goto-line 2)
+		(insert "#+ROAM_TAGS: \n")
+		(move-end-of-line 0)))))
+	 
