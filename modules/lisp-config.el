@@ -19,8 +19,8 @@
 ;;     (eww-open-file "~/Dev/lisp/quicklisp/dists/quicklisp/software/lispbuilder-20180831-git/lispbuilder-sdl/documentation/lispbuilder-sdl.html"))
 ;;   )
   
-;;   ;; (when  (string-equal system-type "windows-nt")
-;;   ;;   (setq inferior-lisp-program "sbcl")))
+  ;; (when  (string-equal system-type "windows-nt")
+  ;;   (setq inferior-lisp-program "sbcl")))
 
 	
 
@@ -36,8 +36,11 @@
   :bind (:map sly-prefix-map
 			  ("M-p" . sly-mrepl-set-package))
   :config
- (setf inferior-lisp-program "sbcl --core C:/Users/hp/.cache/common-lisp/core" ;; --dynamic-space-size 2560
-  		))
+  (cond ((string-equal system-type "windows-nt")
+		 (setf inferior-lisp-program "sbcl --core C:/Users/hp/.cache/common-lisp/core" ;; --dynamic-space-size 2560
+			   ))
+		(t
+		 (setf inferior-lisp-program "sbcl --core /home/bpanthi/.cache/common-lisp/core"))))
 ;;  (setf inferior-lisp-program "clisp"))
  ;; (setf inferior-lisp-program "sbcl --core c:/Users/hp/lack-core"))
   ;; :hook ((mrepl-mode . smartparens-mode)))

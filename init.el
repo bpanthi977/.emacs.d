@@ -29,6 +29,7 @@
 ;; warn when opening files bigger than 100MB
 (setq large-file-warning-threshold 100000000)
 
+(defvar windows-system? (if (string-equal system-name "windows/nt") t nil))
 
 ;; Declare modules to load 
 (defvar load-modules-list

@@ -51,8 +51,9 @@
   (pushnew '("\\.pdf::\\([0-9]+\\)?\\'" .  "e:/Programs/SumatraPDF/SumatraPDF.exe %s -page %1")
 		   org-file-apps)
   (require 'ox-latex)
-  (setq org-preview-latex-image-directory "E:/tmp/ltximg/")
+  (setq org-preview-latex-image-directory (if windows-system? "E:/tmp/ltximg/" "/mnt/Data/tmp/ltximg/"))
   (setf org-startup-with-inline-images t
+		org-image-actual-width 600
 		org-startup-with-latex-preview t)
   
   (org-babel-do-load-languages
@@ -60,6 +61,7 @@
    '((R . t)
 	 (ditaa . t)
 	 (dot . t)
+	 (shell . t)
 	 (emacs-lisp . t)
 	 (gnuplot . t)
 	 (haskell . nil)
@@ -72,7 +74,8 @@
 	 (screen . nil)
 	 (sql . nil)
 	 (sqlite . t)
-	 (lisp . t)))
+	 (lisp . t)
+	 ))
   (setf org-babel-lisp-eval-fn 'sly-eval)
   (setq org-image-actual-width 300)
 
@@ -124,10 +127,7 @@
 (use-package org-capture
   :defer t
   :after (org)
-  :commands (org-capture)
-  :bind (:map bp/global-prefix-map
-			  ("o c c" . org-capture)
-			  ("o c l" . org-capture-goto-last-stored))
+  :commands (org-capture org-capture-goto-last-saved)
   :config
   (defun transform-square-brackets-to-round-ones(string-to-transform)
 	"Transforms [ into ( and ] into ), other chars left unchanged."
@@ -168,7 +168,11 @@
 								 "+ %?")
 								("notes" "Capture notes below current heading" item (function capture-note-in-current-heading)
 								 "+ %?")
-								)))
+								))
+  :init
+  (bind-keys :map bp/global-prefix-map
+			 ("o c c" . org-capture)
+			 ("o c l" . org-capture-goto-last-stored)))
 
 (use-package tempo
   :config
@@ -239,11 +243,10 @@
 
 (use-package org-roam
   :ensure t
-  :defer t 
+  :defer t
   :custom
   (org-roam-directory "~/Documents/synced/Notes/org/")
-  :bind (
-		 :map org-roam-mode-map
+  :bind (:map org-roam-mode-map
 		 (("M-m r l" . org-roam)
 		  ("M-m r f" . org-roam-find-file)
 		  ("M-m r j" . org-roam-jump-to-index)
@@ -252,4 +255,11 @@
 		 :map bp/global-prefix-map
 		 (("r f" . org-roam-find-file))
 		 :map org-mode-map
-		 (("M-m o r" . org-roam-insert))))
+		 (("M-m o r" . org-roam-insert)
+		  ("M-m r l" . org-roam)))
+  :config
+  (require 'ivy)
+  (setq org-roam-db-location (cond
+							  ((string-equal system-type "gnu/linux") (expand-file-name "dbs/linux/org-roam.db" org-roam-directory))
+							  ((string-equal system-type "windows-nt") (expand-file-name "dbs/windows/org-roam.db" org-roam-directory)))))
+
