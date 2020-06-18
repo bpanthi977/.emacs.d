@@ -39,6 +39,17 @@
   (local-set-key (kbd "C-.") 'helm-dash-at-point)
   (local-set-key (kbd "M-.") 'jedi:goto-definition)
   (local-set-key (kbd "M-,") 'jedi:goto-definition-pop-marker)
+
+  (wolfe/pretty-symbol-push-default)
+  (push '("def"    . ?ƒ) prettify-symbols-alist)
+  (push '("sum"    . ?Σ) prettify-symbols-alist)
+  (push '("**2"    . ?²) prettify-symbols-alist)
+  (push '("**3"    . ?³) prettify-symbols-alist)
+  (push '("None"   . ?∅) prettify-symbols-alist)
+  (push '("in"     . ?∈) prettify-symbols-alist)
+  (push '("not in" . ?∉) prettify-symbols-alist)
+  (push '("return" . ?➡) prettify-symbols-alist)
+  (prettify-symbols-mode t)
   )
 
 ;; (add-hook 'python-mode-hook 'my-python-mode-hook)

@@ -39,7 +39,9 @@
   (setq-local make-run-func #'my-c-make-run)
   (setq-local make-link-func #'my-c-make-link)
   (setq-local make-compile-run-func #'my-make-compile-link-run-file)
-  (setq-local make-default-makefile "~/.emacs.d/modules/makefiles/default-c-makefile"))
+  (setq-local make-default-makefile "~/.emacs.d/modules/makefiles/default-c-makefile")
+  (wolfe/pretty-symbol-push-default))
+
 
 ;; (defun setup-irony-keys ()
 ;;   (interactive)

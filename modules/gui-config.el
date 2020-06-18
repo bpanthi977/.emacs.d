@@ -45,7 +45,8 @@
 (defun load-todays-theme () 
   (let* ((theme-list '((spacemacs-theme spacemacs-dark)
 					   (solarized-theme solarized-zenburn)
-					   (monokai-pro-theme monokai-pro)
+					   (monokai-pro-theme monokai-pro
+										  '(set-face-foreground font-lock-variable-name-face "light sea green"))
 					   (solarized-theme solarized-dark)
 					   (color-theme-sanityinc-tomorrow sanityinc-tomorrow-eighties)
 					   (solarized-theme solarized-gruvbox-dark)
@@ -56,10 +57,28 @@
 		 theme)
 	(setf day (mod day n))
 	(setf theme (nth day theme-list))
-;;	(require (nth 0 theme))
-	(load-theme (nth 1 theme) t)))
+	;;	(require (nth 0 theme))
+	(load-theme (nth 1 theme) t)
+	(if (third theme)
+		(eval (third theme)))))
 
 (load-todays-theme)
+
+(defun wolfe/pretty-symbol-push-default ()
+  (push '("!=" . ?≠) prettify-symbols-alist)
+  (push '("<=" . ?≤) prettify-symbols-alist)
+  (push '(">=" . ?≥) prettify-symbols-alist)
+  (push '("=>" . ?⇒) prettify-symbols-alist))
+
+
+(add-hook 'emacs-lisp-mode-hook
+          (lambda ()
+            (wolfe/pretty-symbol-push-default)
+            (push '("defun"    . ?ƒ) prettify-symbols-alist)
+            (push '("defmacro" . ?μ) prettify-symbols-alist)
+            (push '("defvar"   . ?ν) prettify-symbols-alist)
+            (prettify-symbols-mode t)))
+
 ;; (use-package zenburn-theme
 ;;   :ensure t
 ;;   :demand

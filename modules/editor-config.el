@@ -8,13 +8,20 @@
 ;; 			'saveplace))
 
 ;; Keymaps
-
 (bind-keys :map bp/global-prefix-map
 		   ;; editingb
 		   ("e e" . hippie-expand)
-		   ;; file 
+		   ("e t" . toggle-truncate-lines)
+		   ;; file
 		   ("f r" . recover-this-file)
 		   ("f d" . diff-buffer-with-file))
+(smartrep-define-key bp/global-prefix-map "e"
+  '(("s" . cycle-spacing)))
+
+(smartrep-define-key bp/global-prefix-map "f"
+  '(("k" . kill-this-buffer)
+	("n" . next-buffer)
+	("p" . previous-buffer)))
 
 ;; turn on CUA-mode globally
 (cua-mode t)
@@ -163,15 +170,20 @@ buffer is not visiting a file."
 (use-package ace-window
   :ensure t
   :bind ("C-c o" . ace-window)
-  :bind (:map bp/global-prefix-map
-			  ("w w" . ace-window)
-			  ("w d" . ace-delete-window))
   :init
+  (require 'winner)
+  (winner-mode t)
   (setf aw-dispatch-always t)
   (setq aw-keys '(?a ?s ?d ?f ?j ?k ?l))
   (smartrep-define-key bp/global-prefix-map
 	  "w"
-	'(("o" . other-window))))
+	'(("o" . other-window)
+	  ("w" . ace-window)
+	  ("D" . delete-window)
+	  ("k" . kill-buffer-and-window)
+	  ("d" . ace-delete-window)
+	  ("u" . winner-undo)
+	  ("r" . winner-redo))))
 
 (bind-keys :map bp/global-prefix-map 
 		  ("w n" . make-frame))
@@ -318,3 +330,27 @@ buffer is not visiting a file."
 
 (add-hook 'text-mode-hook (lambda ()
 							(visual-line-mode t)))
+
+
+;; (use-package origami
+;;   :ensure t
+;;   :defer t
+;;   :init
+;;   (smartrep-define-key bp/global-prefix-map ";"
+;; 	'((";" . origami-recursively-toggle-node)
+;; 	  ("a" . origami-show-only-node)
+;; 	  ("o" . origami-open-all-nodes)
+;; 	  ("c" . origami-close-all-nodes)
+;; 	  ("u" . origami-undo)
+;; 	  ("r" . origami-redo))))
+
+
+(require 'zone)
+(zone-when-idle 300)
+
+(use-package discover
+  :ensure t
+  :demand t
+  :init
+  (global-discover-mode 1))
+

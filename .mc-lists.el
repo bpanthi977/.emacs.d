@@ -27,6 +27,7 @@
 		indent-for-tab-command
 		kill-visual-line
 		magit-discard
+		markdown-cycle
 		mouse-set-region
 		org-beginning-of-line
 		org-cycle
@@ -40,14 +41,17 @@
 		slime-autodoc-space
 		slime-compile-defun
 		sly-compile-defun
+		sp-backward-sexp
 		sp-forward-sexp
 		sp-forward-slurp-sexp
 		sp-transpose-sexp
+		swiper
 		transpose-sexps
 		transpose-words
 		))
 
 (setq mc/cmds-to-run-once
       '(
+		markdown-outdent-or-delete
 		text-scale-increase
 		))
