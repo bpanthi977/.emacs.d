@@ -3,7 +3,7 @@
   :commands (rclone-copy-directory
 			 rclone-copy-file
 			 rclone-run-backup-tasks
-			 rclone-synce-directory
+			 rclone-sync-directory
 			 rclone-reverse-copy-directory
 			 rclone-run-file))
 

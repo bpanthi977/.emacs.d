@@ -47,9 +47,10 @@
 							 (electric-indent-local-mode nil)
 							 (modify-syntax-entry ?< ".")
 							 (modify-syntax-entry ?> ".")))
-  (setcdr (assoc "\\.pdf\\'" org-file-apps) "e:/Programs/SumatraPDF/SumatraPDF.exe %s")
-  (pushnew '("\\.pdf::\\([0-9]+\\)?\\'" .  "e:/Programs/SumatraPDF/SumatraPDF.exe %s -page %1")
-		   org-file-apps)
+  (when windows-system?
+	(setcdr (assoc "\\.pdf\\'" org-file-apps) "e:/Programs/SumatraPDF/SumatraPDF.exe %s")
+	(pushnew '("\\.pdf::\\([0-9]+\\)?\\'" .  "e:/Programs/SumatraPDF/SumatraPDF.exe %s -page %1")
+			 org-file-apps))
   (require 'ox-latex)
   (setq org-preview-latex-image-directory (if windows-system? "E:/tmp/ltximg/" "/mnt/Data/tmp/ltximg/"))
   (setf org-startup-with-inline-images t
@@ -240,9 +241,21 @@
   (plist-put org-format-latex-options :scale 1.5)
 
   (defadvice text-scale-increase (after bp/latex-preview-scaling-on-text-scaling activate)
-	(plist-put org-format-latex-options :scale (* 1.5 (expt 1.2 text-scale-mode-amount))))
+	(plist-put org-format-latex-options :scale (* 1.2 (/ (frame-char-height) 17) (expt text-scale-mode-step text-scale-mode-amount))))
+
+  (setq org-latex-default-packages-alist (cons '("mathletters" "ucs" nil) org-latex-default-packages-alist))
   
-  (setq org-latex-default-packages-alist (cons '("mathletters" "ucs" nil) org-latex-default-packages-alist)))
+
+  (defun bp/calculate-ascent-for-latex (text type)
+	(cond ((eql type 'latex-environment) 'centre)
+		  ((eql type 'latex-fragment)
+		   (cond ((find ?| text) 70)
+				 ((find ?_ text) 80)
+				 ((search "\\neq" text) 70)
+				 (t 100)))
+		  (t (error "Unknown latex type"))))
+
+  )
 
 (use-package org-agenda
   :bind (:map bp/global-prefix-map
@@ -332,3 +345,27 @@
 (defun  bp/org-company ()
   (interactive)
   (setf company-backends '(company-dabbrev)))
+
+
+(use-package org-ref
+  :ensure t
+  :config
+  (setq reftex-default-bibliography '("~/org/bibliography/references.bib"))
+
+  ;; see org-ref for use of these variables
+  (setq org-ref-bibliography-notes "~/org/bibliography/notes.org"
+		org-ref-default-bibliography '("~/org/bibliography/references.bib")
+		org-ref-pdf-directory "~/org/bibliography/bibtex-pdfs/")
+
+
+
+(setq bibtex-completion-bibliography "~/org/bibliography/references.bib"
+      bibtex-completion-library-path "~/org/bibliography/bibtex-pdfs"
+      bibtex-completion-notes-path "~/org/bibliography/helm-bibtex-notes")
+
+(setq bibtex-completion-pdf-open-function 'org-open-file)
+(require 'doi-utils-scihub)
+  )
+(setq dbus-debug nil)
+(require 'tex)
+
