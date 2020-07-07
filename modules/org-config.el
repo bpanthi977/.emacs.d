@@ -47,10 +47,15 @@
 							 (electric-indent-local-mode nil)
 							 (modify-syntax-entry ?< ".")
 							 (modify-syntax-entry ?> ".")))
-  (when windows-system?
-	(setcdr (assoc "\\.pdf\\'" org-file-apps) "e:/Programs/SumatraPDF/SumatraPDF.exe %s")
-	(pushnew '("\\.pdf::\\([0-9]+\\)?\\'" .  "e:/Programs/SumatraPDF/SumatraPDF.exe %s -page %1")
-			 org-file-apps))
+  (if windows-system?
+	  (progn 
+		(setcdr (assoc "\\.pdf\\'" org-file-apps) "e:/Programs/SumatraPDF/SumatraPDF.exe %s")
+		(pushnew '("\\.pdf::\\([0-9]+\\)?\\'" .  "e:/Programs/SumatraPDF/SumatraPDF.exe %s -page %1")
+				 org-file-apps))
+	(progn
+	  (setcdr (assoc "\\.pdf\\'" org-file-apps) "okular %s")
+	  (pushnew '("\\.pdf::\\([0-9]+\\)?\\'" . "okular -p %1 %s")
+			   org-file-apps)))
   (require 'ox-latex)
   (setq org-preview-latex-image-directory (if windows-system? "E:/tmp/ltximg/" "/mnt/Data/tmp/ltximg/"))
   (setf org-startup-with-inline-images t
@@ -76,6 +81,7 @@
 	 (sql . nil)
 	 (sqlite . t)
 	 (lisp . t)
+	 (C . t)
 	 ))
   (setf org-babel-lisp-eval-fn 'sly-eval)
   (setq org-image-actual-width 300)
@@ -224,10 +230,15 @@
 ;;   :defer t)
 
 (use-package gnuplot
-  :ensure t
+  :ensure nil
   :defer t
   :after (gnuplot-mode gnuplot-make-buffer)
-  :mode "\\.gp\\'")
+  :mode "\\.gp\\'"
+  :init
+  (setf gnuplot-program-version "5.2"
+	gnuplot-program-major-version 5
+	gnuplot-program-minor-version 2)
+  )
 
 (use-package ox-latex
   :defer t  
@@ -247,7 +258,7 @@
   
 
   (defun bp/calculate-ascent-for-latex (text type)
-	(cond ((eql type 'latex-environment) 'centre)
+	(cond ((eql type 'latex-environment) 'center)
 		  ((eql type 'latex-fragment)
 		   (cond ((find ?| text) 70)
 				 ((find ?_ text) 80)
@@ -292,27 +303,30 @@
 (use-package org-roam
   :ensure t
   :defer t
-  :custom
-  (org-roam-directory (if windows-system? "E:/Documents/synced/Notes/org/" "~/Documents/synced/Notes/org/"))
+
+  :bind (:map org-roam-mode-map
+			  (("M-m r l" . org-roam)
+			   ("M-m r f" . org-roam-find-file)
+			   ("M-m r j" . org-roam-jump-to-index)
+			   ("M-m r b" . org-roam-switch-to-buffer)
+			   ("M-m r g" . org-roam-graph))
+			  :map bp/global-prefix-map
+			  (("r f" . org-roam-find-file))
+			  :map org-mode-map
+			  (("M-m o r" . org-roam-insert)
+			   ("M-m r i" . org-roam-insert)
+			   ("M-m r t" . bp/org-roam-tags)
+			   ("M-m r a" . bp/org-roam-alias)
+			   ("M-m r d" . org-roam-db-build-cache)
+			   ("M-m r l" . org-roam)))
+  :config
+  (setq org-roam-directory
+		(if windows-system? "E:/Documents/synced/Notes/org/" "/mnt/Data/Documents/synced/Notes/org/"))
   (when windows-system?
 	(setq org-roam-list-files-commands '((find . "C:/tools/msys64/usr/bin/find.exe") rg)))
-  :bind (:map org-roam-mode-map
-		 (("M-m r l" . org-roam)
-		  ("M-m r f" . org-roam-find-file)
-		  ("M-m r j" . org-roam-jump-to-index)
-		  ("M-m r b" . org-roam-switch-to-buffer)
-		  ("M-m r g" . org-roam-graph))
-		 :map bp/global-prefix-map
-		 (("r f" . org-roam-find-file))
-		 :map org-mode-map
-		 (("M-m o r" . org-roam-insert)
-		  ("M-m r i" . org-roam-insert)
-		  ("M-m r t" . bp/org-roam-tags)
-		  ("M-m r a" . bp/org-roam-alias)
-		  ("M-m r d" . org-roam-db-build-cache)
-		  ("M-m r l" . org-roam)))
-  :config
   (require 'ivy)
+  (setq org-roam-graph-viewer nil)
+  (setq org-roam-tag-sources '(prop all-directories))
   (setq org-roam-db-location
 		(cond ((string-equal system-type "gnu/linux")
 			   (expand-file-name "dbs/linux/org-roam.db" org-roam-directory))
@@ -356,9 +370,7 @@
   (setq org-ref-bibliography-notes "~/org/bibliography/notes.org"
 		org-ref-default-bibliography '("~/org/bibliography/references.bib")
 		org-ref-pdf-directory "~/org/bibliography/bibtex-pdfs/")
-
-
-
+  (setf doi-utils-open-pdf-after-download t)
 (setq bibtex-completion-bibliography "~/org/bibliography/references.bib"
       bibtex-completion-library-path "~/org/bibliography/bibtex-pdfs"
       bibtex-completion-notes-path "~/org/bibliography/helm-bibtex-notes")
@@ -369,3 +381,15 @@
 (setq dbus-debug nil)
 (require 'tex)
 
+(use-package org-roam-server
+  :ensure t
+  :config
+  (setq org-roam-server-host "127.0.0.1"
+        org-roam-server-port 8080
+        org-roam-server-export-inline-images t
+        org-roam-server-authenticate nil
+        org-roam-server-network-poll t
+        org-roam-server-network-arrows nil
+        org-roam-server-network-label-truncate t
+        org-roam-server-network-label-truncate-length 60
+        org-roam-server-network-label-wrap-length 20))

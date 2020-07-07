@@ -63,6 +63,7 @@
   :defer t
   :hook (python-mode . my-python-mode-hook)
   :config
+  (require 'python)
   (bind-keys :map python-mode-map
 			 ("M-." . jedi:goto-definition)
 			 ("M-," . jedi:goto-definition-pop-marker)

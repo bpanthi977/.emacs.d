@@ -42,7 +42,7 @@
 (use-package ivy
   :ensure t
   :defer 60
-  :bind (("C-x b" . ivy-switch-buffer))
+  :bind (("C-x b" . ido-switch-buffer))
   :config 
   (require 'smex)
   (ivy-mode t)
