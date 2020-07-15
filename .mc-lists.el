@@ -17,6 +17,7 @@
 	cua-exchange-point-and-mark
 	cua-paste
 	cua-paste-pop
+	cycle-spacing
 	delete-selection-repeat-replace-region
 	electric-newline-and-maybe-indent
 	end-of-visual-line
@@ -49,11 +50,13 @@
 	slime-autodoc-space
 	slime-compile-defun
 	sly-compile-defun
+	sp-backward-down-sexp
 	sp-backward-sexp
 	sp-forward-sexp
 	sp-forward-slurp-sexp
 	sp-kill-sexp
 	sp-transpose-sexp
+	sp-up-sexp
 	swiper
 	transpose-sexps
 	transpose-words

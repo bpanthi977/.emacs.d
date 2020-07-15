@@ -346,7 +346,8 @@
 			  ((string-equal system-type "windows-nt")
 			   (expand-file-name "dbs/windows/org-roam.db" org-roam-directory))))
 
-  (add-hook 'org-mode-hook 'org-roam-mode)
+;;  (add-hook 'org-mode-hook 'org-roam-mode)
+  
   (defun bp/org-roam-headers (header)
 	(interactive)
 	(goto-char 0)
