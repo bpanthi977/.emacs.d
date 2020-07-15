@@ -23,6 +23,19 @@
 					  (setq ispell-parser 'tex)))
   :after (tempo)
   :config
+
+(defun delete-org-comments (backend)
+  (loop for comment in (reverse (org-element-map (org-element-parse-buffer)
+                    'comment 'identity))
+    do
+    (setf (buffer-substring (org-element-property :begin comment)
+                (org-element-property :end comment))
+          "")))
+
+;; add to export hook
+(add-hook 'org-export-before-processing-hook 'delete-org-comments)
+
+  
   (setq org-src-window-setup 'current-window)
   (setq org-hide-emphasis-markers t)
   (smartrep-define-key org-mode-map "M-m o"
