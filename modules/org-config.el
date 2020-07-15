@@ -373,26 +373,80 @@
   (interactive)
   (setf company-backends '(company-dabbrev)))
 
+(use-package bibtex
+  :ensure t 
+  :config
+   (setq bibtex-completion-bibliography "~/org/bibliography/references.bib"
+	bibtex-completion-library-path "~/org/bibliography/papers"
+	bibtex-completion-notes-path "~/org/bibliography/notes.org"   ;; uses bibtex-completion-notes-template-one-file
+	bibtex-completion-pdf-open-function 'org-open-file
+	bibtex-completion-notes-template-one-file
+	  "
+* ${author-abbrev} - ${title}
+  :PROPERTIES:
+  :Custom_ID: ${=key=}
+  :AUTHOR: ${AUTHOR}
+  :YEAR: ${year}
+  :JOURNAL: ${journal}
+  :DOI: ${DOI}
+  :URL: ${url}
+  :END:
+
+cite:${=key=}
+"))
 
 (use-package org-ref
   :ensure t
   :config
-  (setq reftex-default-bibliography '("~/org/bibliography/references.bib"))
+  (require 'bibtex)
+  (bind-keys :map bibtex-mode-map
+	     ("M-m o r p" . org-ref-bibtex-pdf)
+	     ("M-m o r b" . org-ref-bibtex-hydra/body)
+	     :map org-mode-map
+	     ("M-m o i c" . org-ref-insert-link)
+	     ("M-m o i r" . org-ref-insert-ref-link)
+	     ("M-m o i k" . org-ref-helm-insert-label-link)
+	     ("M-m o x" . org-ref-cite-hydra/body))
 
-  ;; see org-ref for use of these variables
+  ;; setup org-ref 
   (setq org-ref-bibliography-notes "~/org/bibliography/notes.org"
-		org-ref-default-bibliography '("~/org/bibliography/references.bib")
-		org-ref-pdf-directory "~/org/bibliography/bibtex-pdfs/")
-  (setf doi-utils-open-pdf-after-download t)
-(setq bibtex-completion-bibliography "~/org/bibliography/references.bib"
-      bibtex-completion-library-path "~/org/bibliography/bibtex-pdfs"
-      bibtex-completion-notes-path "~/org/bibliography/helm-bibtex-notes")
+	org-ref-default-bibliography '("~/org/bibliography/references.bib")
+	org-ref-pdf-directory "~/org/bibliography/papers/")
+  ;; may prevent slow down https://github.com/jkitchin/org-ref/issues/468
+  (setq org-ref-show-broken-links nil)
+  (setq org-ref-label-use-font-lock nil)
 
-(setq bibtex-completion-pdf-open-function 'org-open-file)
-(require 'doi-utils-scihub)
-  )
-(setq dbus-debug nil)
-(require 'tex)
+
+	;;orhc-candidate-formats
+	
+
+  ;; this makes org-ref use same format as bibtex-completion-notes-path
+  (setf org-ref-notes-function 'org-ref-notes-function-many-files)
+  
+  (setf doi-utils-open-pdf-after-download t)
+  (require 'doi-utils-scihub)
+  (setq dbus-debug nil))
+
+(defun bp/setup-local-research-folder ()
+  (interactive)
+  (let ((dir (file-name-directory (buffer-file-name))))
+    (add-dir-local-variable 'org-mode  'org-roam-directory dir)
+    (add-dir-local-variable 'org-mode
+			    'org-roam-db-location (expand-file-name (format "org-roam-%s.db" (if windows-system? "w" "l")) dir))
+    (add-dir-local-variable 'org-mode
+			    'bibtex-completion-bibliography (expand-file-name "references.bib" dir))
+    (add-dir-local-variable 'org-mode
+			    'org-ref-default-bibliography (list (expand-file-name "references.bib" dir)))
+    (add-dir-local-variable 'org-mode
+			    'bibtex-completion-notes-path (expand-file-name "notes.org" dir))
+    (add-dir-local-variable 'org-mode
+			    'org-ref-bibliography-notes (expand-file-name "notes.org" dir))
+    (add-dir-local-variable 'org-mode
+			    'bibtex-completion-library-path (expand-file-name "papers/" dir))    
+    (add-dir-local-variable 'org-mode
+			    'org-ref-pdf-directory (expand-file-name "papers/" dir))))
+
+;; (require 'tex)
 
 (use-package org-roam-server
   :ensure t
