@@ -2,8 +2,9 @@
   :ensure t
   :demand t
   :bind (:map company-active-map
-			  ("C-n" . company-select-next)
-			  ("C-p" . company-select-previous))
+			  ("M-n" . company-select-next)
+			  ("M-p" . company-select-previous)
+			  ("M-m d c" . company-show-doc-buffer)) 
   :custom
  (company-auto-complete t)
  (company-auto-complete-chars ".")

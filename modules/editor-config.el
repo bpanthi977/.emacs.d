@@ -15,7 +15,13 @@
 	   ("e c" . upcase-initials-region)
 	   ;; file
 	   ("f r" . recover-this-file)
-	   ("f d" . diff-buffer-with-file))
+	   ("f d" . diff-buffer-with-file)
+	   ("f f" . counsel-recentf)
+	   ;; documentation
+	   )
+
+(global-set-key (kbd "C-<tab>") 'outline-toggle-children)
+
 
 (smartrep-define-key bp/global-prefix-map "e"
   '(("s" . cycle-spacing)))

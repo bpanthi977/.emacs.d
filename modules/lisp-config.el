@@ -34,7 +34,9 @@
   ;; :requires (smartparens)
   :commands (sly)
   :bind (:map sly-prefix-map
-			  ("M-p" . sly-mrepl-set-package))
+	      ("M-p" . sly-mrepl-set-package)
+	      :map lisp-mode-map
+	      ("M-m d s" . sly-documentation))
   :hook (lisp-mode . (lambda ()
 					   (wolfe/pretty-symbol-push-default)
 					   (prettify-symbols-mode)))
