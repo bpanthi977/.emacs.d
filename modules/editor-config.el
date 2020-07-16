@@ -21,6 +21,7 @@
 	   )
 
 (global-set-key (kbd "C-<tab>") 'outline-toggle-children)
+(global-set-key (kbd "C-q") 'quoted-insert)
 
 
 (smartrep-define-key bp/global-prefix-map "e"
@@ -251,8 +252,7 @@ buffer is not visiting a file."
 (use-package god-mode
   :ensure t
   :defer t 
-  :bind (("C-q" . god-local-mode)
-	 ("M-q" . god-mode-all)
+  :bind (("M-q" . god-mode-all)
 	 :map bp/global-prefix-map
 	 ("q" . god-local-mode))
   :config

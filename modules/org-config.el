@@ -264,6 +264,11 @@
   (plist-put org-format-latex-options :background "Transparent")
   (plist-put org-format-latex-options :scale 1.5)
 
+  ;; for latex in odt files 
+  (setq org-latex-to-mathml-convert-command
+	"latexmlmath \"%i\" --presentationmathml=%o"
+	org-export-with-latex t)
+
   (defadvice text-scale-increase (after bp/latex-preview-scaling-on-text-scaling activate)
 	(plist-put org-format-latex-options :scale (* 1.2 (/ (frame-char-height) 17) (expt text-scale-mode-step text-scale-mode-amount))))
 
