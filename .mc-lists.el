@@ -38,6 +38,7 @@
 	markdown-cycle
 	mouse-set-region
 	org-beginning-of-line
+	org-ctrl-c-ctrl-c
 	org-cycle
 	org-delete-char
 	org-end-of-line

@@ -13,16 +13,16 @@
 ;;   ;; (defun slime-ecl ()
 ;;   ;;   (interactive)
 ;;   ;;   (slime "/usr/bin/ecl"))
-  
+
 ;;   (defun view-sdl-doc ()
 ;;     (interactive)
 ;;     (eww-open-file "~/Dev/lisp/quicklisp/dists/quicklisp/software/lispbuilder-20180831-git/lispbuilder-sdl/documentation/lispbuilder-sdl.html"))
 ;;   )
-  
-  ;; (when  (string-equal system-type "windows-nt")
-  ;;   (setq inferior-lisp-program "sbcl")))
 
-	
+;; (when  (string-equal system-type "windows-nt")
+;;   (setq inferior-lisp-program "sbcl")))
+
+
 
 ;; (use-package slime-company
 ;;   :ensure t)
@@ -38,21 +38,34 @@
 	      :map lisp-mode-map
 	      ("M-m d s" . sly-documentation))
   :hook (lisp-mode . (lambda ()
-					   (wolfe/pretty-symbol-push-default)
-					   (prettify-symbols-mode)))
+		       (wolfe/pretty-symbol-push-default)
+		       (prettify-symbols-mode)))
   :config
 
   ;;; To save new core run the script at
   ;;; ~/Development/lisp/save-new-core.lisp
   (cond ((string-equal system-type "windows-nt")
-		 (setf inferior-lisp-program "sbcl --core C:/Users/hp/.cache/common-lisp/core" ;; --dynamic-space-size 2560
-			   ))
-		(t
-		 (setf inferior-lisp-program "sbcl --core /home/bpanthi/.cache/common-lisp/core"
-			   common-lisp-hyperspec-root "file:///home/bpanthi/Dev/lisp/HyperSpec-7-0/HyperSpec/"))))
+	 (setf inferior-lisp-program "sbcl --core C:/Users/hp/.cache/common-lisp/core" ;; --dynamic-space-size 2560
+	       ))
+	(t
+	 (setf inferior-lisp-program "sbcl --core /home/bpanthi/.cache/common-lisp/core"
+	       common-lisp-hyperspec-root "file:///home/bpanthi/Dev/lisp/HyperSpec-7-0/HyperSpec/")))
+  :init 
+  (defun sly-select-core ()
+    (interactive)
+    (let* ((dir (if windows-system?
+		    "C:/Users/hp/.cache/common-lisp/"
+		  "/home/bpanthi/.cache/common-lisp/"))
+	   (files (directory-files dir nil "core"))
+	   (core (completing-read "Core: " files)))
+      (when core
+	(setf inferior-lisp-program (format "sbcl --core %s%s" dir core))
+	(sly))))
+  )
+
 ;;  (setf inferior-lisp-program "clisp"))
- ;; (setf inferior-lisp-program "sbcl --core c:/Users/hp/lack-core"))
-  ;; :hook ((mrepl-mode . smartparens-mode)))
+;; (setf inferior-lisp-program "sbcl --core c:/Users/hp/lack-core"))
+;; :hook ((mrepl-mode . smartparens-mode)))
 
 
 
@@ -62,12 +75,12 @@
   :defer t 
   :hook ((emacs-lisp-mode ielm-mode) . turn-on-elisp-slime-nav-mode)
   :hook (emacs-lisp-mode . (lambda ()
-							 (wolfe/pretty-symbol-push-default)
-							 (push '("defun"    . ?ƒ) prettify-symbols-alist)
-							 (push '("defmacro" . ?μ) prettify-symbols-alist)
-							 (push '("defvar"   . ?ν) prettify-symbols-alist)
-							 (prettify-symbols-mode)))
+			     (wolfe/pretty-symbol-push-default)
+			     (push '("defun"    . ?ƒ) prettify-symbols-alist)
+			     (push '("defmacro" . ?μ) prettify-symbols-alist)
+			     (push '("defvar"   . ?ν) prettify-symbols-alist)
+			     (prettify-symbols-mode)))
   ;; Enable slime like M-. navigation in elisp source
   :bind (:map emacs-lisp-mode-map 
-			  ("C-c C-c" . eval-defun)
-			  ("C-c C-l" . eval-buffer)))
+	      ("C-c C-c" . eval-defun)
+	      ("C-c C-l" . eval-buffer)))
