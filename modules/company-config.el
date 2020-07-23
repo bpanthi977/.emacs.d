@@ -3,7 +3,7 @@
   :demand t
   :custom
   (company-auto-complete t)
-  (company-auto-complete-chars ".")
+  (company-auto-complete-chars "")
   ;; (company-frontends
   ;;   (quote
   ;; 	(company-pseudo-tooltip-frontend company-echo-metadata-frontend company-preview-if-just-one-frontend company-echo-frontend)))

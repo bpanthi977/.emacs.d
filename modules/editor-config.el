@@ -231,7 +231,7 @@ buffer is not visiting a file."
 (use-package magit
   :defer t
   :init 
-  (custom-set-variables `(transient-history-file ,(concat savefile-dir "/transient/history.el"))))
+  (setf transient-history-file (concat savefile-dir "/transient/history.el")))
 
 ;; Avy
 (use-package avy

@@ -1,4 +1,4 @@
-(custom-set-variables
+(custom-set-variables 
  ;; custom-set-variables was added by Custom.
  ;; If you edit it by hand, you could mess it up, so be careful.
  ;; Your init file should contain only one such instance.
@@ -9,7 +9,7 @@
  '(ansi-term-color-vector
    [unspecified "#2d2a2e" "#ff6188" "#a9dc76" "#ffd866" "#78dce8" "#ab9df2" "#ff6188" "#fcfcfa"] t)
  '(company-auto-complete t)
- '(company-auto-complete-chars ".")
+ '(company-auto-complete-chars "")
  '(company-frontends
    (quote
     (company-pseudo-tooltip-frontend company-echo-metadata-frontend company-preview-if-just-one-frontend company-echo-frontend)))
@@ -45,7 +45,15 @@
  '(pdf-view-midnight-colors (quote ("#DCDCCC" . "#383838")))
  '(safe-local-variable-values
    (quote
-    ((org-roam-directory . "/home/bpanthi/Documents/synced/BE/Corona Time/SD/")
+    ((bibtex-completion-bibliography . "/mnt/Data/Documents/synced/BE/Corona Time/LCT/references.bib")
+     (org-ref-default-bibliography "/mnt/Data/Documents/synced/BE/Corona Time/LCT/references.bib")
+     (bibtex-completion-notes-path . "/mnt/Data/Documents/synced/BE/Corona Time/LCT/notes.org")
+     (org-ref-bibliography-notes . "/mnt/Data/Documents/synced/BE/Corona Time/LCT/notes.org")
+     (bibtex-completion-library-path . "/mnt/Data/Documents/synced/BE/Corona Time/LCT/papers/")
+     (org-ref-pdf-directory . "/mnt/Data/Documents/synced/BE/Corona Time/LCT/papers/")
+     (org-roam-db-location . "/mnt/Data/Documents/synced/BE/Corona Time/LCT/org-roam-l.db")
+     (org-roam-directory . "/mnt/Data/Documents/synced/BE/Corona Time/LCT/")
+     (org-roam-directory . "/home/bpanthi/Documents/synced/BE/Corona Time/SD/")
      (org-roam-db-location . "/home/bpanthi/Documents/synced/BE/Corona Time/SD/org-roam-l.db")
      (bibtex-completion-bibliography . "/home/bpanthi/Documents/synced/BE/Corona Time/SD/references.bib")
      (org-ref-default-bibliography "/home/bpanthi/Documents/synced/BE/Corona Time/SD/references.bib")
