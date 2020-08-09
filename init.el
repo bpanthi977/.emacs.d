@@ -31,6 +31,10 @@
 
 (defvar windows-system? (if (string-equal system-name "windows/nt") t nil))
 
+;;Load custom file
+(setf custom-file (expand-file-name "custom.el" init-dir))
+(load-file (expand-file-name "custom.el" init-dir))
+
 ;; Declare modules to load 
 (defvar load-modules-list
   (list
@@ -65,9 +69,6 @@
 
 (unless windows-system?
   (load "linux-config"))
-;;Load custom file
-(setf custom-file (expand-file-name "custom.el" init-dir))
-(load-file (expand-file-name "custom.el" init-dir))
 
 ;;Start Server
 ;; (require 'server)
