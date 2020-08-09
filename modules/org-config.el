@@ -11,91 +11,91 @@
 (use-package org
   :mode (("\\.org$" . org-mode))
   :bind (:map bp/global-prefix-map
-			  ("o l" . org-store-link)
-			  ("o e" . org-emphasize))
+	      ("o l" . org-store-link)
+	      ("o e" . org-emphasize))
   :bind (:map org-mode-map
-			  ("M-m o s". 'tempo-template-source)
-			  ("M-m o c t". 'bp/org-capture-thought)
-			  ("M-m o c n" . 'bp/org-capture-notes))
+	      ("M-m o s". 'tempo-template-source)
+	      ("M-m o c t". 'bp/org-capture-thought)
+	      ("M-m o c n" . 'bp/org-capture-notes))
   :bind (:map org-src-mode-map
-			  ("C-c C-c" . org-edit-src-exit))
+	      ("C-c C-c" . org-edit-src-exit))
   :hook (org-mode . (lambda ()
-					  (setq ispell-parser 'tex)))
+		      (setq ispell-parser 'tex)))
   :after (tempo)
   :config
 
-(defun delete-org-comments (backend)
-  (loop for comment in (reverse (org-element-map (org-element-parse-buffer)
-                    'comment 'identity))
-    do
-    (setf (buffer-substring (org-element-property :begin comment)
-                (org-element-property :end comment))
-          "")))
+  (defun delete-org-comments (backend)
+    (loop for comment in (reverse (org-element-map (org-element-parse-buffer)
+				      'comment 'identity))
+	  do
+	  (setf (buffer-substring (org-element-property :begin comment)
+				  (org-element-property :end comment))
+		"")))
 
-;; add to export hook
-(add-hook 'org-export-before-processing-hook 'delete-org-comments)
+  ;; add to export hook
+  (add-hook 'org-export-before-processing-hook 'delete-org-comments)
 
   
   (setq org-src-window-setup 'current-window)
   (setq org-hide-emphasis-markers t)
   (smartrep-define-key org-mode-map "M-m o"
-	'(("t" . org-todo)))
+    '(("t" . org-todo)))
   ;; Whenever a TODO entry is created, I want a timestamp
   ;; Advice org-insert-todo-heading to insert a created timestamp using org-expiry
   (defadvice org-insert-todo-heading (after bp/created-timestamp-advice activate)
-	"Insert a CREATED property using org-expiry.el for TODO entries"
-	(bp/insert-created-timestamp)
-	)
+    "Insert a CREATED property using org-expiry.el for TODO entries"
+    (bp/insert-created-timestamp)
+    )
   ;; Make it active
   (ad-activate 'org-insert-todo-heading)
   (defun bp/org-capture-thought ()
-	(interactive)
-	(org-capture nil "thoughts"))
+    (interactive)
+    (org-capture nil "thoughts"))
 
   (defun bp/org-capture-notes ()
-	(interactive)
-	(org-capture nil "notes"))
+    (interactive)
+    (org-capture nil "notes"))
 
   (add-hook 'org-mode-hook (lambda ()
-							 (electric-indent-local-mode nil)
-							 (modify-syntax-entry ?< ".")
-							 (modify-syntax-entry ?> ".")))
+			     (electric-indent-local-mode nil)
+			     (modify-syntax-entry ?< ".")
+			     (modify-syntax-entry ?> ".")))
   (if windows-system?
-	  (progn 
-		(setcdr (assoc "\\.pdf\\'" org-file-apps) "e:/Programs/SumatraPDF/SumatraPDF.exe %s")
-		(pushnew '("\\.pdf::\\([0-9]+\\)?\\'" .  "e:/Programs/SumatraPDF/SumatraPDF.exe %s -page %1")
-				 org-file-apps))
-	(progn
-	  (setcdr (assoc "\\.pdf\\'" org-file-apps) "okular %s")
-	  (pushnew '("\\.pdf::\\([0-9]+\\)?\\'" . "okular -p %1 %s")
-			   org-file-apps)))
+      (progn 
+	(setcdr (assoc "\\.pdf\\'" org-file-apps) "e:/Programs/SumatraPDF/SumatraPDF.exe %s")
+	(pushnew '("\\.pdf::\\([0-9]+\\)?\\'" .  "e:/Programs/SumatraPDF/SumatraPDF.exe %s -page %1")
+		 org-file-apps))
+    (progn
+      (setcdr (assoc "\\.pdf\\'" org-file-apps) "okular %s")
+      (pushnew '("\\.pdf::\\([0-9]+\\)?\\'" . "okular -p %1 %s")
+	       org-file-apps)))
   (require 'ox-latex)
   (setq org-preview-latex-image-directory (if windows-system? "E:/tmp/ltximg/" "/mnt/Data/tmp/ltximg/"))
   (setf org-startup-with-inline-images t
-		org-image-actual-width 600
-		org-startup-with-latex-preview nil)
+	org-image-actual-width 600
+	org-startup-with-latex-preview nil)
   
   (org-babel-do-load-languages
    'org-babel-load-languages
    '((R . t)
-	 (ditaa . t)
-	 (dot . t)
-	 (shell . t)
-	 (emacs-lisp . t)
-	 (gnuplot . t)
-	 (haskell . nil)
-	 (latex . t)
-	 (ledger . t)        
-	 (ocaml . nil)
-	 (octave . t)
-	 (python . t)
-	 (ruby . t)
-	 (screen . nil)
-	 (sql . nil)
-	 (sqlite . t)
-	 (lisp . t)
-	 (C . t)
-	 ))
+     (ditaa . t)
+     (dot . t)
+     (shell . t)
+     (emacs-lisp . t)
+     (gnuplot . t)
+     (haskell . nil)
+     (latex . t)
+     (ledger . t)        
+     (ocaml . nil)
+     (octave . t)
+     (python . t)
+     (ruby . t)
+     (screen . nil)
+     (sql . nil)
+     (sqlite . t)
+     (lisp . t)
+     (C . t)
+     ))
   (setf org-babel-lisp-eval-fn 'sly-eval)
   (setq org-image-actual-width 300)
   (setq org-directory "~/Documents/synced/Notes/org/")
@@ -104,73 +104,73 @@
   (setq org-log-done t)
 
   (let ((last-input ""))
-	(defvar-local bp/latex-inputs nil)
-	(defun bp/org-insert-inline-latex (latex-fragment)
-	  (interactive "sLatex:")
-	  (insert-char ?$)
-	  (insert latex-fragment)
-	  (setf last-input latex-fragment)
-	  (pushnew latex-fragment bp/latex-inputs :test #'string-equal)
-	  (insert-char ?$)
-	  (insert-char ? )
-	  (org-latex-preview))
+    (defvar-local bp/latex-inputs nil)
+    (defun bp/org-insert-inline-latex (latex-fragment)
+      (interactive "sLatex:")
+      (insert-char ?$)
+      (insert latex-fragment)
+      (setf last-input latex-fragment)
+      (pushnew latex-fragment bp/latex-inputs :test #'string-equal)
+      (insert-char ?$)
+      (insert-char ? )
+      (org-latex-preview))
 
-	(defun bp/org-populate-latex ()
-	  (interactive)
-	  (save-excursion
-		(let* ((math-regexp "\\$\\|\\\\[([]\\|^[ \t]*\\\\begin{[A-Za-z0-9*]+}")
-			   (cnt 0)
-			   (results nil))		
-		  (goto-char (point-min))
-		  (while (re-search-forward math-regexp (point-max) t)
-			(let* ((context (org-element-context))
-				   (type (org-element-type context)))
-			  (when (memq type '(latex-environment latex-fragment))
-				(let ((block-type (eq type 'latex-environment))
-					  (value (org-element-property :value context))
-					  (beg (org-element-property :begin context))
-					  (end (save-excursion
-							 (goto-char (org-element-property :end context))
-							 (skip-chars-backward " \r\t\n")
-							 (point))))
-				  (if (eq type 'latex-fragment)
-					  (setf value (subseq value 1 -1)))
-				  (pushnew value results :test #'string-equal)))))
-		  (setf bp/latex-inputs results))))
+    (defun bp/org-populate-latex ()
+      (interactive)
+      (save-excursion
+	(let* ((math-regexp "\\$\\|\\\\[([]\\|^[ \t]*\\\\begin{[A-Za-z0-9*]+}")
+	       (cnt 0)
+	       (results nil))		
+	  (goto-char (point-min))
+	  (while (re-search-forward math-regexp (point-max) t)
+	    (let* ((context (org-element-context))
+		   (type (org-element-type context)))
+	      (when (memq type '(latex-environment latex-fragment))
+		(let ((block-type (eq type 'latex-environment))
+		      (value (org-element-property :value context))
+		      (beg (org-element-property :begin context))
+		      (end (save-excursion
+			     (goto-char (org-element-property :end context))
+			     (skip-chars-backward " \r\t\n")
+			     (point))))
+		  (if (eq type 'latex-fragment)
+		      (setf value (subseq value 1 -1)))
+		  (pushnew value results :test #'string-equal)))))
+	  (setf bp/latex-inputs results))))
 
-	(defun bp/org-insert-last-inline-latex ()
-	  (interactive)
-	  (let* ((result (ivy-completing-read "Latex: " bp/latex-inputs nil 'confirm nil nil nil))
-			 (fragment? (not (string-prefix-p "\begin" result))))
-		(pushnew result bp/latex-inputs :test #'string-equal)
-		(when result
-		  (if fragment? (insert "$"))
-		  (insert result)
-		  (if fragment? (insert "$"))
-		  (org-latex-preview)
-		  (insert " "))))	  
-	
-	(defun bp/org-insert-latex-equation (name latex)
-	  "Insert a latex equation that can be referenced"
-	  (interactive "sName:\nsLatex:")
-	  (if (not (string= name ""))
-		  (insert "#+NAME: eqn:"
-				  name
-				  "\n\\begin{equation}\n"
-				  latex
-				  "\n\\tag{"
-				  name
-				  "}\n\\end{equation}\n")
-		(insert "\\begin{equation*}\n"
-				latex
-				"\n\\end{equation*}\n"))
-		(org-latex-preview)))
+    (defun bp/org-insert-last-inline-latex ()
+      (interactive)
+      (let* ((result (ivy-completing-read "Latex: " bp/latex-inputs nil 'confirm nil nil nil))
+	     (fragment? (not (string-prefix-p "\begin" result))))
+	(pushnew result bp/latex-inputs :test #'string-equal)
+	(when result
+	  (if fragment? (insert "$"))
+	  (insert result)
+	  (if fragment? (insert "$"))
+	  (org-latex-preview)
+	  (insert " "))))	  
+    
+    (defun bp/org-insert-latex-equation (name latex)
+      "Insert a latex equation that can be referenced"
+      (interactive "sName:\nsLatex:")
+      (if (not (string= name ""))
+	  (insert "#+NAME: eqn:"
+		  name
+		  "\n\\begin{equation}\n"
+		  latex
+		  "\n\\tag{"
+		  name
+		  "}\n\\end{equation}\n")
+	(insert "\\begin{equation*}\n"
+		latex
+		"\n\\end{equation*}\n"))
+      (org-latex-preview)))
 
   (bind-keys :map org-mode-map
-			 ("M-m o i l" . bp/org-insert-inline-latex)
-			 ("M-m o i i" . bp/org-insert-last-inline-latex )
-			 ("M-m o i e" . bp/org-insert-latex-equation)
-			 ("M-l" . bp/org-insert-last-inline-latex))
+	     ("M-m o i l" . bp/org-insert-inline-latex)
+	     ("M-m o i i" . bp/org-insert-last-inline-latex )
+	     ("M-m o i e" . bp/org-insert-latex-equation)
+	     ("M-l" . bp/org-insert-last-inline-latex))
   )
 
 ;; TODO (require 'org-protocol)
@@ -180,62 +180,62 @@
   :commands (org-capture org-capture-goto-last-saved)
   :config
   (defun transform-square-brackets-to-round-ones(string-to-transform)
-	"Transforms [ into ( and ] into ), other chars left unchanged."
-	(concat 
-	 (mapcar #'(lambda (c) (if (equal c ?\[) ?\( (if (equal c ?\]) ?\) c))) string-to-transform))
-	)
+    "Transforms [ into ( and ] into ), other chars left unchanged."
+    (concat 
+     (mapcar #'(lambda (c) (if (equal c ?\[) ?\( (if (equal c ?\]) ?\) c))) string-to-transform))
+    )
   (defun capture-in-visited-org-file ()
-	(let* ((buffer (current-buffer))
-		   (current-point (point)))
-	  (goto-char 0)
-	  (if (search-forward-regexp "^\* Thoughts" nil t)
-		  (forward-line)
-		(progn (goto-char (point-max))
-			   (insert "\n* Thoughts")))))
+    (let* ((buffer (current-buffer))
+	   (current-point (point)))
+      (goto-char 0)
+      (if (search-forward-regexp "^\* Thoughts" nil t)
+	  (forward-line)
+	(progn (goto-char (point-max))
+	       (insert "\n* Thoughts")))))
 
   (defun capture-note-in-current-heading ()
-	(let* ((buffer (current-buffer))
-		   (current-point (point)))
-	  (if (search-forward-regexp "^\*+ Notes" nil t)
-		  (forward-line)
-		(progn (goto-char (point-max))
-			   (insert "\n* Notes")))))
+    (let* ((buffer (current-buffer))
+	   (current-point (point)))
+      (if (search-forward-regexp "^\*+ Notes" nil t)
+	  (forward-line)
+	(progn (goto-char (point-max))
+	       (insert "\n* Notes")))))
 
   (setq org-capture-templates `(
-								("p" "Protocol" entry (file+headline ,(concat org-directory "notes.org") "Inbox")
-								 "* %^{Title}\nSource: %u, %c\n #+BEGIN_QUOTE\n%i\n#+END_QUOTE\n\n\n%?")	
-								("L" "Protocol Link" entry (file+headline ,(concat org-directory "notes.org") "Inbox")
-								 "* %? [[%:link][%(transform-square-brackets-to-round-ones \"%:description\")]]\n")
-								("t" "Todo" entry (file+headline "~/org/tasks.org" "Tasks")
-								 "* TODO %?\nCREATED: %U\n %i\n  %a")
-								("j" "Journal" entry (file+datetree "~/org/journal.org")
-								 "* %?\nEntered on %U\n  %i\n  %a")
-								("n" "Note" entry (file "~/org/notes.org" )
-								 "* %?")
-								("k" "Quote" item (file+headline "~/org/notes.org" "Quotes")
-								 "%? :: %x")
-								("thoughts" "Capture Thoughts in a heading at bottom of file" item (function capture-in-visited-org-file)
-								 "+ %?")
-								("notes" "Capture notes below current heading" item (function capture-note-in-current-heading)
-								 "+ %?")
-								))
+				("p" "Protocol" entry (file+headline ,(concat org-directory "notes.org") "Inbox")
+				 "* %^{Title}\nSource: %u, %c\n #+BEGIN_QUOTE\n%i\n#+END_QUOTE\n\n\n%?")	
+				("L" "Protocol Link" entry (file+headline ,(concat org-directory "notes.org") "Inbox")
+				 "* %? [[%:link][%(transform-square-brackets-to-round-ones \"%:description\")]]\n")
+				("t" "Todo" entry (file+headline "~/org/tasks.org" "Tasks")
+				 "* TODO %?\nCREATED: %U\n %i\n  %a")
+				("j" "Journal" entry (file+datetree "~/org/journal.org")
+				 "* %?\nEntered on %U\n  %i\n  %a")
+				("n" "Note" entry (file "~/org/notes.org" )
+				 "* %?")
+				("k" "Quote" item (file+headline "~/org/notes.org" "Quotes")
+				 "%? :: %x")
+				("thoughts" "Capture Thoughts in a heading at bottom of file" item (function capture-in-visited-org-file)
+				 "+ %?")
+				("notes" "Capture notes below current heading" item (function capture-note-in-current-heading)
+				 "+ %?")
+				))
   :init
   (bind-keys :map bp/global-prefix-map
-			 ("o c c" . org-capture)
-			 ("o c l" . org-capture-goto-last-stored)))
+	     ("o c c" . org-capture)
+	     ("o c l" . org-capture-goto-last-stored)))
 
 (use-package tempo
   :config
   (setq tempo-interactive t)
   (tempo-define-template "fact-with-source"
-						 '("+ " (p "Fact: ") "([[" (p "Source:") "][Source]])")
-						 "<f"
-						 "Inserts a fact with source")
+			 '("+ " (p "Fact: ") "([[" (p "Source:") "][Source]])")
+			 "<f"
+			 "Inserts a fact with source")
   (tempo-define-template "source"
-						 '("([[" (p "Source:") "][Source]])")
-						 "!s"
-						 "Insert a (Source)"))
- 
+			 '("([[" (p "Source:") "][Source]])")
+			 "!s"
+			 "Insert a (Source)"))
+
 
 
 ;; (use-package org-download
@@ -270,30 +270,30 @@
 	org-export-with-latex t)
 
   (defadvice text-scale-increase (after bp/latex-preview-scaling-on-text-scaling activate)
-	(plist-put org-format-latex-options :scale (* 1.2 (/ (frame-char-height) 17) (expt text-scale-mode-step text-scale-mode-amount))))
+    (plist-put org-format-latex-options :scale (* 1.2 (/ (frame-char-height) 17) (expt text-scale-mode-step text-scale-mode-amount))))
 
   (setq org-latex-default-packages-alist (cons '("mathletters" "ucs" nil) org-latex-default-packages-alist))
   
 
   (defun bp/calculate-ascent-for-latex (text type)
-	(cond ((eql type 'latex-environment) 'center)
-		  ((eql type 'latex-fragment)
-		   (cond ((find ?| text) 70)
-				 ((find ?_ text) 80)
-				 ((search "\\neq" text) 70)
-				 (t 100)))
-		  (t (error "Unknown latex type"))))
+    (cond ((eql type 'latex-environment) 'center)
+	  ((eql type 'latex-fragment)
+	   (cond ((find ?| text) 70)
+		 ((find ?_ text) 80)
+		 ((search "\\neq" text) 70)
+		 (t 100)))
+	  (t (error "Unknown latex type"))))
 
   )
 
 (use-package org-agenda
   :bind (:map bp/global-prefix-map
-			  ("o a" . org-agenda))
+	      ("o a" . org-agenda))
   :config
   (setq org-agenda-files (list "~/org/notes.org"
-							   "~/org/tasks.org"
-							   "~/org/programming.org"
-							   )))
+			       "~/org/tasks.org"
+			       "~/org/programming.org"
+			       )))
 
 ;; Allow automatically handing of created/expired meta data.
 ;; in TODOs 
@@ -310,70 +310,71 @@
    )
   
   (defun bp/insert-created-timestamp()
-	"Insert a CREATED property using org-expiry.el for TODO entries"
-	(interactive)
-	(org-expiry-insert-created)
-	(org-back-to-heading)
-	(org-end-of-line)
-	(insert " ")
-	))
+    "Insert a CREATED property using org-expiry.el for TODO entries"
+    (interactive)
+    (org-expiry-insert-created)
+    (org-back-to-heading)
+    (org-end-of-line)
+    (insert " ")
+    ))
 
 (use-package org-roam
   :ensure t
   :defer t
 
   :bind (:map org-roam-mode-map
-			  (("M-m r l" . org-roam)
-			   ("M-m r f" . org-roam-find-file)
-			   ("M-m r j" . org-roam-jump-to-index)
-			   ("M-m r b" . org-roam-switch-to-buffer)
-			   ("M-m r g" . org-roam-graph))
-			  :map bp/global-prefix-map
-			  (("r f" . org-roam-find-file))
-			  :map org-mode-map
-			  (("M-m o r" . org-roam-insert)
-			   ("M-m r i" . org-roam-insert)
-			   ("M-m r t" . bp/org-roam-tags)
-			   ("M-m r a" . bp/org-roam-alias)
-			   ("M-m r d" . org-roam-db-build-cache)
-			   ("M-m r l" . org-roam)))
+	      (("M-m r l" . org-roam)
+	       ("M-m r f" . org-roam-find-file)
+	       ("M-m r j" . org-roam-jump-to-index)
+	       ("M-m r b" . org-roam-switch-to-buffer)
+	       ("M-m r g" . org-roam-graph))
+	      :map bp/global-prefix-map
+	      (("r f" . org-roam-find-file))
+	      :map org-mode-map
+	      (("M-m o r" . org-roam-insert)
+	       ("M-m r i" . org-roam-insert)
+	       ("M-m r t" . bp/org-roam-tags)
+	       ("M-m r a" . bp/org-roam-alias)
+	       ("M-m r d" . org-roam-db-build-cache)
+	       ("M-m r l" . org-roam)))
   :config
+  (setf org-roam-mode t)
   (setq org-roam-directory
-		(if windows-system? "E:/Documents/synced/Notes/org/" "/mnt/Data/Documents/synced/Notes/org/"))
+	(if windows-system? "E:/Documents/synced/Notes/org/" "/mnt/Data/Documents/synced/Notes/org/"))
   (when windows-system?
-	(setq org-roam-list-files-commands '((find . "C:/tools/msys64/usr/bin/find.exe") rg)))
+    (setq org-roam-list-files-commands '((find . "C:/tools/msys64/usr/bin/find.exe") rg)))
   (require 'ivy)
   (setq org-roam-graph-viewer nil)
   (setq org-roam-tag-sources '(prop all-directories))
   (setq org-roam-db-location
-		(cond ((string-equal system-type "gnu/linux")
-			   (expand-file-name "dbs/linux/org-roam.db" org-roam-directory))
-			  ((string-equal system-type "windows-nt")
-			   (expand-file-name "dbs/windows/org-roam.db" org-roam-directory))))
+	(cond ((string-equal system-type "gnu/linux")
+	       (expand-file-name "dbs/linux/org-roam.db" org-roam-directory))
+	      ((string-equal system-type "windows-nt")
+	       (expand-file-name "dbs/windows/org-roam.db" org-roam-directory))))
 
-;;  (add-hook 'org-mode-hook 'org-roam-mode)
+  ;;  (add-hook 'org-mode-hook 'org-roam-mode)
   
   (defun bp/org-roam-headers (header)
-	(interactive)
-	(goto-char 0)
-	(xref-push-marker-stack)
-	(if (search-forward (concat "\n" header) nil t)
-		(progn
-		  (move-end-of-line 1)
-		  (unless (eql (char-before) ?\ )
-			(insert " ")))
-	  (progn
-		(goto-line 2)
-		(insert header " \n")
-		(move-end-of-line 0))))
+    (interactive)
+    (goto-char 0)
+    (xref-push-marker-stack)
+    (if (search-forward (concat "\n" header) nil t)
+	(progn
+	  (move-end-of-line 1)
+	  (unless (eql (char-before) ?\ )
+	    (insert " ")))
+      (progn
+	(goto-line 2)
+	(insert header " \n")
+	(move-end-of-line 0))))
 
   (defun bp/org-roam-tags ()
-	(interactive)
-	(bp/org-roam-headers "#+ROAM_TAGS:"))
+    (interactive)
+    (bp/org-roam-headers "#+ROAM_TAGS:"))
   
   (defun bp/org-roam-alias ()
-	(interactive)
-	(bp/org-roam-headers "#+ROAM_ALIAS:")))
+    (interactive)
+    (bp/org-roam-headers "#+ROAM_ALIAS:")))
 
 (defun  bp/org-company ()
   (interactive)
@@ -382,12 +383,12 @@
 (use-package bibtex
   :ensure t 
   :config
-   (setq bibtex-completion-bibliography "~/org/bibliography/references.bib"
+  (setq bibtex-completion-bibliography "~/org/bibliography/references.bib"
 	bibtex-completion-library-path "~/org/bibliography/papers"
 	bibtex-completion-notes-path "~/org/bibliography/notes.org"   ;; uses bibtex-completion-notes-template-one-file
 	bibtex-completion-pdf-open-function 'org-open-file
 	bibtex-completion-notes-template-one-file
-	  "
+	"
 * ${author-abbrev} - ${title}
   :PROPERTIES:
   :Custom_ID: ${=key=}
@@ -423,8 +424,8 @@ cite:${=key=}
   (setq org-ref-label-use-font-lock nil)
 
 
-	;;orhc-candidate-formats
-	
+  ;;orhc-candidate-formats
+  
 
   ;; this makes org-ref use same format as bibtex-completion-notes-path
   (setf org-ref-notes-function 'org-ref-notes-function-many-files)
