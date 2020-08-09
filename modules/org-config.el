@@ -1,28 +1,20 @@
-(use-package org-tempo
-  :ensure nil
-  :defer t
-  :after (org tempo)
-  :hook (org-mode . (lambda () (require 'org-tempo)))
-  :config 
-  (add-to-list 'org-tempo-tags '("<f" . tempo-template-fact-with-source))
-  (add-to-list 'org-tempo-tags '("<L" . tempo-template-latex-named-equation))
-  (add-to-list 'org-tempo-tags '("!s" . tempo-template-source)))
-
 (use-package org
   :mode (("\\.org$" . org-mode))
   :bind (:map bp/global-prefix-map
 	      ("o l" . org-store-link)
 	      ("o e" . org-emphasize))
   :bind (:map org-mode-map
-	      ("M-m o s". 'tempo-template-source)
+	      ("M-m o s". 'bp/org-source-template)
 	      ("M-m o c t". 'bp/org-capture-thought)
 	      ("M-m o c n" . 'bp/org-capture-notes))
   :bind (:map org-src-mode-map
 	      ("C-c C-c" . org-edit-src-exit))
   :hook (org-mode . (lambda ()
 		      (setq ispell-parser 'tex)))
-  :after (tempo)
   :config
+  (defun bp/org-source-template (link)
+    (interactive "sSource:")
+    (insert "([[" link "][Source]])"))
 
   (defun delete-org-comments (backend)
     (loop for comment in (reverse (org-element-map (org-element-parse-buffer)
@@ -224,17 +216,6 @@
 	     ("o c c" . org-capture)
 	     ("o c l" . org-capture-goto-last-stored)))
 
-(use-package tempo
-  :config
-  (setq tempo-interactive t)
-  (tempo-define-template "fact-with-source"
-			 '("+ " (p "Fact: ") "([[" (p "Source:") "][Source]])")
-			 "<f"
-			 "Inserts a fact with source")
-  (tempo-define-template "source"
-			 '("([[" (p "Source:") "][Source]])")
-			 "!s"
-			 "Insert a (Source)"))
 
 
 
