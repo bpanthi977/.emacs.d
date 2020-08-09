@@ -33,8 +33,7 @@
     ("n" . next-buffer)
     ("p" . previous-buffer)))
 
-;; turn on CUA-mode globally
-(cua-mode t)
+
 ;; Newline at end of file
 (setq require-final-newline t)
 ;; delete the selection with a keypress
