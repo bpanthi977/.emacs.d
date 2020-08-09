@@ -1,4 +1,4 @@
-(custom-set-variables 
+(custom-set-variables
  ;; custom-set-variables was added by Custom.
  ;; If you edit it by hand, you could mess it up, so be careful.
  ;; Your init file should contain only one such instance.
@@ -8,12 +8,14 @@
    ["#2d2a2e" "#ff6188" "#a9dc76" "#ffd866" "#78dce8" "#ab9df2" "#ff6188" "#fcfcfa"])
  '(ansi-term-color-vector
    [unspecified "#2d2a2e" "#ff6188" "#a9dc76" "#ffd866" "#78dce8" "#ab9df2" "#ff6188" "#fcfcfa"] t)
+ '(blink-cursor-mode nil)
+ '(column-number-mode t)
  '(company-auto-complete t)
  '(company-auto-complete-chars "")
  '(company-frontends
    (quote
     (company-pseudo-tooltip-frontend company-echo-metadata-frontend company-preview-if-just-one-frontend company-echo-frontend)))
- '(company-idle-delay 0.1)
+ '(company-idle-delay 0.2)
  '(company-minimum-prefix-length 2)
  '(company-quickhelp-color-background "#4F4F4F")
  '(company-quickhelp-color-foreground "#DCDCCC")
@@ -41,7 +43,7 @@
  '(org-roam-directory "~/Documents/synced/Notes/org/")
  '(package-selected-packages
    (quote
-    (ivy-bibtex org-roam-server gnuplot gnuplot-mode sly-quicklisp sly-macrostep org-ref discover slime-company origami edit-indirect company-org-roam org-roam htmlize org-edit-latex color-theme-sanityinc-tomorrow solarized-theme smartrep zenburn-theme which-key virtualenvwrapper use-package unicode-math-input unfill tern spacemacs-theme smex smartparens sly rjsx-mode pyenv-mode prettier-js powershell org-plus-contrib omnisharp multiple-cursors macrostep helm-dash expand-region esup elisp-slime-nav edit-server company-web company-rtags company-quickhelp company-jedi cmake-mode chyla-theme ccls auctex ace-window ac-php)))
+    (ivy-rich counsel "swiper" "counsel" "counsel" ox-reveal ivy-bibtex org-roam-server gnuplot gnuplot-mode sly-quicklisp sly-macrostep org-ref discover slime-company origami edit-indirect company-org-roam org-roam htmlize org-edit-latex color-theme-sanityinc-tomorrow solarized-theme smartrep zenburn-theme which-key virtualenvwrapper use-package unicode-math-input unfill tern spacemacs-theme smex smartparens sly rjsx-mode pyenv-mode prettier-js powershell org-plus-contrib omnisharp multiple-cursors macrostep helm-dash expand-region esup elisp-slime-nav edit-server company-web company-rtags company-quickhelp company-jedi cmake-mode chyla-theme ccls auctex ace-window ac-php)))
  '(pdf-view-midnight-colors (quote ("#DCDCCC" . "#383838")))
  '(safe-local-variable-values
    (quote
@@ -92,7 +94,9 @@
      (org-roam-directory . "~/Documents/synced/BE/Corona Time/SD")
      (org-roam-directory . "~/Documents/synced/BE/Corona Time/LCT")
      (org-confirm-babel-evaluate))))
- '(transient-history-file "c:/Users/hp/.emacs.d/savefile/transient/history.el")
+ '(show-paren-mode t)
+ '(size-indication-mode t)
+ '(tool-bar-mode nil)
  '(vc-annotate-background "#2B2B2B")
  '(vc-annotate-color-map
    (quote
