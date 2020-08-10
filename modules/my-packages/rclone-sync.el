@@ -14,7 +14,7 @@
   (let ((config (locate-dominating-file root ".rclone")))
 	(unless config
 	  (error "No config found. Create .rclone file with target directory"))
-	config))
+	(file-truename config)))
 
 (defun rclone--process-sentinel (process event)
   "Kill async shell buffer when copying finishes"
@@ -72,17 +72,18 @@
 	(funcall perform)))
 
 
-(defun rclone--create-target-path (source-path source-root target-root)
-  "Create target path for given source-path"
-  (concat target-root (cl-subseq (file-name-directory source-path)
-								 (length source-root))))
+(defun rclone--target (&optional path)
+  (let* ((path (file-truename (or path (buffer-file-name))))
+	 (config (rclone--find-config-or-error path)) ;; get config for the path
+	 (target-root (rclone--get-target-directory config))) ;; get root target directory
+    (message "path = %s\n, config = %s\n, target-root = %s" path config target-root)
+    (concat target-root (cl-subseq (file-name-directory path)
+				 (length config)))))
 
 (defun rclone--backup-file/directory (path directory-p backuptype)
   "Backup (2way, copy, sync) the path"
-  (let* ((config (rclone--find-config-or-error path)) ;; get config for the path
-		 (target-root (rclone--get-target-directory config)) ;; get root target directory
-		 (target (rclone--create-target-path path config target-root))
-		 (source (if directory-p (file-name-directory path) path)))
+  (let* ((target (rclone--target path))
+	 (source (file-truename (if directory-p (file-name-directory path) path))))
 	(cond 
 	 ((string-equal backuptype "copy")
 	  (rclone--async "copy" source target))
