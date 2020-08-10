@@ -12,10 +12,22 @@
   :hook (org-mode . (lambda ()
 		      (setq ispell-parser 'tex)))
   :config
+  ;; Customizations
+  (setq org-src-window-setup 'current-window)
+  (setq org-hide-emphasis-markers t)
+  (setf org-startup-with-inline-images t
+	org-image-actual-width 300
+	org-startup-with-latex-preview nil)
+  (setq org-directory "~/Documents/synced/Notes/org/")
+  (setq org-default-notes-file (concat org-directory "/notes.org"))
+  (setq org-log-done t)
+
+  ;; Template for source of a fact
   (defun bp/org-source-template (link)
     (interactive "sSource:")
     (insert "([[" link "][Source]])"))
 
+  ;;; This allows comments in between a paragraph
   (defun delete-org-comments (backend)
     (loop for comment in (reverse (org-element-map (org-element-parse-buffer)
 				      'comment 'identity))
@@ -23,23 +35,20 @@
 	  (setf (buffer-substring (org-element-property :begin comment)
 				  (org-element-property :end comment))
 		"")))
-
-  ;; add to export hook
   (add-hook 'org-export-before-processing-hook 'delete-org-comments)
 
-  
-  (setq org-src-window-setup 'current-window)
-  (setq org-hide-emphasis-markers t)
-  (smartrep-define-key org-mode-map "M-m o"
-    '(("t" . org-todo)))
+  ;; Switch between TODO, DONE and COMPLETED 
+  ;; (smartrep-define-key org-mode-map "M-m o"
+  ;;   '(("t" . org-todo)))
+
   ;; Whenever a TODO entry is created, I want a timestamp
   ;; Advice org-insert-todo-heading to insert a created timestamp using org-expiry
   (defadvice org-insert-todo-heading (after bp/created-timestamp-advice activate)
     "Insert a CREATED property using org-expiry.el for TODO entries"
-    (bp/insert-created-timestamp)
-    )
-  ;; Make it active
+    (bp/insert-created-timestamp))
   (ad-activate 'org-insert-todo-heading)
+
+  ;; Capture Templates 
   (defun bp/org-capture-thought ()
     (interactive)
     (org-capture nil "thoughts"))
@@ -48,10 +57,12 @@
     (interactive)
     (org-capture nil "notes"))
 
-  (add-hook 'org-mode-hook (lambda ()
-			     (electric-indent-local-mode nil)
-			     (modify-syntax-entry ?< ".")
-			     (modify-syntax-entry ?> ".")))
+  ;; (add-hook 'org-mode-hook (lambda ()
+  ;; 			     (electric-indent-local-mode nil)
+  ;; 			     (modify-syntax-entry ?< ".")
+  ;; 			     (modify-syntax-entry ?> ".")))
+
+  ;; PDF Viewers
   (if windows-system?
       (progn 
 	(setcdr (assoc "\\.pdf\\'" org-file-apps) "e:/Programs/SumatraPDF/SumatraPDF.exe %s")
@@ -61,39 +72,70 @@
       (setcdr (assoc "\\.pdf\\'" org-file-apps) "okular %s")
       (pushnew '("\\.pdf::\\([0-9]+\\)?\\'" . "okular -p %1 %s")
 	       org-file-apps)))
-  (require 'ox-latex)
-  (setq org-preview-latex-image-directory (if windows-system? "E:/tmp/ltximg/" "/mnt/Data/tmp/ltximg/"))
-  (setf org-startup-with-inline-images t
-	org-image-actual-width 600
-	org-startup-with-latex-preview nil)
-  
-  (org-babel-do-load-languages
-   'org-babel-load-languages
-   '((R . t)
-     (ditaa . t)
-     (dot . t)
-     (shell . t)
-     (emacs-lisp . t)
-     (gnuplot . t)
-     (haskell . nil)
-     (latex . t)
-     (ledger . t)        
-     (ocaml . nil)
-     (octave . t)
-     (python . t)
-     (ruby . t)
-     (screen . nil)
-     (sql . nil)
-     (sqlite . t)
-     (lisp . t)
-     (C . t)
-     ))
-  (setf org-babel-lisp-eval-fn 'sly-eval)
-  (setq org-image-actual-width 300)
-  (setq org-directory "~/Documents/synced/Notes/org/")
-  (setq org-default-notes-file (concat org-directory "/notes.org"))
 
-  (setq org-log-done t)
+  
+  (require 'ox-latex)
+  
+  (defun bp/load-org-babel ()
+    (interactive)
+    (org-babel-do-load-languages
+     'org-babel-load-languages
+     '((R . t)
+       (ditaa . t)
+       (dot . t)
+       (shell . t)
+       (emacs-lisp . t)
+       (gnuplot . t)
+       (haskell . nil)
+       (latex . t)
+       (ledger . t)        
+       (ocaml . nil)
+       (octave . t)
+       (python . t)
+       (ruby . t)
+       (screen . nil)
+       (sql . nil)
+       (sqlite . t)
+       (lisp . t)
+       (C . t)
+       ))
+    (setf org-babel-lisp-eval-fn 'sly-eval))
+  )
+
+(use-package ox-latex
+  :defer t
+  :commands (bp/org-insert-inline-latex bp/org-insert-last-inline-latex  bp/org-insert-latex-equation bp/org-insert-last-inline-latex)
+  :config
+   ;; For proper rendering of unicode symbols on latex
+  (setq org-latex-inputenc-alist '(("utf8" . "utf8x")))
+  (setq org-latex-default-packages-alist (cons '("mathletters" "ucs" nil) org-latex-default-packages-alist))
+
+  ;; You also need to bug fix the working of `Tranparent' in org.el.
+  ;; See personal notes and also install librsvg-2-2.dll 
+  (setq org-preview-latex-default-process 'dvisvgm)
+  (plist-put org-format-latex-options :background "Transparent")
+  (plist-put org-format-latex-options :scale 1.5)
+
+  ;; Don't clutter my directiory 
+  (setq org-preview-latex-image-directory (if windows-system? "E:/tmp/ltximg/" "/mnt/Data/tmp/ltximg/"))
+
+  ;; for latex in odt files 
+  (setq org-latex-to-mathml-convert-command
+	"latexmlmath \"%i\" --presentationmathml=%o"
+	org-export-with-latex t)
+
+  (defadvice text-scale-increase (after bp/latex-preview-scaling-on-text-scaling activate)
+    (plist-put org-format-latex-options :scale (* 1.2 (/ (frame-char-height) 17) (expt text-scale-mode-step text-scale-mode-amount))))
+
+  (defun bp/calculate-ascent-for-latex (text type)
+    (cond ((eql type 'latex-environment) 'center)
+	  ((eql type 'latex-fragment)
+	   (cond ((find ?| text) 70)
+		 ((find ?_ text) 80)
+		 ((search "\\neq" text) 70)
+		 (t 100)))
+	  (t (error "Unknown latex type"))))
+  
 
   (let ((last-input ""))
     (defvar-local bp/latex-inputs nil)
@@ -158,19 +200,20 @@
 		"\n\\end{equation*}\n"))
       (org-latex-preview)))
 
-  (bind-keys :map org-mode-map
-	     ("M-m o i l" . bp/org-insert-inline-latex)
-	     ("M-m o i i" . bp/org-insert-last-inline-latex )
-	     ("M-m o i e" . bp/org-insert-latex-equation)
-	     ("M-l" . bp/org-insert-last-inline-latex))
-  )
+  :init 
+  (with-eval-after-load "org"
+    (bind-keys :map org-mode-map
+	       ("M-m o i l" . bp/org-insert-inline-latex)
+	       ("M-m o i i" . bp/org-insert-last-inline-latex )
+	       ("M-m o i e" . bp/org-insert-latex-equation)
+	       ("M-l" . bp/org-insert-last-inline-latex))))
 
-;; TODO (require 'org-protocol)
+  
 (use-package org-capture
   :defer t
-  :after (org)
   :commands (org-capture org-capture-goto-last-saved)
   :config
+  (require 'org)
   (defun transform-square-brackets-to-round-ones(string-to-transform)
     "Transforms [ into ( and ] into ), other chars left unchanged."
     (concat 
@@ -216,9 +259,6 @@
 	     ("o c c" . org-capture)
 	     ("o c l" . org-capture-goto-last-stored)))
 
-
-
-
 ;; (use-package org-download
 ;;   :ensure t
 ;;   :defer t)
@@ -234,40 +274,8 @@
 	gnuplot-program-minor-version 2)
   )
 
-(use-package ox-latex
-  :defer t  
-  :config
-  ;; For proper rendering of unicode symbols on latex
-  (setq org-latex-inputenc-alist '(("utf8" . "utf8x")))
-  ;; You also need to bug fix the working of `Tranparent' in org.el.
-  ;; See personal notes and also install librsvg-2-2.dll 
-  (setq org-preview-latex-default-process 'dvisvgm)
-  (plist-put org-format-latex-options :background "Transparent")
-  (plist-put org-format-latex-options :scale 1.5)
-
-  ;; for latex in odt files 
-  (setq org-latex-to-mathml-convert-command
-	"latexmlmath \"%i\" --presentationmathml=%o"
-	org-export-with-latex t)
-
-  (defadvice text-scale-increase (after bp/latex-preview-scaling-on-text-scaling activate)
-    (plist-put org-format-latex-options :scale (* 1.2 (/ (frame-char-height) 17) (expt text-scale-mode-step text-scale-mode-amount))))
-
-  (setq org-latex-default-packages-alist (cons '("mathletters" "ucs" nil) org-latex-default-packages-alist))
-  
-
-  (defun bp/calculate-ascent-for-latex (text type)
-    (cond ((eql type 'latex-environment) 'center)
-	  ((eql type 'latex-fragment)
-	   (cond ((find ?| text) 70)
-		 ((find ?_ text) 80)
-		 ((search "\\neq" text) 70)
-		 (t 100)))
-	  (t (error "Unknown latex type"))))
-
-  )
-
 (use-package org-agenda
+  :defer t 
   :bind (:map bp/global-prefix-map
 	      ("o a" . org-agenda))
   :config
@@ -280,29 +288,28 @@
 ;; in TODOs 
 
 ;; Configure it a bit to my liking
-(use-package org-expiry
-  :defer t
-  :after (org)
-  :commands (bp/insert-created-timestamp)
-  :config 
-  (setq
-   org-expiry-created-property-name "CREATED" ; Name of property when an item is created
-   org-expiry-inactive-timestamps   t         ; Don't have everything in the agenda view
-   )
+;; (use-package org-expiry
+;;   :defer t
+;;   :after (org)
+;;   :commands (bp/insert-created-timestamp)
+;;   :config 
+;;   (setq
+;;    org-expiry-created-property-name "CREATED" ; Name of property when an item is created
+;;    org-expiry-inactive-timestamps   t         ; Don't have everything in the agenda view
+;;    )
   
-  (defun bp/insert-created-timestamp()
-    "Insert a CREATED property using org-expiry.el for TODO entries"
-    (interactive)
-    (org-expiry-insert-created)
-    (org-back-to-heading)
-    (org-end-of-line)
-    (insert " ")
-    ))
+;;   (defun bp/insert-created-timestamp()
+;;     "Insert a CREATED property using org-expiry.el for TODO entries"
+;;     (interactive)
+;;     (org-expiry-insert-created)
+;;     (org-back-to-heading)
+;;     (org-end-of-line)
+;;     (insert " ")
+;;     ))
 
 (use-package org-roam
   :ensure t
   :defer t
-
   :bind (:map org-roam-mode-map
 	      (("M-m r l" . org-roam)
 	       ("M-m r f" . org-roam-find-file)
@@ -362,7 +369,8 @@
   (setf company-backends '(company-dabbrev)))
 
 (use-package bibtex
-  :ensure t 
+  :ensure t
+  :defer t 
   :config
   (setq bibtex-completion-bibliography "~/org/bibliography/references.bib"
 	bibtex-completion-library-path "~/org/bibliography/papers"
@@ -385,6 +393,7 @@ cite:${=key=}
 
 (use-package org-ref
   :ensure t
+  :defer t 
   :config
   (require 'bibtex)
   (bind-keys :map bibtex-mode-map
@@ -438,6 +447,7 @@ cite:${=key=}
 
 (use-package org-roam-server
   :ensure t
+  :defer t
   :config
   (setq org-roam-server-host "127.0.0.1"
         org-roam-server-port 8080
