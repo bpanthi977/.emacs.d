@@ -22,7 +22,7 @@
 
 (global-set-key (kbd "C-<tab>") 'outline-toggle-children)
 (global-set-key (kbd "C-q") 'quoted-insert)
-
+(global-set-key (kbd "C-z") 'undo)
 
 (smartrep-define-key bp/global-prefix-map "e"
   '(("s" . cycle-spacing)))
