@@ -20,19 +20,23 @@
   :after (helm-dash php-mode)
   :mode "\\.php\\'"
   :commands (ac-php-find-symbol-at-point ac-php-location-stack-back helm-dash-at-point)
-  :bind (:map php-mode-map
-	      ("M-." . ac-php-find-symbol-at-point)
-	      ("C-t" . ac-php-location-stack-back)
-	      ("C-." . helm-dash-at-point))
-  :hook (php-mode . (lambda () 
-		      (add-local-company-backend 'company-ac-php-backend)
+  :hook (php-mode . (lambda ()
+		      (require 'ac-php)
+		      (setq-local company-backends (cons 'company-ac-php-backend company-backends))
 		      (ac-php-core-eldoc-setup ) ;; enable eldoc
 		      (ac-php-remake-tags)
-		      (helm-dash-activate-docset "PHP"))))
+		      (helm-dash-activate-docset "PHP")))
+  :config
+  (bind-keys :map php-mode-map
+	     ("M-." . ac-php-find-symbol-at-point)
+	     ("C-t" . ac-php-location-stack-back)
+	     ("C-." . helm-dash-at-point)))
 
 (use-package company-web
   :ensure t
   :defer t
   :after (web-mode)
   :hook (web-mode . (lambda ()
-		      (add-local-company-backend 'company-web-html))))
+		      (require 'company-web)
+		      (setq-local company-backends (cons 'company-web-html company-backends)))))
+
