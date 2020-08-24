@@ -474,24 +474,44 @@ cite:${=key=}
   :defer t
   :commands (org-download-screenshot) 
   :config 
+  (defvar bp/org-download-screenshot-title nil)
   (defun bp/org-download-file-formater (filename)
     "Asks the user for file name"
-    (labels ((ask-unique-name
-	    ()  
-	    (let ((file (completing-read "File Name:" 
-					     (list (org-download-file-format-default filename))
-					     nil nil
-					     (current-time-string)
-					     )))
-	      (if (file-exists-p (concat (org-attach-dir)
-					 file))
-		  (ask-unique-name)
-		file))))
-      (let ((filename (ask-unique-name)))
-	filename)))
+    (let* ((title (completing-read "Title:"  
+				 (list  (current-kill 0))
+				 nil nil))
+	   (slug (bp/title-to-slug title))
+	   (file (concatenate 'string (format-time-string "%Y%m%d%H%M%S-") slug ".png")))
+      (setf bp/org-download-screenshot-title title)
+      file))
+
+  (defun bp/title-to-slug (title)
+    "Copied from `org-roam--title-to-slug'
+Convert TITLE to a filename-suitable slug."
+    (cl-flet* ((nonspacing-mark-p (char)
+                                  (eq 'Mn (get-char-code-property char 'general-category)))
+               (strip-nonspacing-marks (s)
+                                       (apply #'string (seq-remove #'nonspacing-mark-p
+                                                                   (ucs-normalize-NFD-string s))))
+               (cl-replace (title pair)
+                           (replace-regexp-in-string (car pair) (cdr pair) title)))
+      (let* ((pairs `(("[^[:alnum:][:digit:]]" . "_")  ;; convert anything not alphanumeric
+                      ("__*" . "_")  ;; remove sequential underscores
+                      ("^_" . "")  ;; remove starting underscore
+                      ("_$" . "")))  ;; remove ending underscore
+             (slug (-reduce-from #'cl-replace (strip-nonspacing-marks title) pairs)))
+	(downcase slug))))
+
+  (defun bp/org-download-annotate-with-title (link)
+    (prog1
+	(when bp/org-download-screenshot-title
+	  (concatenate 'string  "#+CAPTION: " bp/org-download-screenshot-title "\n"))
+      (setf bp/org-download-screenshot-title nil)))
+
   (setq org-download-method 'attach 
 	org-download-screenshot-method "xfce4-screenshooter -r -o cat > %s"
-	org-download-file-format-function #'bp/org-download-file-formater)
+	org-download-file-format-function #'bp/org-download-file-formater
+	org-download-annotate-function #'bp/org-download-annotate-with-title)
   
   :init 
   (bind-keys :map bp/global-prefix-map 
