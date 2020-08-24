@@ -181,8 +181,8 @@ buffer is not visiting a file."
   :ensure t
   :bind ("C-c o" . ace-window)
   :init
-  (require 'winner)
-  (winner-mode t)
+;  (require 'winner)
+;  (winner-mode t)
   (setf aw-dispatch-always t)
   (setq aw-keys '(?a ?s ?d ?f ?j ?k ?l))
   (smartrep-define-key bp/global-prefix-map
