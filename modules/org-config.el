@@ -10,6 +10,7 @@
   :bind (:map org-src-mode-map
 	      ("C-c C-c" . org-edit-src-exit))
   :hook (org-mode . (lambda ()
+		      (electric-indent-mode -1)
 		      (setq ispell-parser 'tex)))
   :config
   ;; Customizations
@@ -458,3 +459,41 @@ cite:${=key=}
         org-roam-server-network-label-truncate t
         org-roam-server-network-label-truncate-length 60
         org-roam-server-network-label-wrap-length 20))
+
+(use-package org-attach 
+  :defer t 
+  :config 
+  (setq org-attach-auto-tag nil
+	org-attach-method "mv"
+	org-attach-preferred-new-method 'dir
+	org-attach-id-dir ".data/"
+	org-attach-use-inheritance t))
+
+(use-package org-download 
+  :ensure t 
+  :defer t
+  :commands (org-download-screenshot) 
+  :config 
+  (defun bp/org-download-file-formater (filename)
+    "Asks the user for file name"
+    (labels ((ask-unique-name
+	    ()  
+	    (let ((file (completing-read "File Name:" 
+					     (list (org-download-file-format-default filename))
+					     nil nil
+					     (current-time-string)
+					     )))
+	      (if (file-exists-p (concat (org-attach-dir)
+					 file))
+		  (ask-unique-name)
+		file))))
+      (let ((filename (ask-unique-name)))
+	filename)))
+  (setq org-download-method 'attach 
+	org-download-screenshot-method "xfce4-screenshooter -r -o cat > %s"
+	org-download-file-format-function #'bp/org-download-file-formater)
+  
+  :init 
+  (bind-keys :map bp/global-prefix-map 
+	     ("o d s" . org-download-screenshot)))
+
