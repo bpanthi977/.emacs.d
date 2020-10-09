@@ -6,6 +6,7 @@
 ;; 			'uniquify
 ;; 			'ace-window
 ;; 			'saveplace))
+(setq exec-path (append '("/home/bpanthi/.local/bin") exec-path))
 
 ;; Keymaps
 (bind-keys :map bp/global-prefix-map
@@ -375,3 +376,7 @@ buffer is not visiting a file."
       (call-process "xdg-open" nil 0 nil file)))
 
   (define-key dired-mode-map (kbd "C-c o") 'dired-open-file))
+
+(use-package outshine
+  :ensure t 
+  :defer t)
