@@ -58,6 +58,7 @@
    "web-config"
    "latex-config"
    "js-config"
+   "other-modes"
    "tools"
    ))
 
