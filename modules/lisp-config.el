@@ -10,6 +10,10 @@
 			  (setf fill-column 100)
 			  (add-to-list 'company-backends 'company-slime))))
 :config
+(defun bp/log4cl () 
+  (interactive)
+  (load "/mnt/Data/Dev/lisp/quicklisp/log4slime-setup.el")
+  (global-log4slime-mode 1))
     ;;; To save new core run the script at
   ;;; ~/Development/lisp/save-new-core.lisp
 (cond ((string-equal system-type "windows-nt")
@@ -91,3 +95,9 @@
   :bind (:map emacs-lisp-mode-map 
 	      ("C-c C-c" . eval-defun)
 	      ("C-c C-l" . eval-buffer)))
+
+ (add-to-list 'load-path "/usr/share/emacs/site-lisp/maxima/")
+ (autoload 'maxima-mode "maxima" "Maxima mode" t)
+ (autoload 'imaxima "imaxima" "Frontend for maxima with Image support" t)
+ (autoload 'maxima "maxima" "Maxima interaction" t)
+ (autoload 'imath-mode "imath" "Imath mode for math formula input" t)
