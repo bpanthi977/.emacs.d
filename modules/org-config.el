@@ -436,8 +436,11 @@
     (let ((buffer (generate-new-buffer "tesseract-ocr"))
 	  (errbuffer (generate-new-buffer "tesseract-ocr-err")))
       (shell-command (format "tesseract \"%s\" -" (file-truename file) ) buffer errbuffer)
-      (with-current-buffer  buffer 
-	(buffer-string))))
+      (let ((string (with-current-buffer  buffer 
+		      (buffer-string))))
+	(kill-buffer buffer)
+	(kill-buffer errbuffer)
+	string)))
 
   (defun bp/tesseract-on-attachment--get-file ()
     (let ((context (org-element-context)))
