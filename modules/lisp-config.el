@@ -9,30 +9,37 @@
 			  (prettify-symbols-mode)
 			  (setf fill-column 100)
 			  (add-to-list 'company-backends 'company-slime))))
-:config
-(defun bp/log4cl () 
-  (interactive)
-  (load "/mnt/Data/Dev/lisp/quicklisp/log4slime-setup.el")
-  (global-log4slime-mode 1))
+  :config
+  (defun bp/log4cl () 
+    (interactive)
+    (load "/mnt/Data/Dev/lisp/quicklisp/log4slime-setup.el")
+    (global-log4slime-mode 1))
     ;;; To save new core run the script at
   ;;; ~/Development/lisp/save-new-core.lisp
-(cond ((string-equal system-type "windows-nt")
-       (setf inferior-lisp-program "sbcl --core C:/Users/hp/.cache/common-lisp/core" ;; --dynamic-space-size 2560
-	     ))
-      (t
-       (setf inferior-lisp-program "sbcl --core /home/bpanthi/.cache/common-lisp/core"
-	     common-lisp-hyperspec-root "file:///home/bpanthi/Dev/lisp/HyperSpec-7-0/HyperSpec/")))
+  (cond ((string-equal system-type "windows-nt")
+	 (setf inferior-lisp-program "sbcl --core C:/Users/hp/.cache/common-lisp/core" ;; --dynamic-space-size 2560
+	       ))
+	(t
+	 (setf inferior-lisp-program "sbcl --core /home/bpanthi/.cache/common-lisp/core"
+	       common-lisp-hyperspec-root "file:///home/bpanthi/Dev/lisp/HyperSpec-7-0/HyperSpec/")))
 
-(setq	slime-contribs '(slime-asdf slime-banner slime-fancy slime-hyperdoc slime-macrostep slime-mrepl slime-quicklisp slime-sbcl-exts slime-scratch slime-sprof slime-xref-browser slime-company))
+  (setq	slime-contribs '(slime-asdf slime-banner slime-fancy slime-hyperdoc slime-macrostep slime-mrepl slime-quicklisp slime-sbcl-exts slime-scratch slime-sprof slime-xref-browser slime-company))
 
-;; (defun view-sdl-doc ()
-;;   (interactive)
-;;   (eww-open-file "~/Dev/lisp/quicklisp/dists/quicklisp/software/lispbuilder-20180831-git/lispbuilder-sdl/documentation/lispbuilder-sdl.html"))
-;; )
+  ;; (defun view-sdl-doc ()
+  ;;   (interactive)
+  ;;   (eww-open-file "~/Dev/lisp/quicklisp/dists/quicklisp/software/lispbuilder-20180831-git/lispbuilder-sdl/documentation/lispbuilder-sdl.html"))
+  ;; )
 
-;; (when  (string-equal system-type "windows-nt")
-;;   (setq inferior-lisp-program "sbcl")))
-)
+  ;; (when  (string-equal system-type "windows-nt")
+  ;;   (setq inferior-lisp-program "sbcl")))
+
+  (defun cl-services () 
+    (interactive)
+    (let ((port (string-to-number (with-temp-buffer 
+				    (insert-file-contents "/tmp/cl-services-swank")
+				    (buffer-string)))))
+      (slime-connect "localhost" port)))
+  )
 
 
 ;; (use-package slime-company
@@ -96,8 +103,8 @@
 	      ("C-c C-c" . eval-defun)
 	      ("C-c C-l" . eval-buffer)))
 
- (add-to-list 'load-path "/usr/share/emacs/site-lisp/maxima/")
- (autoload 'maxima-mode "maxima" "Maxima mode" t)
- (autoload 'imaxima "imaxima" "Frontend for maxima with Image support" t)
- (autoload 'maxima "maxima" "Maxima interaction" t)
- (autoload 'imath-mode "imath" "Imath mode for math formula input" t)
+(add-to-list 'load-path "/usr/share/emacs/site-lisp/maxima/")
+(autoload 'maxima-mode "maxima" "Maxima mode" t)
+(autoload 'imaxima "imaxima" "Frontend for maxima with Image support" t)
+(autoload 'maxima "maxima" "Maxima interaction" t)
+(autoload 'imath-mode "imath" "Imath mode for math formula input" t)
