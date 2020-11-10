@@ -430,7 +430,33 @@
 	org-attach-method "mv"
 	org-attach-preferred-new-method 'dir
 	org-attach-id-dir ".data/"
-	org-attach-use-inheritance t))
+	org-attach-use-inheritance t)
+  
+  (defun bp/tesseract-on-file (file) 
+    (let ((buffer (generate-new-buffer "tesseract-ocr"))
+	  (errbuffer (generate-new-buffer "tesseract-ocr-err")))
+      (shell-command (format "tesseract \"%s\" -" (file-truename file) ) buffer errbuffer)
+      (with-current-buffer  buffer 
+	(buffer-string))))
+
+  (defun bp/tesseract-on-attachment--get-file ()
+    (let ((context (org-element-context)))
+      (if (eql (org-element-type context) 'link)
+	  (let ((link-type (org-element-property :type context)))
+	    (cond 
+	     ((equal link-type "attachment") 
+	      (file-truename (org-attach-expand (org-element-property :path context))))
+	     ((equal link-type "file")
+	      (file-truename (org-element-property :path context)))))
+	(error "Point not in attachment or link"))))
+
+  (defun bp/org-tesseract-at-point ()
+    (interactive)
+    (let ((file (bp/tesseract-on-attachment--get-file)))
+      (when file 
+	(let ((string (bp/tesseract-on-file file)))
+	  (insert "\n" string))))))
+
 
 
 ;;; Org Agenda 
