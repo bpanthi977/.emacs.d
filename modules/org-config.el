@@ -582,7 +582,9 @@
   ;; setup org-ref 
   (setq org-ref-bibliography-notes "~/org/bibliography/notes.org"
 	org-ref-default-bibliography '("~/org/bibliography/references.bib")
-	org-ref-pdf-directory "~/org/bibliography/papers/")
+	org-ref-pdf-directory "~/org/bibliography/papers/"
+	bibtex-completion-pdf-field "pdf"
+	org-ref-get-pdf-filename-function #'org-ref-get-pdf-filename-helm-bibtex)
   ;; may prevent slow down https://github.com/jkitchin/org-ref/issues/468
   (setq org-ref-show-broken-links nil)
   (setq org-ref-label-use-font-lock nil)
