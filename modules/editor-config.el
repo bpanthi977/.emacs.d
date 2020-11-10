@@ -380,3 +380,12 @@ buffer is not visiting a file."
 (use-package outshine
   :ensure t 
   :defer t)
+
+(use-package hyperbole 
+  :ensure t 
+  :defer nil
+  :config 
+  (require 'hyperbole)
+  (global-set-key (kbd "<S-down-mouse-1>") #'action-key-depress-emacs)
+  (global-set-key (kbd "<S-mouse-1>") #'action-mouse-key-emacs)
+  (global-set-key (kbd "<C-S-down-mouse-1>") #'mouse-appearance-menu) )
