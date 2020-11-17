@@ -95,52 +95,48 @@
   :ensure t
   :defer nil
   :config
-  :bind (;; ("C-M-f" . sp-forward-slurp-sexp)
-	 ;;("C-M-b" . sp-backward-slurp-sexp)
+  :bind (;; Movement [see: https://ebzzry.io/en/emacs-pairs/]
 	 ( "C-M-f" . sp-forward-sexp)
 	 ( "C-M-b" . sp-backward-sexp)
-
-	 ( "C-M-d" . kill-sexp)
-	 ( "C-M-a" . sp-backward-down-sexp)
-	 ;;		 ( "C-S-d" . sp-beginning-of-sexp)
-	 ;;		 ( "C-S-a" . sp-end-of-sexp)
-
-	 ( "C-M-e" . sp-up-sexp)
-	 ( "C-M-u" . sp-backward-up-sexp)
+	 ( "C-M-a" . sp-beginning-of-sexp)
+	 ( "C-M-e" . sp-end-of-sexp)
+	 
+	 ;; transpose, kill, copy
 	 ( "C-M-t" . sp-transpose-sexp)
-
-	 ( "C-M-n" . sp-forward-hybrid-sexp)
-	 ( "C-M-p" . sp-backward-hybrid-sexp)
-
 	 ( "C-M-k" . sp-kill-sexp)
 	 ( "C-M-w" . sp-copy-sexp)
-
-	 ( "M-<delete>" . sp-unwrap-sexp)
+	 
+	 ;; wrapping, unwraping
+	 ( "M-(" . sp-wrap-round)
+	 ( "M-[" . sp-wrap-square)
+	 ( "M-\"" . sp-wrap-quote)
 	 ( "M-<backspace>" . sp-backward-unwrap-sexp)
-
+	 
+	 ;; slurping and barfing 
 	 ( "C-<right>" . sp-forward-slurp-sexp)
 	 ( "C-<left>" . sp-forward-barf-sexp)
-	 ( "C-M-<left>" . sp-backward-slurp-sexp)
-	 ( "C-M-<right>" . sp-backward-barf-sexp)
 
-	 ( "M-D" . sp-splice-sexp)
-	 ( "C-M-<delete>" . sp-splice-sexp-killing-forward)
-	 ( "C-M-<backspace>" . sp-splice-sexp-killing-backward)
-	 ( "C-S-<backspace>" . sp-splice-sexp-killing-around)
+	 ;; ( "M-D" . sp-splice-sexp)
+	 ;; ( "C-M-<delete>" . sp-splice-sexp-killing-forward)
+	 ;; ( "C-M-<backspace>" . sp-splice-sexp-killing-backward)
+	 ;; ( "C-S-<backspace>" . sp-splice-sexp-killing-around)
 
-	 ( "C-]" . sp-select-next-thing-exchange)
-	 ( "C-<left_bracket>" . sp-select-previous-thing)
-	 ( "C-M-]" . sp-select-next-thing)
+	 ;; ( "C-]" . sp-select-next-thing-exchange)
+	 ;; ( "C-<left_bracket>" . sp-select-previous-thing)
+	 ;; ( "C-M-]" . sp-select-next-thing)
 
-	 ;;		 ( "M-F" . sp-forward-symbol)
-	 ;;		 ( "M-B" . sp-backward-symbol)
+	 ;; ;;		 ( "M-F" . sp-forward-symbol)
+	 ;; ;;		 ( "M-B" . sp-backward-symbol)
 
-	 ( "C-\"" . sp-change-inner)
+	 ;; ( "C-\"" . sp-change-inner)
 	 ( "M-i" . sp-change-enclosing))
   :hook ((prog-mode . smartparens-mode))
   :init
   (require 'smartparens-config)
   (smartparens-global-strict-mode -1)
+  (defun sp-wrap-quote ()
+    (interactive)
+    (sp-wrap-with-pair "\""))
   (setq sp-autoskip-closing-pair nil)
   (setq sp-hybrid-kill-entire-symbol nil)
   )
