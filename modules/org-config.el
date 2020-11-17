@@ -40,7 +40,7 @@
   ;; from https://gongzhitaao.org/orgcss/org.css
   (setq org-html-htmlize-output-type 'css)
   (setq org-html-head-include-default-style nil)
-  (setq org-html-head-extra "<link rel=\"stylesheet\" href=\"/home/bpanthi/.emacs.d/modules/org.css\">")
+  (setq org-html-head-extra (concatenate 'string "<link rel=\"stylesheet\" href=\"file:///" (expand-file-name "modules/org.css" init-dir) "\">"))
   
 
   (defun bp/org-view-html-export () 
