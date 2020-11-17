@@ -117,10 +117,17 @@
 	(pushnew '("\\.pdf::\\([0-9]+\\)?\\'" .  "e:/Programs/SumatraPDF/SumatraPDF.exe %s -page %1")
 		 org-file-apps))
     (progn
-      (setcdr (assoc "\\.pdf\\'" org-file-apps) "okular %s")
-      (pushnew '("\\.pdf::\\([0-9]+\\)?\\'" . "okular -p %1 %s")
+      (pushnew '("\\.pdf\\'" . bp/okl-note-link) org-file-apps)
+      (pushnew '("\\.pdf::\\([0-9]+\\)?\\'" . bp/okl-note-link)
 	       org-file-apps)))
 
+;;;;; HTML Viewer 
+  (defun bp/open-html-file (file link)
+    (declare (ignore link))
+    (browse-url-of-file file))
+
+  (pushnew '("\\.html\\'" . bp/open-html-file)
+	   org-file-apps)
 
 ;;;; Timestamp in TODO Heading
   ;; Switch between TODO, DONE and COMPLETED 
