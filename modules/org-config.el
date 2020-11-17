@@ -441,18 +441,9 @@
 	org-attach-preferred-new-method 'dir
 	org-attach-id-dir ".data/"
 	org-attach-use-inheritance t)
-  
-  (defun bp/tesseract-on-file (file) 
-    (let ((buffer (generate-new-buffer "tesseract-ocr"))
-	  (errbuffer (generate-new-buffer "tesseract-ocr-err")))
-      (shell-command (format "tesseract \"%s\" -" (file-truename file) ) buffer errbuffer)
-      (let ((string (with-current-buffer  buffer 
-		      (buffer-string))))
-	(kill-buffer buffer)
-	(kill-buffer errbuffer)
-	string)))
 
-  (defun bp/tesseract-on-attachment--get-file ()
+  (defun bp/org-link--get-file ()
+    "return path of attachment or normal file link file"
     (let ((context (org-element-context)))
       (if (eql (org-element-type context) 'link)
 	  (let ((link-type (org-element-property :type context)))
@@ -465,12 +456,10 @@
 
   (defun bp/org-tesseract-at-point ()
     (interactive)
-    (let ((file (bp/tesseract-on-attachment--get-file)))
+    (let ((file (bp/org-link--get-file)))
       (when file 
 	(let ((string (bp/tesseract-on-file file)))
 	  (insert "\n" string))))))
-
-
 
 ;;; Org Agenda 
 (use-package org-agenda
@@ -560,7 +549,7 @@
 ;;    org-expiry-created-property-name "CREATED" ; Name of property when an item is created
 ;;    org-expiry-inactive-timestamps   t         ; Don't have everything in the agenda view
 ;;    )
-  
+
 ;;   (defun bp/insert-created-timestamp()
 ;;     "Insert a CREATED property using org-expiry.el for TODO entries"
 ;;     (interactive)
