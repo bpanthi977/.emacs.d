@@ -1,39 +1,4 @@
-;; (require-packages (list 'smartparens
-;; 			'smartparens-config
-;; 			'magit
-;; 			'recentf
-;; 			'projectile
-;; 			'uniquify
-;; 			'ace-window
-;; 			'saveplace))
 (setq exec-path (append '("/home/bpanthi/.local/bin") exec-path))
-
-;; Keymaps
-(bind-keys :map bp/global-prefix-map
-	   ;; editingb
-	   ("e e" . hippie-expand)
-	   ("e t" . toggle-truncate-lines)
-	   ("e c" . upcase-initials-region)
-	   ;; file
-	   ("f r" . recover-this-file)
-	   ("f d" . diff-buffer-with-file)
-	   ("f f" . counsel-recentf)
-	   ;; documentation
-	   )
-
-(global-set-key (kbd "C-<tab>") 'outline-toggle-children)
-(global-set-key (kbd "C-q") 'quoted-insert)
-(global-set-key (kbd "C-z") 'undo)
-
-(smartrep-define-key bp/global-prefix-map "e"
-  '(("s" . cycle-spacing)))
-
-(smartrep-define-key bp/global-prefix-map "f"
-  '(("k" . kill-this-buffer)
-    ("s" . save-buffer)
-    ("n" . next-buffer)
-    ("p" . previous-buffer)))
-
 
 ;; Newline at end of file
 (setq require-final-newline t)
@@ -49,9 +14,11 @@
 ;; revert buffers automatically when underlying files are changed externally
 (global-auto-revert-mode t)
 ;; smart tab behavior - indent or complete
-(setq-default tab-always-indent 'complete)
+(setq-default tab-always-indent 't)
 (setq-default tab-width 8)
 (setq tab-width 8)
+(setq-local)
+
 (setq-default indent-tabs-mode t)
 ;; disable annoying blink-matching-paren
 (setq blink-matching-paren nil)
@@ -89,8 +56,8 @@
 (setf cua-delete-copy-to-register-0 nil)
 ;; Truncate lines
 (setq-default truncate-lines t)
-;;smart pairing for all
 
+;;smart pairing for all
 (use-package smartparens
   :ensure t
   :defer nil
@@ -138,9 +105,7 @@
     (interactive)
     (sp-wrap-with-pair "\""))
   (setq sp-autoskip-closing-pair nil)
-  (setq sp-hybrid-kill-entire-symbol nil)
-  )
-
+  (setq sp-hybrid-kill-entire-symbol nil))
 
 (defun sudo-edit (&optional arg)
   "Edit currently visited file as root.
@@ -176,10 +141,9 @@ buffer is not visiting a file."
 ;; Ace Window
 (use-package ace-window
   :ensure t
-  :bind ("C-c o" . ace-window)
   :init
-;  (require 'winner)
-;  (winner-mode t)
+  (require 'winner)
+  (winner-mode t)
   (setf aw-dispatch-always t)
   (setq aw-keys '(?a ?s ?d ?f ?j ?k ?l))
   (smartrep-define-key bp/global-prefix-map
@@ -190,10 +154,10 @@ buffer is not visiting a file."
       ("k" . kill-buffer-and-window)
       ("d" . ace-delete-window)
       ("u" . winner-undo)
-      ("r" . winner-redo))))
-
-(bind-keys :map bp/global-prefix-map 
-	   ("w n" . make-frame))
+      ("r" . winner-redo)))
+  
+  (bind-keys :map bp/global-prefix-map 
+	   ("w n" . make-frame)))
 
 (use-package yasnippet
   :ensure t
@@ -223,6 +187,7 @@ buffer is not visiting a file."
 (setq tramp-persistency-file-name (concat init-dir "cache/tramp"))
 ;; Abbrev 
 (setq abbrev-file-name (concat savefile-dir "/abbrev_defs"))
+
 ;; Magit
 (use-package magit
   :defer t
@@ -280,37 +245,16 @@ buffer is not visiting a file."
   :commands (ispell ispell-buffer)
   :init 
   (setq ispell-program-name "hunspell")
-  (setq ispell-dictionary "english")
   (bind-keys :map bp/global-prefix-map
 	     ("e i i" . ispell)
 	     ("e i w" . ispell-word)
-	     ("e i c" . ispell-continue))
-  :config
-  (add-to-list 'ispell-dictionary-alist
-	       '("english" "[[:alpha:]]" "[^[:alpha:]]" "'" t ("-d" "en_US") nil utf-8))
-
-  ;;  :config 
-  ;; (add-to-list 'ispell-dictionary-alist '(("american"
-  ;; 										   "[[:alpha:]]"
-  ;; 										   "[^[:alpha:]]"
-  ;; 										   "[']"
-  ;; 										   t
-  ;; 										   ("-d" "english")
-  ;; 										   nil
-  ;; 										   utf-8)))
-  ;; (setq ispell-dictionary-alist 
-
-  ;; ispell-hunspell-dict-paths-alist)
-  ;; (ispell-find-hunspell-dictionaries))
-  )
+	     ("e i c" . ispell-continue)))
 
 (use-package flyspell
   :ensure t
   :demand nil
   :config
   (setq flyspell-issue-message-flag nil))
-
-
 
 (use-package multiple-cursors
   :ensure t
@@ -350,17 +294,11 @@ buffer is not visiting a file."
 ;; 	  ("u" . origami-undo)
 ;; 	  ("r" . origami-redo))))
 
-
-;; (require 'zone)
-;; (zone-when-idle 300)
-
-(use-package discover
-  :ensure t
-  :demand t
-  :init
-  (global-discover-mode 1))
-
-
+;; (use-package discover
+;;   :ensure t
+;;   :demand t
+;;   :init
+;;   (global-discover-mode 1))
 
 ;; Dired
 (use-package dired
@@ -377,33 +315,18 @@ buffer is not visiting a file."
   :ensure t 
   :defer t)
 
-(use-package hyperbole 
-  :ensure t 
-  :defer nil
-  :config 
-  (require 'hyperbole)
-  (global-set-key (kbd "<S-down-mouse-1>") #'action-key-depress-emacs)
-  (global-set-key (kbd "<S-mouse-1>") #'action-mouse-key-emacs)
-  (global-set-key (kbd "<C-S-down-mouse-1>") #'mouse-appearance-menu) )
+;; (use-package hyperbole 
+;;   :ensure t 
+;;   :defer nil
+;;   :config 
+;;   (require 'hyperbole)
+;;   (global-set-key (kbd "<S-down-mouse-1>") #'action-key-depress-emacs)
+;;   (global-set-key (kbd "<S-mouse-1>") #'action-mouse-key-emacs)
+;;   (global-set-key (kbd "<C-S-down-mouse-1>") #'mouse-appearance-menu) )
 
-(defun bp/tesseract-on-file (file) 
-  (save-window-excursion 
-    (let ((buffer (generate-new-buffer "tesseract-ocr"))
-	  (errbuffer (generate-new-buffer "tesseract-ocr-err")))
-      (shell-command (format "tesseract \"%s\" -" (file-truename file) ) buffer errbuffer)
-      (let ((string (with-current-buffer  buffer 
-		      (buffer-string))))
-	(kill-buffer buffer)
-	(kill-buffer errbuffer)
-	(remove ? string)))))
 
-(defun bp/capture-screenshot () 
-  (interactive)
-  (let ((filename (format "%s.png" (make-temp-file "screenshot"))))
-   (shell-command-to-string (format "xfce4-screenshooter -r -o cat > %s"
-				    filename))
-   (when (file-exists-p filename)
-     (insert (bp/tesseract-on-file filename)))))
-
-(bind-keys :map bp/global-prefix-map
-	   ("e o" . bp/capture-screenshot))
+(use-package easy-kill
+  :ensure t
+  :config
+  (global-set-key [remap kill-ring-save] #'easy-kill)
+  (global-set-key [remap mark-sexp] #'easy-mark))

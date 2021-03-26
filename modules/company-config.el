@@ -4,9 +4,7 @@
   :custom
   (company-auto-complete t)
   (company-auto-complete-chars "")
-  ;; (company-frontends
-  ;;   (quote
-  ;; 	(company-pseudo-tooltip-frontend company-echo-metadata-frontend company-preview-if-just-one-frontend company-echo-frontend)))
+
   (company-idle-delay 0.2)
   (company-minimum-prefix-length 2)
   (company-quickhelp-color-background "#4F4F4F")
@@ -21,18 +19,17 @@
   (company-tooltip-flip-when-above t)
   :init
   (setf company-frontends
-	'(company-echo-frontend company-pseudo-tooltip-frontend company-echo-metadata-frontend company-preview-if-just-one-frontend company-quickhelp-frontend))
-  
+	'(company-echo-frontend company-pseudo-tooltip-frontend company-echo-metadata-frontend company-preview-if-just-one-frontend))
+
   ;; Enable Company
   (global-company-mode 1)
-  ;; (defun add-local-company-backend (backend)
-  ;;   (add-to-list (make-local-variable 'company-backends) backend))
+  ;; bind Tab key to company completion with indent
+  (define-key company-mode-map [remap indent-for-tab-command] #'company-indent-or-complete-common)
+  
   (bind-keys :map company-active-map
 	     ("M-n" . company-select-next)
 	     ("M-p" . company-select-previous)
-	     ("M-m d c" . company-show-doc-buffer))
-
-  )
+	     ("M-m d c" . company-show-doc-buffer)))
 
 (use-package company-quickhelp
   :ensure t
@@ -46,9 +43,17 @@
   :config 
   (add-to-list 'company-frontends 'company-quickhelp-frontend))
 
-
 (use-package helm-dash
   :ensure t
-  :defer t 
-  :custom
-  (helm-dash-docsets-path "/home/bpanthi/.local/share/Zeal/Zeal/docsets/"))
+  :defer t
+  :config
+  (setq helm-dash-docsets-path "/mnt/Data/Files/Documentation/docsets/"
+	dash-docs-enable-debugging nil
+	helm-dash-browser-func 'browse-web)
+  (bind-keys :map bp/global-prefix-map
+	     ("d h" . helm-dash)
+	     ("d ." . helm-dash-at-point)))
+
+  
+
+

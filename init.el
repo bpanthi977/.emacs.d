@@ -17,12 +17,13 @@
 (add-to-list 'load-path (expand-file-name "my-packages" modules-dir))
 (add-to-list 'load-path (expand-file-name "git-clones/org-mode/lisp/" modules-dir))
 (add-to-list 'load-path (expand-file-name "git-clones/org-mode/contrib/lisp/" modules-dir))
+(add-to-list 'load-path (expand-file-name "git-clones/org-roam/" modules-dir))
 
 
 ;;; taken from Doom emacs 
 ;; reduce the frequency of garbage collection by making it happen on
 (defvar last-file-name-handler-alist file-name-handler-alist)
-(setq gc-cons-threshold 402653184
+(setq gc-cons-threshediold 402653184
       gc-cons-percentage 0.6
       file-name-handler-alist nil)
 
@@ -49,7 +50,10 @@
    "make-config"
    "c-config"
    "csharp-config"
+   "okular"
    "org-config"
+   "org-mpv-notes"
+   "org-web-notes"
    ;; "java-config"
    ;; "android-config"
    "python-config"
@@ -58,6 +62,7 @@
    "web-config"
    "latex-config"
    "js-config"
+   "flutter-config"
    "other-modes"
    "tools"
    ))

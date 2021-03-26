@@ -1,28 +1,27 @@
-(install-packages (list 'avy
-			'magit
-			'ace-window
-			'flycheck))
+(use-package smartrep
+  :ensure t
+  :demand t)
+
+(use-package bind-key
+  :ensure t
+  :defer nil)
+
 ;;;;
 ;;;; Keyboard mappings
 ;;;;
-(defvar bpanthi-keys-minor-mode-map
-  (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "C-/") 'comment-or-uncomment-region)
-    (define-key map (kbd "C->") 'enlarge-window-horizontally)
-    (define-key map (kbd "C-<") 'shrink-window-horizontally)
-    (define-key map (kbd "M->") 'enlarge-window)
-    (define-key map (kbd "M-<") 'shrink-window)
-
-    ;; Font size
-    (define-key map (kbd "C-+") 'text-scale-increase)
-    (define-key map (kbd "C-_") 'text-scale-decrease)
-    ;; toggle menu-bar visibility
-    (define-key map (kbd "<f12>") 'menu-bar-mode)
-    (define-key map (kbd "C-x g") 'magit-status)
-    ;; (define-key map (kbd "C-SPC") 'shift-modifier)
-  
-    map))
-
+(global-set-key (kbd "C-/") #'comment-or-uncomment-region)
+(global-set-key (kbd "C->") #'enlarge-window-horizontally)
+(global-set-key (kbd "C-<") #'shrink-window-horizontally)
+(global-set-key (kbd "M->") #'enlarge-window)
+(global-set-key (kbd "M-<") #'shrink-window)
+;; Font size
+(global-set-key (kbd "C-+") #'text-scale-increase)
+(global-set-key (kbd "C-_") #'text-scale-decrease)
+;; toggle menu-bar visibility
+(global-set-key (kbd "<f12>") #'menu-bar-mode)
+(global-set-key (kbd "C-x g") #'magit-status)
+(global-set-key (kbd "C-x C-K") #'kill-buffer-and-window)
+;; (global-set-key (kbd "C-SPC") #'shift-modifier)
 
 (defun shift-modifier ()
   "Capitalizes the next character pressed"
@@ -39,28 +38,32 @@
       (insert (capitalize (char-to-string char)))
       (sp-insert-pair))))
 
-(define-minor-mode bpanthi-keys-mode
-  "A minor mode so that my key-bindings override annoying major-modes"
-  :init-value t
-  :lighter " my-keys"
-  :keymap bpanthi-keys-minor-mode-map)
-
-(define-globalized-minor-mode bpanthi-global-keys-mode bpanthi-keys-mode
-  (lambda () (bpanthi-keys-mode 1)))
-
-(bpanthi-global-keys-mode)
-(use-package smartrep
-  :ensure t
-  :demand t)
-
 (define-prefix-command 'bp/global-prefix-map)
 (define-key global-map (kbd "M-m") 'bp/global-prefix-map)
 
-(use-package bind-key
-  :ensure t
-  :defer nil)
+;; Keymaps
+(bind-keys :map bp/global-prefix-map
+	   ;; editing
+	   ("e e" . hippie-expand)
+	   ("e t" . toggle-truncate-lines)
+	   ("e c" . upcase-initials-region)
+	   ;; file
+	   ("f r" . recover-this-file)
+	   ("f d" . diff-buffer-with-file)
+	   ("f f" . counsel-recentf))
 
+(global-set-key (kbd "C-<tab>") 'outline-toggle-children)
+(global-set-key (kbd "C-q") 'quoted-insert)
+(global-set-key (kbd "C-z") 'undo)
 
+(smartrep-define-key bp/global-prefix-map "e"
+  '(("s" . cycle-spacing)))
+
+(smartrep-define-key bp/global-prefix-map "f"
+  '(("k" . kill-this-buffer)
+    ("s" . save-buffer)
+    ("n" . next-buffer)
+    ("p" . previous-buffer)))
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(global-set-key (kbd "C-x C-K") #'kill-buffer-and-window)
+

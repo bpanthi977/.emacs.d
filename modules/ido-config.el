@@ -46,12 +46,11 @@
   :config 
   (require 'smex)
   (ivy-mode t)
+  (define-key ivy-minibuffer-map (kbd "S-SPC") nil)
   :init
   (setq ivy-use-virtual-buffers t
 		ivy-count-format "%d/%d "
 		ivy-re-builders-alist '( (t . ivy--regex-ignore-order))))
-  
-
 
 (use-package ivy-rich
   :ensure t
