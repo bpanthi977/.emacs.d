@@ -27,3 +27,6 @@ modules/*.elc
 /tramp
 /viper
 /modules/git-clones/
+custom.el
+/custom.el
+/nov-places

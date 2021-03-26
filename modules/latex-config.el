@@ -25,14 +25,14 @@
   :mode "\\.tex\\'"
   :after (tex-mik)
   :hook ((LaTeX-mode .  (lambda () 
-						  (latex-math-mode)
-						  (latex-electric-env-pair-mode)
-						  (visual-line-mode)
-						  (turn-on-reftex)
-						  (tex-source-correlate-mode)
-						  (local-set-key (kbd "C-c e") 'LaTeX-environment)
-						  ;; (setq TeX-master (guess-TeX-master (buffer-file-name)))
-						  )))
+			  (latex-math-mode)
+			  (latex-electric-env-pair-mode)
+			  (visual-line-mode)
+			  (turn-on-reftex)
+			  (tex-source-correlate-mode)
+			  (local-set-key (kbd "C-c e") 'LaTeX-environment)
+			  ;; (setq TeX-master (guess-TeX-master (buffer-file-name)))
+			  )))
   :config
   (setq TeX-auto-save t)
   (setq TeX-parse-self t)
@@ -40,8 +40,8 @@
   (setq reftex-plug-into-AUCTeX t)	
   ;; (load "preview-latex.el" nil t t)
   (when (string-equal system-type "windows-nt")
-	
-	(setq org-preview-latex-default-process 'dvisvgm))
+    
+    (setq org-preview-latex-default-process 'dvisvgm))
 
   ;; Is this required? add these path to your system path
   ;;(setq exec-path (append '("/usr/local/texlive/2019/bin/x86_64-linux/") exec-path))
