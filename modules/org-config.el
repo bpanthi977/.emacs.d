@@ -1,7 +1,4 @@
-(defun bp/lecture-position () 
-  (interactive)
-  (set-frame-width (selected-frame) 80)
-  (set-frame-height (selected-frame) 58))
+;; -*- eval: (outshine-mode); -*-
 
 ;;; Org mode 
 (use-package org
@@ -14,17 +11,26 @@
 	      ("M-m o h" . 'bp/org-view-html-export)
 	      ("M-m o s". 'bp/org-source-template)
 	      ("M-m o c t". 'bp/org-capture-thought)
-	      ("M-m o c n" . 'bp/org-capture-notes))
+	      ("M-m o c n" . 'bp/org-capture-notes)
+	      ("M-m o v" . org-redisplay-inline-images))
   :bind (:map org-src-mode-map
 	      ("C-c C-c" . org-edit-src-exit))
   :hook (org-mode . (lambda ()
 		      (org-content 2)
+		      (org-cdlatex-mode)
 		      (electric-indent-mode -1)
 		      (setq ispell-parser 'tex)))
   :config
+
 ;;;; requirements
+  (setf org-pretty-entities t)
+  (modify-syntax-entry ?$ "$$" org-mode-syntax-table)
+  (setf org-pretty-entities-include-sub-superscripts nil)
   (require 'ox-latex)
+  (require 'cdlatex)
   (require 'org-attach)
+  ;;(require 'org-ref)
+  (require 'org-id)
 ;;;; Exporting
 ;;;;; Exports to './output' directory
   (defvar org-export-output-directory-prefix "output" "prefix of directory used for org-mode export")
@@ -50,7 +56,7 @@
       (browse-url-of-buffer "*Org HTML Export*")))
 
 ;;;;; Comments in between paragraphs 
-;; This allows comments in between a paragraph
+  ;; This allows comments in between a paragraph
   (defun delete-org-comments (backend)
     (loop for comment in (reverse (org-element-map (org-element-parse-buffer)
 				      'comment 'identity))
@@ -71,6 +77,7 @@
   (smartrep-define-key bp/org-prefix-map
       ""
     '(("	" . bp/org-just-show-this)
+      ("t" . bp/org-just-show-this)
       ("f" . org-forward-heading-same-level)
       ("b" . org-backward-heading-same-level)
       ("n" . org-next-visible-heading)
@@ -98,7 +105,7 @@
 	org-image-actual-width 500
 	org-startup-with-latex-preview nil
 	org-startup-folded 'content)
-
+  (setf org-id-link-to-org-use-id 'use-existing)
   (setq org-directory "~/Documents/synced/Notes/org/")
   (setq org-default-notes-file (concat org-directory "/notes.org"))
   (setq org-log-done t)
@@ -189,7 +196,13 @@
 ;;;; Linking org files across fs to ~/org/ 
   (defun bp/link-to-~org ()
     (interactive)
-    (make-symbolic-link (buffer-file-name) "~/org/"))
+    (let ((name (completing-read "File Name: " (remove-if #'null
+							  (list (file-name-base (buffer-file-name))
+								(pcase (org-collect-keywords '("TITLE"))
+								  (`(("TITLE" . ,val))
+								   val)))))))
+      (make-symbolic-link (buffer-file-name) (concatenate 'string "~/org/" name ".org"))))
+  ;; org config complete
   )
 
 ;;; Org Latex
@@ -198,7 +211,7 @@
   :defer t
   :commands (bp/org-insert-inline-latex bp/org-insert-last-inline-latex  bp/org-insert-latex-equation bp/org-insert-last-inline-latex)
   :config
-   ;; For proper rendering of unicode symbols on latex
+  ;; For proper rendering of unicode symbols on latex
   (setq org-latex-inputenc-alist '(("utf8" . "utf8x")))
   (setq org-latex-default-packages-alist (cons '("mathletters" "ucs" nil) org-latex-default-packages-alist))
 
@@ -297,8 +310,8 @@
 ;;;;; Elsevier Article
 
   (add-to-list 'org-latex-classes
- '("elsarticle"
-     "
+	       '("elsarticle"
+		 "
 \\documentclass[final,5p,times,twocolumn]{elsarticle}
 [NO-DEFAULT-PACKAGES]
 [NO-PACKAGES]
@@ -331,45 +344,6 @@
 %% \\biboptions{comma,round}
 % \\biboptions{}
 \\usepackage{hyperref}"
-     ("\\section{%s}" . "\\section*{%s}")
-     ("\\subsection{%s}" . "\\subsection*{%s}")
-     ("\\subsubsection{%s}" . "\\subsubsection*{%s}")
-     ("\\paragraph{%s}" . "\\paragraph*{%s}")
-     ("\\subparagraph{%s}" . "\\subparagraph*{%s}")))
-
-  (setf org-latex-title-command nil)
-
-
-;;;;; Ethz (Good Theme) 
-  (add-to-list 'org-latex-classes
-	       '("ethz"
-		 "\\documentclass[a4paper,11pt,titlepage]{memoir}
-  \\usepackage[utf8]{inputenc}
-  \\usepackage[T1]{fontenc}
-  \\usepackage{fixltx2e}
-  \\usepackage{graphicx}
-  \\usepackage{longtable}
-  \\usepackage{float}
-  \\usepackage{wrapfig}
-  \\usepackage{rotating}
-  \\usepackage[normalem]{ulem}
-  \\usepackage{amsmath}
-  \\usepackage{textcomp}
-  \\usepackage{marvosym}
-  \\usepackage{wasysym}
-  \\usepackage{amssymb}
-  \\usepackage{hyperref}
-  \\usepackage{mathpazo}
-  \\usepackage{color}
-  \\usepackage{enumerate}
-  \\definecolor{bg}{rgb}{0.95,0.95,0.95}
-  \\tolerance=1000
-	[NO-DEFAULT-PACKAGES]
-	[PACKAGES]
-	[EXTRA]
-  \\linespread{1.1}
-  \\hypersetup{pdfborder=0 0 0}"
-		 ("\\chapter{%s}" . "\\chapter*{%s}")
 		 ("\\section{%s}" . "\\section*{%s}")
 		 ("\\subsection{%s}" . "\\subsection*{%s}")
 		 ("\\subsubsection{%s}" . "\\subsubsection*{%s}")
@@ -378,51 +352,66 @@
 
 ;;;;; Better defaults 
   (add-to-list 'org-latex-classes
-	       '("article"
+	       '("oldarticle"
 		 "\\documentclass[11pt,a4paper]{article}
   \\usepackage[utf8]{inputenc}
-  \\usepackage[T1]{fontenc}
   \\usepackage{fixltx2e}
-  \\usepackage{graphicx}
-  \\usepackage{longtable}
   \\usepackage{float}
-  \\usepackage{wrapfig}
-  \\usepackage{rotating}
   \\usepackage[normalem]{ulem}
-  \\usepackage{amsmath}
   \\usepackage{textcomp}
   \\usepackage{marvosym}
   \\usepackage{wasysym}
-  \\usepackage{amssymb}
-  \\usepackage{hyperref}
   \\usepackage{mathpazo}
-  \\usepackage{color}
   \\usepackage{enumerate}
+\\usepackage{color}
   \\definecolor{bg}{rgb}{0.95,0.95,0.95}
+  \\definecolor{commentsColor}{rgb}{0.497495, 0.497587, 0.497464}
+  \\definecolor{keywordsColor}{rgb}{0.000000, 0.000000, 0.635294}
+  \\definecolor{stringColor}{rgb}{0.558215, 0.000000, 0.135316}
+\\usepackage{listings}
   \\tolerance=1000
-	[NO-DEFAULT-PACKAGES]
 	[PACKAGES]
 	[EXTRA]
-  \\linespread{1.1}
-  \\hypersetup{pdfborder=0 0 0}"
+  \\linespread{1.2}"
+
 		 ("\\section{%s}" . "\\section*{%s}")
 		 ("\\subsection{%s}" . "\\subsection*{%s}")
 		 ("\\subsubsection{%s}" . "\\subsubsection*{%s}")
-		 ("\\paragraph{%s}" . "\\paragraph*{%s}")))
+		 ("\\paragraph{%s}" . "\\paragraph*{%s}\"")))
+
+  (add-to-list 'org-latex-classes
+               '("article"
+		 "\\documentclass[11pt,a4paper]{article}
+\\usepackage{lmodern}
+\\usepackage{geometry}
+\\usepackage{listings}
+\\usepackage{color}
+\\definecolor{commentsColor}{rgb}{0.497495, 0.497587, 0.497464}
+\\definecolor{keywordsColor}{rgb}{0.000000, 0.000000, 0.635294}
+\\definecolor{stringColor}{rgb}{0.558215, 0.000000, 0.135316}
+\\geometry{a4paper,left=2.5cm,top=2cm,right=2.5cm,bottom=2cm,marginparsep=7pt, marginparwidth=.6in}"
+
+		 ("\\section{%s}" . "\\section*{%s}")
+		 ("\\subsection{%s}" . "\\subsection*{%s}")
+		 ("\\subsubsection{%s}" . "\\subsubsection*{%s}")
+		 ("\\paragraph{%s}" . "\\paragraph*{%s}")
+		 ("\\subparagraph{%s}" . "\\subparagraph*{%s}")))
+
+  (setq org-latex-listings 'listings)
+  (setq org-latex-custom-lang-environments nil)
+
+  ;; options passed to listing for each codeblock
+  (setq org-latex-listings-options
+	'(("frame" "lines")
+          ("basicstyle" "\\footnotesize")
+	  ("showstringspaces" "false")
+          ("numbers" "left")
+          ("numberstyle" "\\tiny\\color{commentsColor}")
+	  ("commentstyle" "\\color{commentsColor}\\textit")
+	  ("keywordstyle" "\\color{keywordsColor}\\bfseries")
+	  ("stringstyle" "\\color{stringColor}")))
 
 
-  (add-to-list 'org-latex-classes '("ebook"
-				    "\\documentclass[11pt, oneside]{memoir}
-  \\setstocksize{9in}{6in}
-  \\settrimmedsize{\\stockheight}{\\stockwidth}{*}
-  \\setlrmarginsandblock{2cm}{2cm}{*} % Left and right margin
-  \\setulmarginsandblock{2cm}{2cm}{*} % Upper and lower margin
-  \\checkandfixthelayout
-  % Much more laTeX code omitted
-  "
-				    ("\\chapter{%s}" . "\\chapter*{%s}")
-				    ("\\section{%s}" . "\\section*{%s}")
-				    ("\\subsection{%s}" . "\\subsection*{%s}")))
 ;;;; init key bindings
   :init 
   (with-eval-after-load "org"
@@ -432,7 +421,7 @@
 	       ("M-m o i e" . bp/org-insert-latex-equation)
 	       ("M-l" . bp/org-insert-last-inline-latex))))
 
-;;; org-attach
+;;; Org-Attach
 (use-package org-attach 
   :defer t 
   :config 
@@ -510,6 +499,36 @@
 				 "* %?\nEntered on %U\n  %i\n  %a")
 				("n" "Note" entry (file "~/org/notes.org" )
 				 "* %?")
+				("d" "Drill" entry (file "~/drill.org" )
+				 "* %? :drill:%^g\nCREATED : %U\n %i\n %a")
+				("a" "Anki" entry (file "~/drill.org" )
+				 "* Card
+:PROPERTIES:
+:ANKI_NOTE_TYPE: Basic
+:ANKI_DECK: %^{ANKI_DECK|GK|Maths|CS|CE|Emacs|ShareMarket}
+:END:
+
+# CREATED : %U
+# %a
+
+** Front
+%?
+** Back
+%i")
+				("c" "Anki Cloze" entry (file "~/drill.org" )
+				 "* Card
+:PROPERTIES:
+:ANKI_NOTE_TYPE: Cloze
+:ANKI_DECK: %^{ANKI_DECK|GK|Maths|CS|CE|Emacs|ShareMarket}
+:END:
+
+# CREATED : %U
+# %a
+
+** Text
+%?
+** Extra
+%i")
 				("k" "Quote" item (file+headline "~/org/notes.org" "Quotes")
 				 "%? :: %x")
 				("thoughts" "Capture Thoughts in a heading at bottom of file" item (function capture-in-visited-org-file)
@@ -559,12 +578,15 @@
 ;;     (insert " ")
 ;;     ))
 
+;; (defun bp/lecture-position () 
+;;   (interactive)
+;;   (set-frame-width (selected-frame) 80)
+;;   (set-frame-height (selected-frame) 58))
+
 ;;; bp/org-company saner company setting for org mode 
 (defun  bp/org-company ()
   (interactive)
   (setf company-backends '(company-dabbrev)))
-
-
 ;;; Research
 ;;;; Org Ref
 (use-package org-ref
@@ -597,8 +619,9 @@
 
   ;; this makes org-ref use same format as bibtex-completion-notes-path
   (setf org-ref-notes-function 'org-ref-notes-function-many-files)
-  
-  (setf doi-utils-open-pdf-after-download t)
+
+  (setf doi-utils-open-pdf-after-download t
+	doi-utils-download-pdf nil)
   (require 'doi-utils-scihub)
   (setq dbus-debug nil))
 
@@ -663,25 +686,23 @@ cite:${=key=}
 (use-package org-roam
   :ensure t
   :defer t
+  ;;  :hook 
+  ;;  (after-init . org-roam-mode)
   :bind (:map org-roam-mode-map
 	      (("M-m r l" . org-roam)
 	       ("M-m r f" . org-roam-find-file)
 	       ("M-m r j" . org-roam-jump-to-index)
 	       ("M-m r b" . org-roam-switch-to-buffer)
-	       ("M-m r g" . org-roam-graph))
-	      :map bp/global-prefix-map
-	      (("r f" . org-roam-find-file))
+	       ("M-m r g" . org-roam-graph)
+	       ("M-m r f" . org-roam-find-file))
 	      :map org-mode-map
 	      (("M-m o r" . org-roam-insert)
 	       ("M-m r i" . org-roam-insert)
 	       ("M-m r t" . bp/org-roam-tags)
-	       ("M-m r a" . bp/org-roam-alias)
-	       ("M-m r d" . org-roam-db-build-cache)
-	       ("M-m r l" . org-roam)))
+	       ("M-m r a" . bp/org-roam-alias)))
   :config
   (setf org-roam-mode t)
-  (setq org-roam-directory
-	(if windows-system? "E:/Documents/synced/Notes/org/" "/mnt/Data/Documents/synced/Notes/org/"))
+  (setq org-roam-directory "~/org/")
   (when windows-system?
     (setq org-roam-list-files-commands '((find . "C:/tools/msys64/usr/bin/find.exe") rg)))
   (require 'ivy)
@@ -692,7 +713,7 @@ cite:${=key=}
 	       (expand-file-name "dbs/linux/org-roam.db" org-roam-directory))
 	      ((string-equal system-type "windows-nt")
 	       (expand-file-name "dbs/windows/org-roam.db" org-roam-directory))))
-
+  
   ;;  (add-hook 'org-mode-hook 'org-roam-mode)
   
   (defun bp/org-roam-headers (header)
@@ -715,7 +736,10 @@ cite:${=key=}
   
   (defun bp/org-roam-alias ()
     (interactive)
-    (bp/org-roam-headers "#+ROAM_ALIAS:")))
+    (bp/org-roam-headers "#+ROAM_ALIAS:"))
+  
+  ;; (add-hook 'after-init-hook 'org-roam-mode)
+  )
 
 ;;; Org roam server
 
@@ -751,8 +775,8 @@ cite:${=key=}
   (defun bp/org-download-file-formater (filename)
     "Asks the user for file name"
     (let* ((title (completing-read "Title:"  
-				 (list  (current-kill 0))
-				 nil nil))
+				   (list  (current-kill 0))
+				   nil nil))
 	   (slug (bp/title-to-slug title))
 	   (file (concatenate 'string (format-time-string "%Y%m%d%H%M%S-") slug ".png")))
       (setf bp/org-download-screenshot-title title)
@@ -802,3 +826,11 @@ Convert TITLE to a filename-suitable slug."
 	      (org-display-inline-images)
 	      (org--latex-preview-region (point-min) (point-max))))
   )
+
+(use-package org-noter 
+  :ensure t 
+  :defer t 
+  :config 
+  (setf org-noter-notes-search-path '("~/org/" "~/Documents/synced/BE/")
+	org-noter-doc-split-fraction '(0.8 0.2)))
+
