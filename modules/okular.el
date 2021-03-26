@@ -24,13 +24,13 @@
 (defun bp/okl-get-document-tab (document)
   (block function 
     (loop for service in (bp/okl-list-services) do 
-	  (let (tab-document
-		(base (file-name-base document)))  
+	  (let ((base (file-name-base document)))
 	    (loop for node in (dbus-introspect-get-all-nodes :session service "/") do 
 		  (when (string-match "^/okular[0-9]*$" node)
-		    (setf tab-document (file-name-base (bp/okl-get-document service node)))
-		    (when (string-equal tab-document base)
-		      (return-from function (values service node)))))))))
+		    (when-let* ((doc (bp/okl-get-document service node))
+				(tab-document (file-name-base doc)))
+		      (when (string-equal tab-document base)
+			(return-from function (values service node))))))))))
 
 (defun bp/okl-get-page-number (service node)
   (dbus-call-method :session service node "org.kde.okular" "currentPage"))
@@ -45,7 +45,8 @@
   (dbus-call-method :session service node "org.kde.okular" "reload"))
 
 (defun bp/okl-get-document (service node) 
-  (dbus-call-method :session service node "org.kde.okular" "currentDocument"))
+  (ignore-error dbus-error
+    (dbus-call-method :session service node "org.kde.okular" "currentDocument")))
 
 (defun bp/okl-save-note% (document page)
   (let ((prop-document (org-entry-get (point) "NOTER_DOCUMENT" t)))
@@ -54,16 +55,21 @@
 	(org-set-property "NOTER_DOCUMENT" (file-relative-name document (file-name-directory (buffer-file-name)))))
     (org-set-property "NOTE_PAGE" (format "%d" page))))
 
+(defvar bp/okl-ask-for-link-description nil)
 (defun bp/okl-save-note%-link (document page)
-  (insert "[["
-	  (file-relative-name document (file-name-directory (buffer-file-name)))
-	  "::"
-	  (format "%s" page) 
-	  "]["
-	  (file-name-base document) 
-	  " pg. "
-	  (format "%s" page) 
-	  "]]"))
+  (if bp/okl-ask-for-link-description
+      (let ((description (completing-read "Description:" (list (file-name-base (buffer-file-name))
+							       (format "%s" page)
+							       (current-kill 0)
+							       (file-name-base document)))))
+	(insert "[[./"
+		(file-relative-name document (file-name-directory (buffer-file-name)))
+		"::" (format "%s" page) 
+		"][" description "]]"))
+      (insert "[[./"
+	      (file-relative-name document (file-name-directory (buffer-file-name)))
+	      "::" (format "%s" page) 
+	      "][" (file-name-base document) " pg. " (format "%s" page) "]]")))
 
 (defun bp/okl-save-note (&optional link?)
   (interactive)
@@ -86,6 +92,11 @@
   (interactive)
   (bp/okl-save-note t))
 
+(defun bp/okl-save-note-as-link-ask-description ()
+  (interactive)
+  (let ((bp/okl-ask-for-link-description t))
+    (bp/okl-save-note t)))
+
 (defun bp/okl-note-link (file link)
   (multiple-value-bind (service node) (bp/okl-get-document-tab file)
     (let* ((match-location (string-match "::[0-9]+$" link))
@@ -107,7 +118,17 @@
 	  (bp/okl-set-page-number service node (string-to-number page))
 	 (start-process "okular" nil "/usr/bin/okular" "-p"  page document)))))
 
-(bind-keys :map bp/global-prefix-map
-	   ("n n" . bp/okl-save-note)
-	   ("n l" . bp/okl-save-note-as-link)
-	   ("n o" . bp/okl-open-note-page))
+(defun bp/okl-insert-heading ()
+  (interactive)
+  (org-insert-heading-after-current)
+  (bp/okl-save-note nil))
+
+(define-prefix-command 'bp/okl-notes-prefix-map)
+(define-key global-map (kbd "M-n") 'bp/okl-notes-prefix-map)
+
+(bind-keys :map bp/okl-notes-prefix-map
+	   ("n" . bp/okl-save-note)
+	   ("l" . bp/okl-save-note-as-link)
+	   ("o" . bp/okl-open-note-page)
+	   ("i" . bp/okl-insert-heading)
+	   ("d" . bp/okl-save-note-as-link-ask-description))
