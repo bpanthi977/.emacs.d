@@ -46,7 +46,7 @@
    "editor-config"
    "gui-config"
    "lisp-config"
-  
+   "programming-config"
    "make-config"
    "c-config"
    "csharp-config"
@@ -58,7 +58,7 @@
    ;; "android-config"
    "python-config"
    ;; "go-config"
-   "lsp-config"
+
    "web-config"
    "latex-config"
    "js-config"
