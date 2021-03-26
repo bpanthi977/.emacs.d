@@ -19,3 +19,11 @@ modules/*.elc
 
 /bookmarks
 /recentf
+/.extension/
+/.tutor/
+/emojis/
+/games/
+/request/
+/tramp
+/viper
+/modules/git-clones/
