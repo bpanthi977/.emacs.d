@@ -17,7 +17,6 @@
 (setq-default tab-always-indent 't)
 (setq-default tab-width 8)
 (setq tab-width 8)
-(setq-local)
 
 (setq-default indent-tabs-mode t)
 ;; disable annoying blink-matching-paren

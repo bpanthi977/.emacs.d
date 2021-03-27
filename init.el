@@ -3,7 +3,7 @@
 ;; installed packages.  Don't delete this line.  If you don't want it,
 ;; just comment it out by adding a semicolon to the start of the line.
 ;; You may delete these explanatory comments.
-(setq source-directory "/home/bpanthi/Dev/emacs")
+;;(setq source-directory "/home/bpanthi/Dev/emacs")
 (setq load-prefer-newer t)
 (setq debug-on-error t)
 (defvar init-dir (file-name-directory load-file-name)
@@ -34,7 +34,8 @@
 
 ;;Load custom file
 (setf custom-file (expand-file-name "custom.el" init-dir))
-(load-file (expand-file-name "custom.el" init-dir))
+(if (file-exists-p custom-file)
+    (load-file custom-file))
 
 ;; Declare modules to load 
 (defvar load-modules-list
