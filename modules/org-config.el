@@ -1,5 +1,5 @@
 ;; -*- eval: (outshine-mode); -*-
-
+(require 'cl)
 ;;; Org mode 
 (use-package org
 ;;;; Bindings and hooks 
@@ -17,7 +17,7 @@
 	      ("C-c C-c" . org-edit-src-exit))
   :hook (org-mode . (lambda ()
 		      (org-content 2)
-		      (org-cdlatex-mode)
+		      ;;(org-cdlatex-mode)
 		      (electric-indent-mode -1)
 		      (setq ispell-parser 'tex)))
   :config
@@ -27,7 +27,7 @@
   (modify-syntax-entry ?$ "$$" org-mode-syntax-table)
   (setf org-pretty-entities-include-sub-superscripts nil)
   (require 'ox-latex)
-  (require 'cdlatex)
+;;  (require 'cdlatex)
   (require 'org-attach)
   ;;(require 'org-ref)
   (require 'org-id)
@@ -46,7 +46,7 @@
   ;; from https://gongzhitaao.org/orgcss/org.css
   (setq org-html-htmlize-output-type 'css)
   (setq org-html-head-include-default-style nil)
-  (setq org-html-head-extra (concatenate 'string "<link rel=\"stylesheet\" href=\"file:///" (expand-file-name "modules/org.css" init-dir) "\">"))
+  (setq org-html-head-extra (concat "<link rel=\"stylesheet\" href=\"file:///" (expand-file-name "modules/org.css" init-dir) "\">"))
   
 
   (defun bp/org-view-html-export () 
@@ -77,6 +77,7 @@
   (smartrep-define-key bp/org-prefix-map
       ""
     '(("	" . bp/org-just-show-this)
+      ("e" . org-show-entry)
       ("t" . bp/org-just-show-this)
       ("f" . org-forward-heading-same-level)
       ("b" . org-backward-heading-same-level)
@@ -201,7 +202,7 @@
 								(pcase (org-collect-keywords '("TITLE"))
 								  (`(("TITLE" . ,val))
 								   val)))))))
-      (make-symbolic-link (buffer-file-name) (concatenate 'string "~/org/" name ".org"))))
+      (make-symbolic-link (buffer-file-name) (concat "~/org/" name ".org"))))
   ;; org config complete
   )
 
@@ -778,7 +779,7 @@ cite:${=key=}
 				   (list  (current-kill 0))
 				   nil nil))
 	   (slug (bp/title-to-slug title))
-	   (file (concatenate 'string (format-time-string "%Y%m%d%H%M%S-") slug ".png")))
+	   (file (concat (format-time-string "%Y%m%d%H%M%S-") slug ".png")))
       (setf bp/org-download-screenshot-title title)
       file))
 
@@ -802,7 +803,7 @@ Convert TITLE to a filename-suitable slug."
   (defun bp/org-download-annotate-with-title (link)
     (prog1
 	(when bp/org-download-screenshot-title
-	  (concatenate 'string  "#+CAPTION: " bp/org-download-screenshot-title "\n"))
+	  (concat  "#+CAPTION: " bp/org-download-screenshot-title "\n"))
       (setf bp/org-download-screenshot-title nil)))
 
   (setq org-download-method 'attach 
@@ -812,8 +813,8 @@ Convert TITLE to a filename-suitable slug."
   
   :init 
   (bind-keys :map bp/global-prefix-map 
-	     ("o d s" . org-download-screenshot))
-  (global-set-key (kbd "M-s") 'org-download-screenshot))
+	     ("o d s" . org-download-screenshot)))
+
 
 ;;; org-present
 (use-package org-present
