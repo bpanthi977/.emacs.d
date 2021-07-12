@@ -5,12 +5,12 @@
   (company-auto-complete t)
   (company-auto-complete-chars "")
 
-  (company-idle-delay 1)
+  (company-idle-delay 0.2)
   (company-minimum-prefix-length 2)
   (company-quickhelp-color-background "#4F4F4F")
   (company-quickhelp-color-foreground "#DCDCCC")
 
-  (company-require-match nil) ()
+  (company-require-match nil) 
   (company-tooltip-flip-when-above t)
   (company-tooltip-limit 10)
 
@@ -19,12 +19,12 @@
   (company-tooltip-flip-when-above t)
   :init
   (setf company-frontends
-	'(company-echo-frontend company-pseudo-tooltip-frontend company-echo-metadata-frontend company-preview-if-just-one-frontend))
+        '(company-echo-frontend company-pseudo-tooltip-frontend company-echo-metadata-frontend company-preview-if-just-one-frontend))
 
   ;; Enable Company
   (global-company-mode 1)
   ;; bind Tab key to company completion with indent
-  (define-key company-mode-map [remap indent-for-tab-command] #'company-indent-or-complete-common)
+  ;;(define-key company-mode-map [remap indent-for-tab-command] #'company-indent-or-complete-common)
   
   (bind-keys :map company-active-map
 	     ("M-n" . company-select-next)
