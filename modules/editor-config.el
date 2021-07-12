@@ -1,5 +1,9 @@
 (setq exec-path (append '("/home/bpanthi/.local/bin") exec-path))
 
+(use-package emojify
+  :ensure t
+  :defer t)
+
 ;; Newline at end of file
 (setq require-final-newline t)
 ;; delete the selection with a keypress
@@ -17,6 +21,7 @@
 (setq-default tab-always-indent 't)
 (setq-default tab-width 8)
 (setq tab-width 8)
+
 
 (setq-default indent-tabs-mode t)
 ;; disable annoying blink-matching-paren
@@ -189,6 +194,7 @@ buffer is not visiting a file."
 
 ;; Magit
 (use-package magit
+  :ensure t
   :defer t
   :init 
   (setf transient-history-file (concat savefile-dir "/transient/history.el")))

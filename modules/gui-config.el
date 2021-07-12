@@ -59,6 +59,9 @@
 	(eval (third theme)))))
 
 ;;(load-todays-theme)
+(unless (package-installed-p 'spacemacs)
+  (package-install 'spacemacs-theme))
+
 (load-theme 'spacemacs-dark)
 
 (defun wolfe/pretty-symbol-push-default ()
@@ -87,15 +90,12 @@
 ;; (font-sp.. ) = use Symbola font
 ;; (set-fontset-font t nil (font-spec :family "Noto Color Emoji"))
 
-;; (custom-set-faces
-;;  ;; custom-set-faces was added by Custom.
-;;  ;; If you edit it by hand, you could mess it up, so be careful.
-;;  ;; Your init file should contain only one such instance.
-;;  ;; If there is more than one, they won't work right.
-;;  '(default ((t (:inherit nil :stipple nil
-;; 			 ;;:background "#3F3F3F" :foreground "#DCDCCC"
-;; 			 :inverse-video nil :box nil :strike-through nil :overline nil :underline nil :slant normal :weight semibold ;; :height 90
-;; 			 :width normal :foundry "ADBO" :family "Source Code Pro")))))
-
 (custom-set-faces
- '(default ((t :height 120))))
+ ;; custom-set-faces was added by Custom.
+ ;; If you edit it by hand, you could mess it up, so be careful.
+ ;; Your init file should contain only one such instance.
+ ;; If there is more than one, they won't work right.
+ '(default ((t (:inherit nil :stipple nil
+			 ;;:background "#3F3F3F" :foreground "#DCDCCC"
+			 :inverse-video nil :box nil :strike-through nil :overline nil :underline nil :slant normal :weight normal ;; :height 90
+			 :width normal :foundry "ADBO" :family "Source Code Pro")))))

@@ -5,12 +5,12 @@
   (company-auto-complete t)
   (company-auto-complete-chars "")
 
-  (company-idle-delay 0.2)
+  (company-idle-delay 1)
   (company-minimum-prefix-length 2)
   (company-quickhelp-color-background "#4F4F4F")
   (company-quickhelp-color-foreground "#DCDCCC")
 
-  (company-require-match nil)
+  (company-require-match nil) ()
   (company-tooltip-flip-when-above t)
   (company-tooltip-limit 10)
 

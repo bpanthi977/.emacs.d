@@ -56,6 +56,8 @@
 (global-set-key (kbd "C-q") 'quoted-insert)
 (global-set-key (kbd "C-z") 'undo)
 
+(global-set-key (kbd "C-v") 'view-mode)
+
 (smartrep-define-key bp/global-prefix-map "e"
   '(("s" . cycle-spacing)))
 
