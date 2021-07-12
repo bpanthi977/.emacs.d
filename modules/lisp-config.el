@@ -32,6 +32,11 @@
          (setf inferior-lisp-program "sbcl --core /home/bpanthi/.cache/common-lisp/core --dynamic-space-size 2560"
                common-lisp-hyperspec-root "file:///home/bpanthi/Dev/lisp/HyperSpec-7-0/HyperSpec/")))
 
+  (defun slime-sbcl ()
+    (interactive)
+    (let ((inferior-lisp-program "sbcl"))
+      (slime)))
+
   (setq slime-contribs '(slime-asdf slime-banner slime-fancy slime-hyperdoc
                                     ;;slime-repl-ansi-color
                                     slime-macrostep slime-mrepl slime-quicklisp
