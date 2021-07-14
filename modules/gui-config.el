@@ -62,7 +62,20 @@
 (unless (package-installed-p 'spacemacs)
   (package-install 'spacemacs-theme))
 
-(load-theme 'spacemacs-dark)
+;;; when emacsclient is started by systemd graphics mode is set
+;;; to terminal and thus spacemacs loads a non true-color theme
+;;; which looks dull.
+;;; Here I load spacemacs-common file where #'ture-color-p is
+;;; defined, then temporarily set it to return t and load
+;;; spacemacs-dark-theme
+(let ((true-color-p* (symbol-function 'true-color-p)))
+  (require 'spacemacs-common)
+  (setf (symbol-function 'true-color-p) (lambda () t))
+  (unwind-protect (progn
+                    (message "loading theme")
+                    (message "ture color p %s" (true-color-p))
+                    (load-theme 'spacemacs-dark))
+    (setf (symbol-function 'true-color-p) true-color-p*)))
 
 (defun wolfe/pretty-symbol-push-default ()
   (push '("!=" . ?≠) prettify-symbols-alist)
