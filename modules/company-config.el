@@ -5,7 +5,7 @@
   (company-auto-complete t)
   (company-auto-complete-chars "")
 
-  (company-idle-delay 0.2)
+  (company-idle-delay 0.1)
   (company-minimum-prefix-length 2)
   (company-quickhelp-color-background "#4F4F4F")
   (company-quickhelp-color-foreground "#DCDCCC")
@@ -37,11 +37,15 @@
   :custom
   (company-quickhelp-color-background "#4F4F4F")
   (company-quickhelp-color-foreground "#DCDCCC")
-  (company-quickhelp-delay 0.1)
+  (company-quickhelp-delay 0.2)
   (company-quickhelp-mode t)
   (company-quickhelp-use-propertized-text t)
   :config 
   (add-to-list 'company-frontends 'company-quickhelp-frontend))
+
+;;; for some unknown reason
+;;; company-quickhelp-delay >= company-ideal-delay + 0.1
+;;; otherwise completion in slime throws error "Reply to canceled synchoronous eval request"
 
 (use-package helm-dash
   :ensure t
