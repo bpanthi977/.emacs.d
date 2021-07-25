@@ -1,7 +1,19 @@
 (use-package lsp-dart
   :ensure t
-  :hook (dart-mode . lsp)
+  :defer t
   :config
+  (require 'dart-mode)
+  (define-key dart-mode-map (kbd "C-j") #'newline)
+  (define-key dart-mode-map (kbd "M-m d d") #'lsp-ui-doc-glance)
+  (define-key dart-mode-map (kbd "M-m d D") #'lsp-ui-doc-show)
+
+  (setq lsp-dart-flutter-widget-guides nil
+	lsp-dart-flutter-outline nil
+	lsp-dart-outline nil
+	lsp-dart-closing-labels nil
+	lsp-dart-suggest-from-unimported-libraries t)
+
+
   (setq exec-path (append '("/home/bpanthi/Apps/flutter/bin")
 			exec-path))
   (setenv "PATH" (concat "/home/bpanthi/Apps/flutter/bin:"
@@ -10,10 +22,15 @@
 	lsp-dart-flutter-sdk-dir "/home/bpanthi/Apps/flutter/")
   (require 'helm-dash)
   (add-hook 'dart-mode-hook (lambda ()
-			      (setq-local helm-dash-common-docsets '("Dart" "flutter"))
-			      (dash-docs-reset-connections)))
+			      (electric-indent-mode)
+			      (lsp)
+			      (helm-dash-activate-docset "Dart")
+			      (helm-dash-activate-docset "flutter")))
 
-
+  (define-key dart-mode-map (kbd "M-l") lsp-command-map)
+  (define-key dart-mode-map (kbd "M-l l") #'lsp-dart-dap-flutter-hot-reload)
+  (define-key dart-mode-map (kbd "M-l M-l") #'lsp-dart-dap-flutter-hot-restart)
+  
   ;;; ignore `lsp-dart-flutter-daemon-current-device' value and launch device anyway 
   ;;; the first time device is launched it doesn't work 
   ;;; it was necessary to do this or run `flutter run -d emulator-5554' in the terminal from the project directory 

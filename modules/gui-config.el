@@ -35,31 +35,47 @@
 ;; show available keybindings after you start typing
 (use-package which-key
   :ensure t
-  :config 
+  :config
   (which-key-mode +1))
 
 (require 'calendar)
-(defun load-todays-theme () 
+(defun load-todays-theme ()
   (let* ((theme-list '((spacemacs-theme spacemacs-dark)
-		       (solarized-theme solarized-zenburn)
-		       (monokai-pro-theme monokai-pro
-					  '(set-face-foreground font-lock-variable-name-face "light sea green"))
-		       (solarized-theme solarized-dark)
-		       (color-theme-sanityinc-tomorrow sanityinc-tomorrow-eighties)
-		       (solarized-theme solarized-gruvbox-dark)
-		       (color-theme-sanityinc-tomorrow sanityinc-tomorrow-night)
-		       (zenburn-theme zenburn)))
-	 (n (length theme-list))
-	 (day (calendar-day-number (calendar-current-date)))
-	 theme)
+                       (solarized-theme solarized-zenburn)
+                       (monokai-pro-theme monokai-pro
+                                          '(set-face-foreground font-lock-variable-name-face "light sea green"))
+                       (solarized-theme solarized-dark)
+                       (color-theme-sanityinc-tomorrow sanityinc-tomorrow-eighties)
+                       (solarized-theme solarized-gruvbox-dark)
+                       (color-theme-sanityinc-tomorrow sanityinc-tomorrow-night)
+                       (zenburn-theme zenburn)))
+         (n (length theme-list))
+         (day (calendar-day-number (calendar-current-date)))
+         theme)
     (setf day (mod day n))
     (setf theme (nth day theme-list))
     (load-theme (nth 1 theme) t)
     (if (third theme)
-	(eval (third theme)))))
+        (eval (third theme)))))
 
 ;;(load-todays-theme)
-(load-theme 'spacemacs-dark)
+(unless (package-installed-p 'spacemacs)
+  (package-install 'spacemacs-theme))
+
+;;; when emacsclient is started by systemd graphics mode is set
+;;; to terminal and thus spacemacs loads a non true-color theme
+;;; which looks dull.
+;;; Here I load spacemacs-common file where #'ture-color-p is
+;;; defined, then temporarily set it to return t and load
+;;; spacemacs-dark-theme
+(let ((true-color-p* (symbol-function 'true-color-p)))
+  (require 'spacemacs-common)
+  (setf (symbol-function 'true-color-p) (lambda () t))
+  (unwind-protect (progn
+                    (message "loading theme")
+                    (message "ture color p %s" (true-color-p))
+                    (load-theme 'spacemacs-dark))
+    (setf (symbol-function 'true-color-p) true-color-p*)))
 
 (defun wolfe/pretty-symbol-push-default ()
   (push '("!=" . ?≠) prettify-symbols-alist)
@@ -79,7 +95,7 @@
 ;; (use-package zenburn-theme
 ;;   :ensure t
 ;;   :demand
-;;   :config 
+;;   :config
 ;;   (load-theme 'zenburn t))
 
 ;; Symbola font does the job for emoji
@@ -87,15 +103,12 @@
 ;; (font-sp.. ) = use Symbola font
 ;; (set-fontset-font t nil (font-spec :family "Noto Color Emoji"))
 
-;; (custom-set-faces
-;;  ;; custom-set-faces was added by Custom.
-;;  ;; If you edit it by hand, you could mess it up, so be careful.
-;;  ;; Your init file should contain only one such instance.
-;;  ;; If there is more than one, they won't work right.
-;;  '(default ((t (:inherit nil :stipple nil
-;; 			 ;;:background "#3F3F3F" :foreground "#DCDCCC"
-;; 			 :inverse-video nil :box nil :strike-through nil :overline nil :underline nil :slant normal :weight semibold ;; :height 90
-;; 			 :width normal :foundry "ADBO" :family "Source Code Pro")))))
-
 (custom-set-faces
- '(default ((t :height 120))))
+ ;; custom-set-faces was added by Custom.
+ ;; If you edit it by hand, you could mess it up, so be careful.
+ ;; Your init file should contain only one such instance.
+ ;; If there is more than one, they won't work right.
+ '(default ((t (:inherit nil :stipple nil
+                         ;;:background "#3F3F3F" :foreground "#DCDCCC"
+                         :inverse-video nil :box nil :strike-through nil :overline nil :underline nil :slant normal :weight normal ;; :height 90
+                         :width normal :foundry "ADBO" :family "Source Code Pro")))))

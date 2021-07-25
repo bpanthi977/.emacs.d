@@ -71,8 +71,7 @@
 	      "::" (format "%s" page) 
 	      "][" (file-name-base document) " pg. " (format "%s" page) "]]")))
 
-(defun bp/okl-save-note (&optional link?)
-  (interactive)
+(defun bp/okular-document ()
   (let* ((okl-services (bp/okl-list-services))
 	 (nodes-tabs (loop for s in okl-services collect (bp/okl-get-active-tab s))))
     (let* ((tabs (map 'list #'second nodes-tabs))
@@ -84,9 +83,28 @@
 	   (node (first (nth n nodes-tabs)))
 	   (document (bp/okl-get-document service node))
 	   (page (bp/okl-get-page-number service node)))
-      (if link? 
-	  (bp/okl-save-note%-link document page)
-        (bp/okl-save-note% document page)))))
+      (values document page))))
+
+(defun bp/okl-save-note (&optional link?)
+  (interactive)
+  (multiple-value-bind (document page) (bp/okular-document)
+    (if link? 
+	(bp/okl-save-note%-link document page)
+      (bp/okl-save-note% document page))))
+
+(defun bp/okular-note ()
+  (interactive)
+  (multiple-value-bind (document page) (bp/okular-document)
+    (declare (ignore page))
+    (when-let* ((orgfile (and document (concat (file-name-directory document) (file-name-base document) ".org"))))
+      (if (file-exists-p orgfile)
+          (find-file orgfile)
+        (progn
+          (find-file orgfile)
+          (insert ":PROPERTIES:\n" ":NOTER_DOCUMENT: " (file-name-nondirectory document) "\n:END:\n")
+          (insert "#+TITLE: " (file-name-base document) "\n"))))))
+
+
 
 (defun bp/okl-save-note-as-link () 
   (interactive)
@@ -132,3 +150,6 @@
 	   ("o" . bp/okl-open-note-page)
 	   ("i" . bp/okl-insert-heading)
 	   ("d" . bp/okl-save-note-as-link-ask-description))
+
+(bind-keys :map bp/global-prefix-map
+           ("o n" . bp/okular-note))
