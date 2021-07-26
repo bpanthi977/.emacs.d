@@ -42,11 +42,15 @@
         (make-directory pub-dir))))
 ;;;;; Blog
 (require 'ox-publish)
+(setf org-babel-default-header-args '((:session . "none") (:results . "replace") (:exports . "both")
+                                      (:eval . "never-export")
+                                      (:cache . "no") (:noweb . "no") (:hlines . "no") (:tangle . "no")))
+
 (defun bp/org-publish-find-date (file project)
   (let ((file (org-publish--expand-file-name file project)))
-    (or (org-publish-cache-get-file-property file :date nil t)
+    (or (org-publish-cache-get-file-property file :sitemap-date nil t)
         (org-publish-cache-set-file-property
-         file :date
+         file :sitemap-date
          (if (file-directory-p file)
              (file-attribute-modification-time (file-attributes file))
            (let ((date (org-publish-find-property file :date project)))
@@ -82,6 +86,14 @@ representation for the files to include, as returned by
           "\n\n"
 	  (org-list-to-org list)))
 
+(defun bp/org-html-preamble (export-options)
+  (let ((date (org-export-get-date export-options)))
+    (if date 
+        (concat "<p class=\"date\">Date: "
+                (org-export-data date export-options)
+                "</p>")
+      "")))
+
 (setq org-publish-project-alist
       '(
         ("blog-org"
@@ -93,6 +105,8 @@ representation for the files to include, as returned by
          :publishing-function org-html-publish-to-html
          :headline-levels 4             ; Just the default for this project.
          :auto-preamble t
+         :html-preamble bp/org-html-preamble ;; org-html-preamble
+         :html-postamble nil
          :auto-sitemap t
          :sitemap-filename "sitemap.org"
          :sitemap-title "Bibek Panthi"
