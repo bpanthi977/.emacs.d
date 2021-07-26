@@ -72,6 +72,16 @@
          (file-name-nondirectory (directory-file-name entry)))
         (t entry)))
 
+(defun bp/org-publish-sitemap (title list)
+  "Sitem map, as a string.
+TITLE is the title of the site map.  LIST is an internal
+representation for the files to include, as returned by
+`org-list-to-lisp'."
+  (concat "#+TITLE: " title "\n"
+          "#+SETUPFILE: ./templates/sitemap.org"
+          "\n\n"
+	  (org-list-to-org list)))
+
 (setq org-publish-project-alist
       '(
         ("blog-org"
@@ -87,6 +97,7 @@
          :sitemap-filename "sitemap.org"
          :sitemap-title "Bibek Panthi"
          :sitemap-sort-files anti-chronologically
+         :sitemap-function bp/org-publish-sitemap
          :sitemap-format-entry bp/org-publish-sitemap-entry
          )
         ("blog-static"
