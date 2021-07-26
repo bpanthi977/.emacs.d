@@ -40,6 +40,68 @@
       (setq pub-dir org-export-output-directory-prefix)
       (when (not (file-directory-p pub-dir))
         (make-directory pub-dir))))
+;;;;; Blog
+(require 'ox-publish)
+(defun bp/org-publish-find-date (file project)
+  (let ((file (org-publish--expand-file-name file project)))
+    (or (org-publish-cache-get-file-property file :date nil t)
+        (org-publish-cache-set-file-property
+         file :date
+         (if (file-directory-p file)
+             (file-attribute-modification-time (file-attributes file))
+           (let ((date (org-publish-find-property file :date project)))
+             ;; DATE is a secondary string.  If it contains
+             ;; a time-stamp, convert it to internal format.
+             ;; Otherwise, use FILE modification time.
+             (cond (date
+                    (let* ((date* (ignore-errors
+                                    (org-time-string-to-time (org-no-properties (first date))))))
+                      (or date*
+                          (error "Invalid time string ~a" (org-no-properties (first date))))))
+                   ((file-exists-p file)
+                    (file-attribute-modification-time (file-attributes file)))
+                   (t (error "No such file: \"%s\"" file)))))))))
+
+(defun bp/org-publish-sitemap-entry (entry style project)
+  (cond ((not (directory-name-p entry))
+         (format "%s [[file:%s][%s]]"
+                 (format-time-string "%b %d, %Y" (bp/org-publish-find-date entry project))
+                 entry
+                 (org-publish-find-title entry project)))
+        ((eql style 'tree)
+         (file-name-nondirectory (directory-file-name entry)))
+        (t entry)))
+
+(setq org-publish-project-alist
+      '(
+        ("blog-org"
+         :base-directory "~/org/blog/"
+         :exclude "templates/*"
+         :base-extension "org"
+         :publishing-directory "~/Development/Web/Blog/blog/"
+         :recursive t
+         :publishing-function org-html-publish-to-html
+         :headline-levels 4             ; Just the default for this project.
+         :auto-preamble t
+         :auto-sitemap t
+         :sitemap-filename "sitemap.org"
+         :sitemap-title "Bibek Panthi"
+         :sitemap-sort-files anti-chronologically
+         :sitemap-format-entry bp/org-publish-sitemap-entry
+         )
+        ("blog-static"
+         :base-directory "~/org/blog/"
+         :base-extension "css\\|js\\|png\\|jpg\\|gif\\|pdf\\|mp3\\|ogg\\|swf\\|svg"
+         :publishing-directory "~/Development/Web/Blog/blog/"
+         :recursive t
+         :publishing-function org-publish-attachment
+         )
+        ("blog" :components ("blog-org" "blog-static"))
+      ))
+
+(defun bp/org-upload-blog ()
+  (interactive)
+  (async-shell-command "~/Development/Web/Blog/syncFtp.sh"))
 
 ;;;;; Html Export Theming 
   ;; org html CSS theme
@@ -47,7 +109,7 @@
   (setq org-html-htmlize-output-type 'css)
   (setq org-html-head-include-default-style nil)
   (setq org-html-head-extra (concat "<link rel=\"stylesheet\" href=\"file:///" (expand-file-name "modules/org.css" init-dir) "\">"))
-  
+  (setq org-html-validation-link nil)
 
   (defun bp/org-view-html-export () 
     (interactive)
