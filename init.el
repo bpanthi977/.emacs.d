@@ -30,7 +30,10 @@
 ;; warn when opening files bigger than 100MB
 (setq large-file-warning-threshold 100000000)
 
-(defvar windows-system? (if (string-equal system-name "windows/nt") t nil))
+(defvar windows-system? (if (or (string-equal system-name "windows/nt")
+			   (string-equal system-type "windows-nt"))
+		       t nil))
+
 
 ;;Load custom file
 (setf custom-file (expand-file-name "custom.el" init-dir))
