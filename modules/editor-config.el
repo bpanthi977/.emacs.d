@@ -129,11 +129,28 @@ buffer is not visiting a file."
   :defer t
   :config
   (require 'counsel-projectile)
+  
+  (defun bp/projectile-find-common-lisp-root (dir)
+    (if (directory-files dir nil ".asd$")
+        dir
+      (let ((parent (file-name-directory (directory-file-name dir))))
+        (unless (or (string-match locate-dominating-stop-dir-regexp dir)
+                    (equal dir parent))
+          (bp/projectile-find-common-lisp-root parent)))))
+
+  (push #'bp/projectile-find-common-lisp-root projectile-project-root-functions)
   :init 
   (setq projectile-indexing-method 'alien)
   (setq projectile-enable-caching t)
   (setq projectile-cache-file (concat init-dir "cache/projectile.cache")
 	projectile-known-projects-file (concat savefile-dir "/projectile-bookmarks.eld"))
+
+  (defun bp/projectile-whitespace-cleanup () 
+    (interactive)
+    (dolist (b (projectile-project-buffers))
+      (with-current-buffer b
+	(ignore-errors (whitespace-cleanup)))))
+
   :bind-keymap ("M-P" . projectile-command-map))
 
 (use-package counsel-projectile
