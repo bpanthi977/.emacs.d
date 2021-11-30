@@ -96,15 +96,13 @@
   (interactive)
   (multiple-value-bind (document page) (bp/okular-document)
     (declare (ignore page))
-    (when-let* ((orgfile (and document (concat (file-name-directory document) (file-name-base document) ".org"))))
+    (when-let* ((orgfile (and document (concat (file-name-directory (file-truename document)) (file-name-base document) ".org"))))
       (if (file-exists-p orgfile)
           (find-file orgfile)
         (progn
           (find-file orgfile)
           (insert ":PROPERTIES:\n" ":NOTER_DOCUMENT: " (file-name-nondirectory document) "\n:END:\n")
           (insert "#+TITLE: " (file-name-base document) "\n"))))))
-
-
 
 (defun bp/okl-save-note-as-link () 
   (interactive)
