@@ -40,7 +40,7 @@
   :init
   (setq lsp-keymap-prefix "M-m l")
   :config
-  
+  (setq lsp-enable-file-watchers nil)
   (setq read-process-output-max (* 1024 1024))
   (setq lsp-idle-delay 3)
   (setq flycheck-check-syntax-automatically '(save idle-change)
