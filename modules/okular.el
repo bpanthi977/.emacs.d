@@ -144,6 +144,7 @@
 
 (bind-keys :map bp/okl-notes-prefix-map
 	   ("n" . bp/okl-save-note)
+           ("N" . bp/okular-note)
 	   ("l" . bp/okl-save-note-as-link)
 	   ("o" . bp/okl-open-note-page)
 	   ("i" . bp/okl-insert-heading)

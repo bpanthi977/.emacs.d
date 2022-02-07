@@ -46,7 +46,7 @@
                         (flet ((file? (name)
                                       (let ((path (concat source name)))
                                         (when (file-exists-p path)
-                                          (concat "--filter-from " path " ")))))
+                                          (concat "--filter-from \"" path "\" ")))))
                           (or (file? ".rclone-filter0")
                               (file? ".rclone-filter")
                               ""))

@@ -142,7 +142,7 @@ buffer is not visiting a file."
   :init
   (setq projectile-indexing-method 'alien)
   (setq projectile-enable-caching t)
-  (setq projectile-cache-file (concat init-dir "cache/projectile.cache")
+  (setq projectile-cache-file (concat init-dir ".cache/projectile.cache")
         projectile-known-projects-file (concat savefile-dir "/projectile-bookmarks.eld"))
 
   (defun bp/projectile-whitespace-cleanup ()
