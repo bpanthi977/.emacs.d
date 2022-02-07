@@ -128,31 +128,58 @@ representation for the files to include, as returned by
   (interactive)
   (async-shell-command "~/Development/Web/Blog/syncFtp.sh"))
 
-;;;;; Html Export Theming 
+;;;;; Html Export Theming
+(defun bp/load-css-from-file (file)
+  (message "Loading org html export css")
+  (with-temp-buffer
+    (insert "<style>\n")
+    (insert-file-contents file)
+    (goto-char (point-max))
+    (insert "</style>\n")
+    (buffer-string)))
+(defun bp/last-modified-time (file)
+  (file-attribute-modification-time (file-attributes file)))
+
+(defvar bp/org-html-css nil)
+(defvar bp/org-html-loaded-timestamp nil)
+(defun bp/org-html-css ()
+  (let* ((file (expand-file-name "modules/org.css" init-dir))
+         (current-timestamp (bp/last-modified-time file)))
+    (unless (equal bp/org-html-loaded-timestamp current-timestamp)
+      (setf bp/org-html-css (bp/load-css-from-file file)
+            bp/org-html-loaded-timestamp current-timestamp))
+    bp/org-html-css))
+
   ;; org html CSS theme
   ;; from https://gongzhitaao.org/orgcss/org.css
   (setq org-html-htmlize-output-type 'css)
   (setq org-html-head-include-default-style nil)
-  (setq org-html-head-extra (concat "<link rel=\"stylesheet\" href=\"file:///" (expand-file-name "modules/org.css" init-dir) "\">"))
+
+  (defadvice org-html-export-to-html (before html-export-load-css1 activate)
+    (setq org-html-head-extra (bp/org-html-css))
+
+  (defadvice org-html-export-as-html (before html-export-load-css2 activate)
+    (setq org-html-head-extra (bp/org-html-css)))
+
   (setq org-html-validation-link nil)
 
-  (defun bp/org-view-html-export () 
+  (defun bp/org-view-html-export ()
     (interactive)
     (let ((org-export-show-temporary-export-buffer nil))
       (org-html-export-as-html nil)
       (browse-url-of-buffer "*Org HTML Export*")))
 
-;;;;; Comments in between paragraphs 
+;;;;; Comments in between paragraphs
   ;; This allows comments in between a paragraph
   (defun delete-org-comments (backend)
     (loop for comment in (reverse (org-element-map (org-element-parse-buffer)
-				      'comment 'identity))
-	  do
-	  (setf (buffer-substring (org-element-property :begin comment)
-				  (org-element-property :end comment))
-		"")))
+                                      'comment 'identity))
+          do
+          (setf (buffer-substring (org-element-property :begin comment)
+                                  (org-element-property :end comment))
+                "")))
   (add-hook 'org-export-before-processing-hook 'delete-org-comments)
-;;;; Better Org Outline bindings for show/hide while navigating 
+;;;; Better Org Outline bindings for show/hide while navigating
   (defun bp/org-just-show-this ()
     (interactive)
     (org-content 2)
