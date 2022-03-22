@@ -52,8 +52,7 @@
                               ""))
                         (or extra-commands ""))))
     (message command)
-    (rclone--async-shell-command command)
-    ))
+    (rclone--async-shell-command command)))
 
 (defun rclone--async* (command source target &optional args)
   (unless (member command '("2way" "copy" "sync" "rcopy"))

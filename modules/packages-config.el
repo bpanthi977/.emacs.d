@@ -32,3 +32,4 @@
 
 (setq use-package-verbose t)
 
+;;(setf package-check-signature nil)

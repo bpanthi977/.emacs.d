@@ -150,11 +150,7 @@ representation for the files to include, as returned by
             bp/org-html-loaded-timestamp current-timestamp))
     bp/org-html-css))
 
-  ;; org html CSS theme
-  ;; from https://gongzhitaao.org/orgcss/org.css
-  (setq org-html-htmlize-output-type 'css)
-  (setq org-html-head-include-default-style nil)
-
+;;;;; Html Export Theming
   (defadvice org-html-export-to-html (before html-export-load-css1 activate)
     (setq org-html-head-extra (bp/org-html-css))
 
@@ -162,6 +158,7 @@ representation for the files to include, as returned by
     (setq org-html-head-extra (bp/org-html-css)))
 
   (setq org-html-validation-link nil)
+
 
   (defun bp/org-view-html-export ()
     (interactive)
@@ -319,6 +316,14 @@ representation for the files to include, as returned by
       (make-symbolic-link (buffer-file-name) (concat "~/org/" name ".org"))))
   ;; org config complete
   )
+
+(use-package org-id
+  :defer t
+  :config
+  (setf org-id-locations-file-relative t
+        org-id-locations-file (expand-file-name ".org-id-locations" savefile-dir))
+  (defun bp/org-id-update-note-ids ()
+    (org-id-update-id-locations (directory-files-recursively "~/org" "?*.org"))))
 
 ;;; Org Latex
 
@@ -573,9 +578,8 @@ representation for the files to include, as returned by
               ("o a" . org-agenda))
   :config
   (setq org-agenda-files (list "~/org/notes.org"
-                               "~/org/tasks.org"
-                               "~/org/programming.org"
-                               )))
+                               "~/org/tasks.org")))
+
 ;;; Org capture
 (use-package org-capture
   :defer t
@@ -742,28 +746,28 @@ representation for the files to include, as returned by
   (setq dbus-debug nil))
 
 ;;;; Bibtex
-(use-package bibtex
-  :ensure t
-  :defer t
-  :config
-  (setq bibtex-completion-bibliography "~/org/bibliography/references.bib"
-        bibtex-completion-library-path "~/org/bibliography/papers"
-        bibtex-completion-notes-path "~/org/bibliography/notes.org"   ;; uses bibtex-completion-notes-template-one-file
-        bibtex-completion-pdf-open-function 'org-open-file
-        bibtex-completion-notes-template-one-file
-        "
-* ${author-abbrev} - ${title}
-  :PROPERTIES:
-  :Custom_ID: ${=key=}
-  :AUTHOR: ${AUTHOR}
-  :YEAR: ${year}
-  :JOURNAL: ${journal}
-  :DOI: ${DOI}
-  :URL: ${url}
-  :END:
+;; (use-package bibtex
+;;   :ensure t
+;;   :defer t
+;;   :config
+;;   (setq bibtex-completion-bibliography "~/org/bibliography/references.bib"
+;;      bibtex-completion-library-path "~/org/bibliography/papers"
+;;      bibtex-completion-notes-path "~/org/bibliography/notes.org"   ;; uses bibtex-completion-notes-template-one-file
+;;      bibtex-completion-pdf-open-function 'org-open-file
+;;      bibtex-completion-notes-template-one-file
+;;      "
+;; * ${author-abbrev} - ${title}
+;;   :PROPERTIES:
+;;   :Custom_ID: ${=key=}
+;;   :AUTHOR: ${AUTHOR}
+;;   :YEAR: ${year}
+;;   :JOURNAL: ${journal}
+;;   :DOI: ${DOI}
+;;   :URL: ${url}
+;;   :END:
 
-cite:${=key=}
-"))
+;; cite:${=key=}
+;; "))
 
 ;;;; Varibles setup
 (defun bp/setup-research-dir-local-variables ()
@@ -802,19 +806,16 @@ cite:${=key=}
 (use-package org-roam
   :ensure t
   :defer t
-  ;;  :hook
-  ;;  (after-init . org-roam-mode)
+  :hook
+    (after-init . org-roam-mode)
   :bind (:map org-roam-mode-map
-              (("M-m r l" . org-roam)
-               ("M-m r f" . org-roam-find-file)
+              (("M-m r f" . org-roam-node-find)
                ("M-m r j" . org-roam-jump-to-index)
-               ("M-m r b" . org-roam-switch-to-buffer)
-               ("M-m r g" . org-roam-graph)
-               ("M-m r f" . org-roam-find-file))
+               ("M-m r g" . org-roam-graph))
               :map org-mode-map
-              (("M-m o r" . org-roam-insert)
-               ("M-m r i" . org-roam-insert)
-               ("M-m r t" . bp/org-roam-tags)
+              (("M-m o r" . org-roam-node-insert)
+               ("M-m r i" . org-roam-node-insert)
+               ("M-m r t" . bp/org-roaam-tags)
                ("M-m r a" . bp/org-roam-alias)))
   :config
   (setf org-roam-mode t)
