@@ -3,9 +3,11 @@
 ;;; Org mode
 (use-package org
 ;;;; Bindings and hooks
+  :defer nil
   :mode (("\\.org$" . org-mode))
   :bind (:map bp/global-prefix-map
               ("o l" . org-store-link)
+              ("o L" . org-id-store-link)
               ("o e" . org-emphasize))
   :bind (:map org-mode-map
               ("M-m o h" . 'bp/org-view-html-export)
@@ -17,15 +19,14 @@
               ("C-c C-c" . org-edit-src-exit))
   :hook (org-mode . (lambda ()
                       (org-content 2)
+                      (setf org-pretty-entities t)
+                      (modify-syntax-entry ?$ "$$" org-mode-syntax-table)
+                      (setf org-pretty-entities-include-sub-superscripts nil)
                       ;;(org-cdlatex-mode)
                       (electric-indent-mode -1)
                       (setq ispell-parser 'tex)))
   :config
-
 ;;;; requirements
-  (setf org-pretty-entities t)
-  (modify-syntax-entry ?$ "$$" org-mode-syntax-table)
-  (setf org-pretty-entities-include-sub-superscripts nil)
   (require 'ox-latex)
 ;;  (require 'cdlatex)
   (require 'org-attach)
@@ -152,7 +153,7 @@ representation for the files to include, as returned by
 
 ;;;;; Html Export Theming
   (defadvice org-html-export-to-html (before html-export-load-css1 activate)
-    (setq org-html-head-extra (bp/org-html-css))
+    (setq org-html-head-extra (bp/org-html-css)))
 
   (defadvice org-html-export-as-html (before html-export-load-css2 activate)
     (setq org-html-head-extra (bp/org-html-css)))
@@ -316,6 +317,7 @@ representation for the files to include, as returned by
       (make-symbolic-link (buffer-file-name) (concat "~/org/" name ".org"))))
   ;; org config complete
   )
+
 
 (use-package org-id
   :defer t
@@ -805,33 +807,42 @@ representation for the files to include, as returned by
 ;;; Org-roam
 (use-package org-roam
   :ensure t
-  :defer t
-  :hook
-    (after-init . org-roam-mode)
-  :bind (:map org-roam-mode-map
-              (("M-m r f" . org-roam-node-find)
-               ("M-m r j" . org-roam-jump-to-index)
-               ("M-m r g" . org-roam-graph))
-              :map org-mode-map
+  :defer nil
+  ;; :hook
+  ;;   (after-init . org-roam-mode)
+  :bind (:map bp/global-prefix-map
+              (("r f" . org-roam-node-find)
+               ("r F" . org-roam-ref-find)
+               ("r c" . org-roam-capture)
+               ("r g" . org-roam-graph)))
+  :bind (:map org-mode-map
               (("M-m o r" . org-roam-node-insert)
                ("M-m r i" . org-roam-node-insert)
-               ("M-m r t" . bp/org-roaam-tags)
-               ("M-m r a" . bp/org-roam-alias)))
+               ("M-m r r" . org-roam-buffer-toggle)
+               ("M-m r R" . org-roam-ref-add)
+               ("M-m r a" . org-roam-alias-add)
+               ("M-m r t" . org-roam-tag-add)))
   :config
   (setf org-roam-mode t)
-  (setq org-roam-directory "~/org/")
+  (setq org-roam-directory (file-truename "~/org/")
+        org-roam-capture-templates '(("d" "default" "plain" "%?"
+                                      :target (file+head "${slug}.org"
+                                                         "#+title: ${title}\n#+date:%t\n")
+                                      :unnarrowed t)))
   (when windows-system?
     (setq org-roam-list-files-commands '((find . "C:/tools/msys64/usr/bin/find.exe") rg)))
-  (require 'ivy)
   (setq org-roam-graph-viewer nil)
-  (setq org-roam-tag-sources '(prop all-directories))
   (setq org-roam-db-location
         (cond ((string-equal system-type "gnu/linux")
                (expand-file-name "dbs/linux/org-roam.db" org-roam-directory))
               ((string-equal system-type "windows-nt")
                (expand-file-name "dbs/windows/org-roam.db" org-roam-directory))))
-
-  ;;  (add-hook 'org-mode-hook 'org-roam-mode)
+;;  The file-truename function is only necessary when you use symbolic
+;;  links inside org-roam-directory: Org-roam does not resolve
+;;  symbolic links. One can however instruct Emacs to always resolve
+;;  symlinks, at a performance cost:
+  (setq find-file-visit-truename t)
+  (org-roam-db-autosync-mode 1)
 
   (defun bp/org-roam-headers (header)
     (interactive)
@@ -847,39 +858,42 @@ representation for the files to include, as returned by
         (insert header " \n")
         (move-end-of-line 0))))
 
-  (defun bp/org-roam-tags ()
-    (interactive)
-    (bp/org-roam-headers "#+ROAM_TAGS:"))
-
   (defun bp/org-roam-alias ()
     (interactive)
-    (bp/org-roam-headers "#+ROAM_ALIAS:"))
-
-  ;; (add-hook 'after-init-hook 'org-roam-mode)
-  )
+    (bp/org-roam-headers "#+ROAM_ALIAS:")))
 
 ;;; Org roam server
 
-(use-package org-roam-server
+;; (use-package org-roam-server
+;;   :ensure t
+;;   :defer t
+;;   :config
+;;   (setq org-roam-server-host "127.0.0.1"
+;;         org-roam-server-port 8080
+;;         org-roam-server-export-inline-images t
+;;         org-roam-server-authenticate nil
+;;         org-roam-server-network-poll t
+;;         org-roam-server-network-arrows nil
+;;         org-roam-server-network-label-truncate t
+;;         org-roam-server-network-label-truncate-length 60
+;;         org-roam-server-network-label-wrap-length 20)
+;;   :init
+;;   (defun bp/org-roam-server ()
+;;     (interactive)
+;;     (org-roam-server-mode t)
+;;     (browse-url "http://127.0.0.1:8080"))
+;;   (bind-keys :map bp/global-prefix-map
+;;              ("r s" . bp/org-roam-server)))
+
+;; Supersedes org-roam-server
+(use-package org-roam-ui
   :ensure t
   :defer t
+  :bind (:map bp/global-prefix-map
+              ("r s" . org-roam-ui-open)
+              ("r o" . org-roam-ui-node-zoom))
   :config
-  (setq org-roam-server-host "127.0.0.1"
-        org-roam-server-port 8080
-        org-roam-server-export-inline-images t
-        org-roam-server-authenticate nil
-        org-roam-server-network-poll t
-        org-roam-server-network-arrows nil
-        org-roam-server-network-label-truncate t
-        org-roam-server-network-label-truncate-length 60
-        org-roam-server-network-label-wrap-length 20)
-  :init
-  (defun bp/org-roam-server ()
-    (interactive)
-    (org-roam-server-mode t)
-    (browse-url "http://127.0.0.1:8080"))
-  (bind-keys :map bp/global-prefix-map
-             ("r s" . bp/org-roam-server)))
+  (setf org-roam-ui-follow t))
 
 
 ;;; org-download
