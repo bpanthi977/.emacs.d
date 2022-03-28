@@ -13,13 +13,11 @@
 	lsp-dart-closing-labels nil
 	lsp-dart-suggest-from-unimported-libraries t)
 
+  (setq lsp-dart-flutter-sdk-dir "/home/bpanthi/Apps0/flutter/")
+  (setq exec-path (append (list (concat lsp-dart-flutter-sdk-dir "bin")) exec-path))
+  (setenv "PATH" (concat lsp-dart-flutter-sdk-dir "bin:" (getenv "PATH")))
+  (setf lsp-dart-sdk-dir (concat lsp-dart-flutter-sdk-dir "bin/cache/dart-sdk/"))
 
-  (setq exec-path (append '("/home/bpanthi/Apps/flutter/bin")
-			exec-path))
-  (setenv "PATH" (concat "/home/bpanthi/Apps/flutter/bin:"
-			 (getenv "PATH")))
-  (setf lsp-dart-sdk-dir "/home/bpanthi/Apps/flutter/bin/cache/dart-sdk/"
-	lsp-dart-flutter-sdk-dir "/home/bpanthi/Apps/flutter/")
   (require 'helm-dash)
   (add-hook 'dart-mode-hook (lambda ()
 			      (electric-indent-mode)

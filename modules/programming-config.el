@@ -1,3 +1,9 @@
+(setenv "PATH" (concat "/home/bpanthi/.local/bin:"
+			 (getenv "PATH")))
+
+(setq exec-path (append '("/home/bpanthi/.local/bin")
+			exec-path))
+
 (use-package flycheck
   :ensure t
   :defer t

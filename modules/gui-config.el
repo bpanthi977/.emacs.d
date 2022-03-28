@@ -102,6 +102,8 @@
 ;; t = for default fontset , nil = for character not found in other fonts
 ;; (font-sp.. ) = use Symbola font
 ;; (set-fontset-font t nil (font-spec :family "Noto Color Emoji"))
+(set-fontset-font t 'symbol "Noto Color Emoji" nil)
+(set-fontset-font t 'symbol "Symbola" nil 'append)
 
 (custom-set-faces
  ;; custom-set-faces was added by Custom.

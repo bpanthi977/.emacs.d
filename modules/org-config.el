@@ -42,114 +42,131 @@
       (when (not (file-directory-p pub-dir))
         (make-directory pub-dir))))
 ;;;;; Blog
-(require 'ox-publish)
-(setf org-babel-default-header-args '((:session . "none") (:results . "replace") (:exports . "both")
-                                      (:eval . "never-export")
-                                      (:cache . "no") (:noweb . "no") (:hlines . "no") (:tangle . "no")))
+  (require 'ox-publish)
+  (setf org-babel-default-header-args '((:session . "none") (:results . "replace") (:exports . "both")
+                                        (:eval . "never-export")
+                                        (:cache . "no") (:noweb . "no") (:hlines . "no") (:tangle . "no")))
 
-(defun bp/org-publish-find-date (file project)
-  (let ((file (org-publish--expand-file-name file project)))
-    (or (org-publish-cache-get-file-property file :sitemap-date nil t)
-        (org-publish-cache-set-file-property
-         file :sitemap-date
-         (if (file-directory-p file)
-             (file-attribute-modification-time (file-attributes file))
-           (let ((date (org-publish-find-property file :date project)))
-             ;; DATE is a secondary string.  If it contains
-             ;; a time-stamp, convert it to internal format.
-             ;; Otherwise, use FILE modification time.
-             (cond (date
-                    (let* ((date* (ignore-errors
-                                    (org-time-string-to-time (org-no-properties (first date))))))
-                      (or date*
-                          (error "Invalid time string ~a" (org-no-properties (first date))))))
-                   ((file-exists-p file)
-                    (file-attribute-modification-time (file-attributes file)))
-                   (t (error "No such file: \"%s\"" file)))))))))
+  (defun bp/org-publish-find-date (file project)
+    (let ((file (org-publish--expand-file-name file project)))
+      (or (org-publish-cache-get-file-property file :sitemap-date nil t)
+          (org-publish-cache-set-file-property
+           file :sitemap-date
+           (if (file-directory-p file)
+               (file-attribute-modification-time (file-attributes file))
+             (let ((date (org-publish-find-property file :date project)))
+               ;; DATE is a secondary string.  If it contains
+               ;; a time-stamp, convert it to internal format.
+               ;; Otherwise, use FILE modification time.
+               (cond (date
+                      (let* ((date* (ignore-errors
+                                      (org-time-string-to-time (org-no-properties (first date))))))
+                        (or date*
+                            (error "Invalid time string ~a" (org-no-properties (first date))))))
+                     ((file-exists-p file)
+                      (file-attribute-modification-time (file-attributes file)))
+                     (t (error "No such file: \"%s\"" file)))))))))
 
-(defun bp/org-publish-sitemap-entry (entry style project)
-  (cond ((not (directory-name-p entry))
-         (format "%s [[file:%s][%s]]"
-                 (format-time-string "%b %d, %Y" (bp/org-publish-find-date entry project))
-                 entry
-                 (org-publish-find-title entry project)))
-        ((eql style 'tree)
-         (file-name-nondirectory (directory-file-name entry)))
-        (t entry)))
+  (defun bp/org-publish-sitemap-entry (entry style project)
+    (cond ((not (directory-name-p entry))
+           (format "%s [[file:%s][%s]]"
+                   (format-time-string "%b %d, %Y" (bp/org-publish-find-date entry project))
+                   entry
+                   (org-publish-find-title entry project)))
+          ((eql style 'tree)
+           (file-name-nondirectory (directory-file-name entry)))
+          (t entry)))
 
-(defun bp/org-publish-sitemap (title list)
-  "Sitem map, as a string.
+  (defun bp/org-publish-sitemap (title list)
+    "Sitem map, as a string.
 TITLE is the title of the site map.  LIST is an internal
 representation for the files to include, as returned by
 `org-list-to-lisp'."
-  (concat "#+TITLE: " title "\n"
-          "#+SETUPFILE: ./templates/sitemap.org"
-          "\n\n"
-          (org-list-to-org list)))
+    (concat "#+TITLE: " title "\n"
+            "#+SETUPFILE: ./templates/sitemap.org"
+            "\n\n"
+            (org-list-to-org list)))
 
-(defun bp/org-html-preamble (export-options)
-  (let ((date (org-export-get-date export-options)))
-    (if date
-        (concat "<p class=\"date\">Date: "
-                (org-export-data date export-options)
-                "</p>")
-      "")))
+  (defun bp/org-html-preamble (export-options)
+    (let ((date (org-export-get-date export-options)))
+      (if date
+          (concat "<p class=\"date\">Date: "
+                  (org-export-data date export-options)
+                  "</p>")
+        "")))
 
-(setq org-publish-project-alist
-      '(
-        ("blog-org"
-         :base-directory "~/org/blog/"
-         :exclude "templates/*"
-         :base-extension "org"
-         :publishing-directory "~/Development/Web/Blog/blog/"
-         :recursive t
-         :publishing-function org-html-publish-to-html
-         :headline-levels 4             ; Just the default for this project.
-         :auto-preamble t
-         :html-preamble bp/org-html-preamble ;; org-html-preamble
-         :html-postamble nil
-         :auto-sitemap t
-         :sitemap-filename "sitemap.org"
-         :sitemap-title "Bibek Panthi"
-         :sitemap-sort-files anti-chronologically
-         :sitemap-function bp/org-publish-sitemap
-         :sitemap-format-entry bp/org-publish-sitemap-entry
-         )
-        ("blog-static"
-         :base-directory "~/org/blog/"
-         :base-extension "css\\|js\\|png\\|jpg\\|gif\\|pdf\\|mp3\\|ogg\\|swf\\|svg"
-         :publishing-directory "~/Development/Web/Blog/blog/"
-         :recursive t
-         :publishing-function org-publish-attachment
-         )
-        ("blog" :components ("blog-org" "blog-static"))
-      ))
+  (defun bp/html-postamble (args)
+    (let ((file (getf args :input-file)))
+      (unless (or (string-suffix-p "index.org" file)
+                  (string-suffix-p "sitemap.org" file)
+                  (string-suffix-p "meta.org" file)
+                  (search  "errors/" file))
+        (let ((feedback-string
+               (format "<hr/>You can send your feedback, queries <a href=\"mailto:bpanthi977@gmail.com?subject=Feedback: %s\">here</a>"
+                       (substring-no-properties (car (getf args :title)))))
+              (visits-claps "<span id=\"visits\"></span><span id=\"claps\"></span>")
+              (sendme-claps "<div id=\"claps-message\"></div>"))
+          (concat feedback-string
+                  visits-claps
+                  sendme-claps)))))
 
-(defun bp/org-upload-blog ()
-  (interactive)
-  (async-shell-command "~/Development/Web/Blog/syncFtp.sh"))
+  (setq org-publish-project-alist
+        '(
+          ("blog-org"
+           :base-directory "~/org/blog/"
+           :exclude "templates/*"
+           :base-extension "org"
+           :publishing-directory "~/Development/Web/Blog/blog/"
+           :recursive t
+           :publishing-function org-html-publish-to-html
+           :headline-levels 4             ; Just the default for this project.
+           :auto-preamble t
+           :html-preamble bp/org-html-preamble ;; org-html-preamble
+           :html-postamble bp/html-postamble
+
+           ;; :auto-sitemap t
+           ;; :sitemap-filename "sitemap.org"
+           ;; :sitemap-title "Bibek Panthi"
+           ;; :sitemap-sort-files anti-chronologically
+           ;; :sitemap-function bp/org-publish-sitemap
+           ;; :sitemap-format-entry bp/org-publish-sitemap-entry
+           )
+          ("blog-static"
+           :base-directory "~/org/blog/"
+           :base-extension "css\\|js\\|png\\|jpg\\|gif\\|pdf\\|mp3\\|ogg\\|swf\\|svg\\|php\\|ico"
+           :publishing-directory "~/Development/Web/Blog/blog/"
+           :recursive t
+           :publishing-function org-publish-attachment
+           )
+          ("blog" :components ("blog-org" "blog-static"))
+          ))
+
+  (defun bp/org-upload-blog ()
+    (interactive)
+    (let ((default-directory "~/Development/Web/Blog/"))
+      (async-shell-command "~/Development/Web/Blog/syncFtp.sh")))
 
 ;;;;; Html Export Theming
-(defun bp/load-css-from-file (file)
-  (message "Loading org html export css")
-  (with-temp-buffer
-    (insert "<style>\n")
-    (insert-file-contents file)
-    (goto-char (point-max))
-    (insert "</style>\n")
-    (buffer-string)))
-(defun bp/last-modified-time (file)
-  (file-attribute-modification-time (file-attributes file)))
+  (defun bp/load-css-from-file (file)
+    (message "Loading org html export css")
+    (with-temp-buffer
+      (insert "<style>\n")
+      (insert-file-contents file)
+      (goto-char (point-max))
+      (insert "</style>\n")
+      (buffer-string)))
+  (defun bp/last-modified-time (file)
+    (file-attribute-modification-time (file-attributes file)))
 
-(defvar bp/org-html-css nil)
-(defvar bp/org-html-loaded-timestamp nil)
-(defun bp/org-html-css ()
-  (let* ((file (expand-file-name "modules/org.css" init-dir))
-         (current-timestamp (bp/last-modified-time file)))
-    (unless (equal bp/org-html-loaded-timestamp current-timestamp)
-      (setf bp/org-html-css (bp/load-css-from-file file)
-            bp/org-html-loaded-timestamp current-timestamp))
-    bp/org-html-css))
+  (defvar bp/org-html-css nil)
+  (defvar bp/org-html-loaded-timestamp nil)
+  (defun bp/org-html-css ()
+    (let* ((file (expand-file-name "modules/org.css" init-dir))
+           (current-timestamp (bp/last-modified-time file)))
+      (unless (equal bp/org-html-loaded-timestamp current-timestamp)
+        (setf bp/org-html-css (bp/load-css-from-file file)
+              bp/org-html-loaded-timestamp current-timestamp))
+      bp/org-html-css))
 
 ;;;;; Html Export Theming
   (defadvice org-html-export-to-html (before html-export-load-css1 activate)
@@ -936,7 +953,16 @@ Convert TITLE to a filename-suitable slug."
           (concat  "#+CAPTION: " bp/org-download-screenshot-title "\n"))
       (setf bp/org-download-screenshot-title nil)))
 
-  (setq org-download-method 'attach
+  ;; modifies org-download.el org-download--dir-2 function
+  (defun org-download--dir-2 ()
+    (if org-download-heading-lvl
+        (org-download-get-heading
+         org-download-heading-lvl)
+      (file-name-base (buffer-file-name))))
+
+  (setq org-download-method 'directory
+        org-download-image-dir "./data/"
+        org-download-heading-lvl nil
         org-download-screenshot-method "xfce4-screenshooter -r -o cat > %s"
         org-download-file-format-function #'bp/org-download-file-formater
         org-download-annotate-function #'bp/org-download-annotate-with-title)
