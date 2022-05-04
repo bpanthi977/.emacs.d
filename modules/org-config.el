@@ -258,6 +258,30 @@ representation for the files to include, as returned by
       (pushnew '("\\.pdf::\\([0-9]+\\)?\\'" . bp/okl-note-link)
                org-file-apps)))
 
+;;;;; Fixing Link Rot
+  (defvar bp/org-replace-link-old nil)
+  (defvar bp/org-replace-link-new nil)
+  (defun bp/org-replace-link (old new)
+    (interactive "sOld Link: \nfNew File: ")
+    (let* ((old-escaped (regexp-quote old))
+           (regexp (format "\\[\\[.*%s\\(.*\\)\\]\\]" old-escaped))
+           (new (completing-read "Path to use:"
+                                 (list (file-truename new)
+                                       (concat "./"
+                                               (file-relative-name (file-truename new)
+                                                                   (file-name-directory (file-truename (buffer-file-name))))))))
+           (new-escaped (string-replace "\\" "\\\\" new))
+           (replacement (format "[[%s\\1]]" new-escaped)))
+      (setf bp/org-replace-link-old regexp)
+      (setf bp/org-replace-link-new replacement)
+      (replace-regexp regexp replacement)))
+
+  (defun bp/repeat-last-org-replace-link (dir)
+    (interactive "DDirectory of org files: ")
+    (dolist (file (directory-files-recursively dir ".*\\.org"))
+      (with-current-buffer (find-file file)
+        (replace-regexp bp/org-replace-link-old bp/org-replace-link-new))))
+
 ;;;;; HTML Viewer
   (defun bp/open-html-file (file link)
     (declare (ignore link))
@@ -308,7 +332,6 @@ representation for the files to include, as returned by
      (gnuplot . t)
      (haskell . nil)
      (latex . t)
-     (ledger . t)
      (ocaml . nil)
      (octave . t)
      (python . t)
@@ -857,8 +880,10 @@ representation for the files to include, as returned by
 ;;  The file-truename function is only necessary when you use symbolic
 ;;  links inside org-roam-directory: Org-roam does not resolve
 ;;  symbolic links. One can however instruct Emacs to always resolve
-;;  symlinks, at a performance cost:
-  (setq find-file-visit-truename t)
+;;  symlinks, at a performance cost, also, changes in file won't be reflected
+;;  in roam db because (org-roam-file-p) would return nil on such files p
+;;  (setq find-file-visit-truename nil)
+
   (org-roam-db-autosync-mode 1)
 
   (defun bp/org-roam-headers (header)
