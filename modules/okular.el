@@ -52,7 +52,7 @@
   (let ((prop-document (org-entry-get (point) "NOTER_DOCUMENT" t)))
     (if (or (not prop-document)
 	    (not (string-suffix-p prop-document document)))
-	(org-set-property "NOTER_DOCUMENT" (file-relative-name document (file-name-directory (buffer-file-name)))))
+	(org-set-property "NOTER_DOCUMENT" (file-relative-name (file-truename document) (file-name-directory (file-truename (buffer-file-name))))))
     (org-set-property "NOTE_PAGE" (format "%d" page))))
 
 (defvar bp/okl-ask-for-link-description nil)
@@ -67,7 +67,7 @@
 		"::" (format "%s" page) 
 		"][" description "]]"))
       (insert "[[./"
-	      (file-relative-name document (file-name-directory (buffer-file-name)))
+	      (file-relative-name (file-truename document) (file-name-directory (file-truename (buffer-file-name))))
 	      "::" (format "%s" page) 
 	      "][" (file-name-base document) " pg. " (format "%s" page) "]]")))
 

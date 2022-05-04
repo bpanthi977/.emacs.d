@@ -59,7 +59,7 @@
 (global-set-key (kbd "C-v") 'view-mode)
 
 (smartrep-define-key bp/global-prefix-map "e"
-  '(("s" . cycle-spacing)))
+  '(("s" . (lambda () (cycle-spacing 0)))))
 
 (smartrep-define-key bp/global-prefix-map "f"
   '(("k" . kill-this-buffer)
