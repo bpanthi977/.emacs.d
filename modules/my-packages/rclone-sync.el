@@ -39,6 +39,9 @@
 
 (defvar rclone-command "rclone")
 
+(when (string-equal system-type "darwin")
+  (setf rclone-command "/Applications/rclone"))
+
 (defun rclone--async (command source target &optional extra-commands process-sentinel)
   "Run rclone process to copy/sync source to target"
   (let ;; prepare command
