@@ -876,7 +876,9 @@ representation for the files to include, as returned by
         (cond ((string-equal system-type "gnu/linux")
                (expand-file-name "dbs/linux/org-roam.db" org-roam-directory))
               ((string-equal system-type "windows-nt")
-               (expand-file-name "dbs/windows/org-roam.db" org-roam-directory))))
+               (expand-file-name "dbs/windows/org-roam.db" org-roam-directory))
+              ((string-equal system-type "darwin")
+               (expand-file-name "dbs/darwin/org-roam.db" org-roam-directory))))
 ;;  The file-truename function is only necessary when you use symbolic
 ;;  links inside org-roam-directory: Org-roam does not resolve
 ;;  symbolic links. One can however instruct Emacs to always resolve

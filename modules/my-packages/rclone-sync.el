@@ -37,10 +37,15 @@
       (set-process-sentinel (get-buffer-process output-buffer)
                             process-sentinel))))
 
+(defvar rclone-command "rclone")
+
+(when (string-equal system-type "darwin")
+  (setf rclone-command "/Applications/rclone"))
+
 (defun rclone--async (command source target &optional extra-commands process-sentinel)
   "Run rclone process to copy/sync source to target"
   (let ;; prepare command
-      ((command (concat "rclone -P " command " \""
+      ((command (concat rclone-command " -P " command " \""
                         source "\" \"" target
                         "\" -L --exclude-if-present .ignore "
                         (flet ((file? (name)
