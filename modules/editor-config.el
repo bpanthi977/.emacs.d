@@ -55,7 +55,7 @@
   (recentf-mode +1))
 
 ;; highlight the current line
-(global-hl-line-mode +1)
+;; (global-hl-line-mode t)
 ;; Don't save last deleted region or rectangle to register 0
 (setf cua-delete-copy-to-register-0 nil)
 ;; Truncate lines
@@ -144,6 +144,12 @@ buffer is not visiting a file."
   (setq projectile-enable-caching t)
   (setq projectile-cache-file (concat init-dir ".cache/projectile.cache")
         projectile-known-projects-file (concat savefile-dir "/projectile-bookmarks.eld"))
+
+  (defun bp/projectile-for-all (thunk)
+    (interactive)
+    (dolist (b (projectile-project-buffers))
+       (with-current-buffer b
+         (ignore-errors (funcall thunk)))))
 
   (defun bp/projectile-whitespace-cleanup ()
     (interactive)

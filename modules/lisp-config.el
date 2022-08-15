@@ -31,7 +31,7 @@
         ((string-equal system-type "darwin")
          (setf inferior-lisp-program "sbcl"))
         (t
-         (setf inferior-lisp-program "sbcl --core /home/bpanthi/.cache/common-lisp/core --dynamic-space-size 2560"
+         (setf inferior-lisp-program "sbcl --core /home/bpanthi/.cache/common-lisp/core --dynamic-space-size 8560"
                common-lisp-hyperspec-root "file:///home/bpanthi/Dev/lisp/HyperSpec-7-0/HyperSpec/")))
 
   (defun slime-sbcl ()

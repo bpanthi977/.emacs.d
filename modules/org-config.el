@@ -133,7 +133,7 @@ representation for the files to include, as returned by
            )
           ("blog-static"
            :base-directory "~/org/blog/"
-           :base-extension "css\\|js\\|png\\|jpg\\|gif\\|pdf\\|mp3\\|ogg\\|swf\\|svg\\|php\\|ico"
+           :base-extension "html\\|css\\|js\\|png\\|jpg\\|gif\\|pdf\\|mp3\\|ogg\\|swf\\|svg\\|php\\|ico"
            :publishing-directory "~/Development/Web/Blog/blog/"
            :recursive t
            :publishing-function org-publish-attachment
@@ -657,10 +657,10 @@ representation for the files to include, as returned by
                                  "* %? [[%:link][%(transform-square-brackets-to-round-ones \"%:description\")]]\n")
                                 ("t" "Todo" entry (file+headline "~/org/tasks.org" "Tasks")
                                  "* TODO %?\nCREATED: %U\n %i\n  %a")
-                                ("j" "Journal" entry (file+datetree "~/org/journal.org")
+                                ("j" "Journal" entry (file+datetree "~/SDocuments/Personal/journal.org.gpg")
                                  "* %?\nEntered on %U\n  %i\n  %a")
                                 ("n" "Note" entry (file "~/org/notes.org" )
-                                 "* %?")
+                                 "* %?\nCREATED: %U\n")
                                 ("d" "Drill" entry (file "~/drill.org" )
                                  "* %? :drill:%^g\nCREATED : %U\n %i\n %a")
                                 ("a" "Anki" entry (file "~/drill.org" )
@@ -696,7 +696,7 @@ representation for the files to include, as returned by
                                 ("thoughts" "Capture Thoughts in a heading at bottom of file" item (function capture-in-visited-org-file)
                                  "+ %?")
                                 ("notes" "Capture notes below current heading" item (function capture-note-in-current-heading)
-                                 "+ %?")
+                                 "+ %?\nCREATED: %U\n")
                                 ))
   :init
   (bind-keys :map bp/global-prefix-map

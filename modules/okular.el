@@ -128,7 +128,8 @@
 (defun bp/okl-open-note-page () 
   (interactive)
   (let ((document (org-entry-get (point) "NOTER_DOCUMENT" t))
-	(page (org-entry-get (point) "NOTE_PAGE" t)))
+	(page (or (org-entry-get (point) "NOTE_PAGE" t)
+                  (number-to-string (caar (read-from-string (org-entry-get (point) "NOTER_PAGE" t)))))))
     (multiple-value-bind (service node) (bp/okl-get-document-tab document)
       (if node 
 	  (bp/okl-set-page-number service node (string-to-number page))

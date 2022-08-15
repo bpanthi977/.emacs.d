@@ -5,7 +5,10 @@
   :config 
   ;; from https://github.com/kljohann/mpv.el/wiki
   ;;  To create a mpv: link type that is completely analogous to file: links but opens using mpv-play instead, use:
-  (org-add-link-type "mpv" #'mpv-play)
+  (org-add-link-type "mpv" #'mpv-play*)
+  (defun mpv-play* (path)
+    (print path)
+    (mpv-play (expand-file-name* path)))
   (defun org-mpv-complete-link (&optional arg)
     (replace-regexp-in-string
      "file:" "mpv:"
@@ -72,7 +75,7 @@
 	  (when (mpv-live-p)
 	    (mpv-kill)
 	    (sleep-for 0.05))
-	  (mpv-start (org-element-property :path (org-element-context)))))))
+	  (mpv-start (expand-file-name* (org-element-property :path (org-element-context))))))))
   
   (defun org-mpv-notes-insert-note () 
     (interactive)

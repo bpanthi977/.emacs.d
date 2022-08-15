@@ -1,34 +1,44 @@
+(setq exec-path (append '("/home/bpanthi/.node_modules/bin"
+                            "/home/bpanthi/.yarn/bin")
+                          exec-path))
+
+;; (setq exec-path (append exec-path '("~/.nvm/versions/node/v14.20.0/bin")))
+
 (use-package rjsx-mode
   :ensure t
-  :defer t 
+  :defer t
   :mode "\\.js\\'"
-  :hook (rjsx-mode . (lambda () 
-		       (js2-mode-idle-reparse (current-buffer))))
+  :hook (rjsx-mode . (lambda ()
+                       (js2-mode-idle-reparse (current-buffer))))
 
   :config
   (require 'lsp-mode)
-  (setq exec-path (append '("/home/bpanthi/.node_modules/bin"
-			    "/home/bpanthi/.yarn/bin")
-			  exec-path))
-  (setenv "PATH" (concat "/home/bpanthi/.yarn/bin:/home/bpanthi/.node_modules/bin:"
-			 (getenv "PATH")))
   (setq js2-strict-missing-semi-warning nil
-	js2-missing-semi-one-line-override t
-	js2-highlight-level 3)
-  
+        js2-missing-semi-one-line-override t
+        js2-highlight-level 3)
+
   (setf flycheck-javascript-eslint-executable "/home/bpanthi/.node_modules/bin/eslint"))
 
 (use-package typescript-mode
   :defer t
+  :mode "\\.tsx\\'"
   :config
+  (defun bp/typescript-config-from-prettierrc ()
+    (let* ((prettierrc (locate-dominating-file (buffer-file-name) ".prettierrc"))
+           (config (if prettierrc
+                       (with-temp-buffer
+                         (insert-file-contents (concat prettierrc "/.prettierrc"))
+                         (goto-char (point-min))
+                         (json-parse-buffer)))))
+      (when config
+        (when-let ((indent-level (gethash "tabWidth" config)))
+          (setq-local typescript-indent-level indent-level)))))
+
+
   (defun bp/typescript-mode-hook ()
-    (prettier-js-mode)
+    (bp/typescript-config-from-prettierrc)
     (lsp)
-    (local-set-key (kbd "C-x C-e") 'ts-send-last-sexp)
-    (local-set-key (kbd "C-M-x") 'ts-send-last-sexp-and-go)
-    (local-set-key (kbd "C-c b") 'ts-send-buffer)
-    (local-set-key (kbd "C-c C-b") 'ts-send-buffer-and-go)
-    (local-set-key (kbd "C-c l") 'ts-load-file-and-go))
+    (prettier-mode))
 
   (add-hook 'typescript-mode-hook 'bp/typescript-mode-hook))
 
@@ -63,7 +73,8 @@
     (interactive)
     (dolist (b (projectile-project-buffers))
       (with-current-buffer b
-        (ignore-errors (prettier-js)))))
+        (ignore-errors (prettier-prettify)))))
+
 (use-package tern
   :ensure t
   :defer t
@@ -72,11 +83,6 @@
   (add-to-list 'load-path "~/.emacs.d/extra/tern/emacs/")
   (add-to-list 'exec-path "/home/bpanthi/.emacs.d/extra/tern/bin/"))
 
-
-(use-package prettier-js
+(use-package prettier
   :ensure t
-  :hook ((js-mode . prettier-js-mode))
-  :config
-  (setq prettier-js-args '("--trailing-comma" "all"
-			   "--bracket-spacing" "false"
-			   "--tab-width" "4")))
+  :hook ((js-mode . prettier-mode)))

@@ -58,6 +58,7 @@
    "org-config"
    "org-mpv-notes"
    "org-web-notes"
+   "org-calibre-notes"
    ;; "java-config"
    ;; "android-config"
    "python-config"
@@ -89,3 +90,4 @@
 	  file-name-handler-alist last-file-name-handler-alist)
 
 
+(put 'downcase-region 'disabled nil)
