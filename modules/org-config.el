@@ -236,7 +236,7 @@ representation for the files to include, as returned by
         org-startup-with-latex-preview nil
         org-startup-folded 'content)
   (setf org-id-link-to-org-use-id 'use-existing)
-  (setq org-directory "~/Documents/synced/Notes/org/")
+  (setq org-directory "~/Documents/synced/Notes/")
   (setq org-default-notes-file (concat org-directory "/notes.org"))
   (setq org-log-done t)
 
@@ -605,6 +605,39 @@ representation for the files to include, as returned by
              ((equal link-type "file")
               (file-truename (org-element-property :path context)))))
         (error "Point not in attachment or link"))))
+
+
+  ;; adapted from [[elfeed:vxlabs.com#https://vxlabs.com/2020/07/25/emacs-lisp-function-convert-attachment-to-file/][An Emacs Lisp function to convert attachment: links to file: links for ox-hugo exports]]
+  (defun bp/convert-attachment-to-file ()
+    "Convert [[attachment:..]] to [[file:..][]file:..]]"
+    (interactive)
+    (let ((elem (org-element-context)))
+      (if (eq (car elem) 'link)
+          (let ((type (org-element-property :type elem)))
+            ;; only translate attachment type links
+            (when (string= type "attachment")
+              ;; translate attachment path to relative filename using org-attach API
+              ;; 2020-11-15: org-attach-export-link was removed, so had to rewrite
+              (let* ((link-end (org-element-property :end elem))
+                     (link-begin (org-element-property :begin elem))
+                     ;; :path is everything after attachment:
+                     (file (org-element-property :path elem))
+                     ;; expand that to the full filename
+                     (fullpath (org-attach-expand file))
+                     ;; then make it relative to the directory of this org file
+                     (current-dir (file-name-directory (or default-directory
+                                                           buffer-file-name)))
+                     (relpath (file-relative-name (file-truename fullpath) (file-truename current-dir))))
+                ;; delete the existing link
+                (delete-region link-begin link-end)
+                ;; replace with file: link and file: description
+                (insert (format "[[file:%s][file:%s]]" relpath relpath))))))))
+
+  (defun bp/convert-all-attachment-to-file ()
+    (interactive)
+    (goto-char (point-min))
+    (loop while (search-forward "[[attachment:" nil t) do
+          (bp/convert-attachment-to-file)))
 
   (defun bp/org-tesseract-at-point ()
     (interactive)
@@ -1021,3 +1054,8 @@ Convert TITLE to a filename-suitable slug."
   :config
   (setf org-noter-notes-search-path '("~/org/" "~/Documents/synced/BE/")
         org-noter-doc-split-fraction '(0.8 0.2)))
+(use-package orglink
+  :ensure t
+  :defer nil
+  :config
+  (global-orglink-mode))
