@@ -1,7 +1,15 @@
-(setq exec-path (append '("/home/bpanthi/.node_modules/bin"
-                            "/home/bpanthi/.yarn/bin")
-                          exec-path))
-
+(require 'cl)
+(let ((extra-paths '("~/.node_modules/bin"
+                     "~/.yarn/bin"
+                     "~/.bun/bin"
+                     "~/.local/bin"
+                     "/opt/homebrew/bin"
+                     "/opt/homebrew/opt/node@14/bin")))
+  (setq exec-path (append extra-paths exec-path))
+  (setenv "PATH" (cl-reduce (lambda (path dir)
+                           (concat dir ":" path))
+                         extra-paths
+                         :initial-value (getenv "PATH"))))
 ;; (setq exec-path (append exec-path '("~/.nvm/versions/node/v14.20.0/bin")))
 
 (use-package rjsx-mode
@@ -20,6 +28,7 @@
   (setf flycheck-javascript-eslint-executable "/home/bpanthi/.node_modules/bin/eslint"))
 
 (use-package typescript-mode
+  :ensure t
   :defer t
   :mode "\\.tsx\\'"
   :config
@@ -38,9 +47,21 @@
   (defun bp/typescript-mode-hook ()
     (bp/typescript-config-from-prettierrc)
     (lsp)
-    (prettier-mode))
+    (lambda ()
+      (local-set-key (kbd "C-c C-c") #'(lambda ()
+                                       (ts-send-region (region-beginning)(region-end))))
+      (local-set-key (kbd "C-x C-e") 'ts-send-last-sexp)
+      (local-set-key (kbd "C-M-x") 'ts-send-last-sexp-and-go)
+      (local-set-key (kbd "C-c b") 'ts-send-buffer)
+      (local-set-key (kbd "C-c C-b") 'ts-send-buffer-and-go)
+      (local-set-key (kbd "C-c l") 'ts-load-file-and-go)))
+    (prettier-js-mode)
 
-  (add-hook 'typescript-mode-hook 'bp/typescript-mode-hook))
+    (add-hook 'typescript-mode-hook 'bp/typescript-mode-hook))
+
+(use-package json-mode
+  :ensure t
+  :defer t)
 
 (defun lsp-js-ts-rename-file ()
   "Rename current file and all it's references in other files."
@@ -83,6 +104,12 @@
   (add-to-list 'load-path "~/.emacs.d/extra/tern/emacs/")
   (add-to-list 'exec-path "/home/bpanthi/.emacs.d/extra/tern/bin/"))
 
-(use-package prettier
+;; (use-package prettier
+;;   :ensure t
+;;   :defer t
+;;   :hook ((js-mode . prettier-mode)))
+
+(use-package ts-comint
   :ensure t
-  :hook ((js-mode . prettier-mode)))
+  :config
+  (setf ts-comint-program-command "ts-node"))

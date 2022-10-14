@@ -8,7 +8,7 @@
   (org-add-link-type "mpv" #'mpv-play*)
   (defun mpv-play* (path)
     (print path)
-    (mpv-play (expand-file-name* path)))
+    (mpv-play path))
   (defun org-mpv-complete-link (&optional arg)
     (replace-regexp-in-string
      "file:" "mpv:"
@@ -75,7 +75,7 @@
 	  (when (mpv-live-p)
 	    (mpv-kill)
 	    (sleep-for 0.05))
-	  (mpv-start (expand-file-name* (org-element-property :path (org-element-context))))))))
+	  (mpv-start (org-element-property :path (org-element-context)))))))
   
   (defun org-mpv-notes-insert-note () 
     (interactive)
@@ -120,6 +120,12 @@
     (setf mpv-seek-step (/ mpv-seek-step 2.0))
     (message "%f" mpv-seek-step))
 
+  (defun mpv-toggle-fullscreen ()
+    (interactive)
+    ;; https://github.com/mpv-player/mpv/blob/master/DOCS/man/inpute.rst
+    ;; https://github.com/mpv-player/mpv/blob/master/etc/input.conf
+    (mpv--enqueue '("cycle" "fullscreen") #'ignore))
+
   (define-minor-mode org-mpv-notes
     "Org minor mode for Note taking alongside audio and video. 
 Uses mpv.el to control mpv process" 
@@ -142,6 +148,7 @@ Uses mpv.el to control mpv process"
       ("b" . mpv-seek-backward)
       ("q" . keyboard-quit)
       ("f" . mpv-seek-forward)
+      ("F" . mpv-toggle-fullscreen)
       ("<left>" . mpv-seek-backward)
       ("<right>" . mpv-seek-forward)
       ("<up>" . mpv-seek-double-step)

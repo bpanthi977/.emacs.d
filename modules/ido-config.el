@@ -33,7 +33,6 @@
 ;; smex, remember recently and most frequently used commands
 (use-package smex
   :ensure t
-  :defer t
   :config 
   (setq smex-save-file (expand-file-name ".smex-items" savefile-dir)))
 
@@ -41,7 +40,6 @@
 ;;; Ivy
 (use-package ivy
   :ensure t
-  :defer 60
   :bind (("C-x b" . ido-switch-buffer))
   :config 
   (require 'smex)
@@ -49,13 +47,12 @@
   (define-key ivy-minibuffer-map (kbd "S-SPC") nil)
   :init
   (setq ivy-use-virtual-buffers t
-		ivy-count-format "%d/%d "
-		ivy-re-builders-alist '( (t . ivy--regex-ignore-order))))
+	ivy-count-format "%d/%d "
+	ivy-re-builders-alist '( (t . ivy--regex-ignore-order))))
 
 (use-package ivy-rich
   :ensure t
   :after ivy
-  :defer 60
   :custom
   (ivy-virtual-abbreviate 'full
                           ivy-rich-switch-buffer-align-virtual-buffer t
@@ -66,7 +63,7 @@
 
 (use-package counsel
   :ensure t
-  :defer 60
+  :demand t
   :bind (("C-x C-f" . counsel-find-file)
 		 ("C-x M-f" . counsel-recentf)
 		 ("M-x" . counsel-M-x)				
@@ -74,7 +71,7 @@
 		 ("C-c s" . counsel-rg)
 		 ("M-s" . counsel-imenu))
   :config
-  (setf (alist-get 'counsel-M-x ivy-initial-inputs-alist) " ")
+  ;;(setf (alist-get 'counsel-M-x ivy-initial-inputs-alist) " ")
   ;; enable opening file as sudo
   (defadvice counsel-find-file (after find-file-sudo activate)
     "Find file as root if necessary."
@@ -83,7 +80,7 @@
 			   (not (file-writable-p buffer-file-name)))
       (find-alternate-file (concat "/sudo:root@localhost:" buffer-file-name)))))
 
+
 (use-package swiper
   :ensure t
-  :defer 70
   :bind ("C-s" . swiper))

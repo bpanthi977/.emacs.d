@@ -56,6 +56,7 @@
    "csharp-config"
    "okular"
    "org-config"
+   "elfeed-config"
    "org-mpv-notes"
    "org-web-notes"
    "org-calibre-notes"

@@ -1,6 +1,8 @@
 ;; -*- eval: (outshine-mode); -*-
-(require 'cl)
 ;;; Org mode
+(require 'cl)
+
+(setq pdf-view-use-scaling t) ;; from https://github.com/vedang/pdf-tools
 (use-package org
 ;;;; Bindings and hooks
   :defer nil
@@ -19,6 +21,7 @@
               ("C-c C-c" . org-edit-src-exit))
   :hook (org-mode . (lambda ()
                       (org-content 2)
+                      (smartparens-mode 1)
                       (setf org-pretty-entities t)
                       (modify-syntax-entry ?$ "$$" org-mode-syntax-table)
                       (setf org-pretty-entities-include-sub-superscripts nil)
@@ -236,7 +239,7 @@ representation for the files to include, as returned by
         org-startup-with-latex-preview nil
         org-startup-folded 'content)
   (setf org-id-link-to-org-use-id 'use-existing)
-  (setq org-directory "~/Documents/synced/Notes/")
+  (setq org-directory "~/synced/Notes/")
   (setq org-default-notes-file (concat org-directory "/notes.org"))
   (setq org-log-done t)
 
@@ -254,8 +257,8 @@ representation for the files to include, as returned by
         (pushnew '("\\.pdf::\\([0-9]+\\)?\\'" .  "e:/Programs/SumatraPDF/SumatraPDF.exe %s -page %1")
                  org-file-apps))
     (progn
-      (pushnew '("\\.pdf\\'" . bp/okl-note-link) org-file-apps)
-      (pushnew '("\\.pdf::\\([0-9]+\\)?\\'" . bp/okl-note-link)
+      (pushnew '("\\.pdf\\'" . default) org-file-apps)
+      (pushnew '("\\.pdf::\\([0-9]+\\)?\\'" . default)
                org-file-apps)))
 
 ;;;;; Fixing Link Rot
@@ -896,8 +899,8 @@ representation for the files to include, as returned by
                ("M-m r a" . org-roam-alias-add)
                ("M-m r t" . org-roam-tag-add)))
   :config
-  (setf org-roam-mode t)
-  (setq org-roam-directory (file-truename "~/org/")
+  (setf org-roam-mode nil)
+  (setq org-roam-directory (file-truename "~/synced/Notes/")
         org-roam-capture-templates '(("d" "default" "plain" "%?"
                                       :target (file+head "${slug}.org"
                                                          "#+title: ${title}\n#+date:%t\n")
@@ -976,17 +979,20 @@ representation for the files to include, as returned by
 ;;; org-download
 (use-package org-download
   :ensure t
-  :defer t
+  :defer nil
   :commands (org-download-screenshot)
   :config
   (defvar bp/org-download-screenshot-title nil)
   (defun bp/org-download-file-formater (filename)
     "Asks the user for file name"
     (let* ((title (completing-read "Title:"
-                                   (list  (current-kill 0))
+                                   (list  (current-kill 0)
+                                          (pcase (org-collect-keywords '("TITLE"))
+                                                                  (`(("TITLE" . ,val))
+                                                                   val)))
                                    nil nil))
            (slug (bp/title-to-slug title))
-           (file (concat (format-time-string "%Y%m%d%H%M%S-") slug ".png")))
+           (file (concat slug (format-time-string "-%Y%m%d%H%M%S") ".png")))
       (setf bp/org-download-screenshot-title title)
       file))
 
@@ -1020,9 +1026,10 @@ Convert TITLE to a filename-suitable slug."
          org-download-heading-lvl)
       (file-name-base (buffer-file-name))))
 
+  (set-default 'org-download-image-dir "./data/")
+  (set-default 'org-download-heading-lvl nil)
+
   (setq org-download-method 'directory
-        org-download-image-dir "./data/"
-        org-download-heading-lvl nil
         org-download-screenshot-method "xfce4-screenshooter -r -o cat > %s"
         org-download-file-format-function #'bp/org-download-file-formater
         org-download-annotate-function #'bp/org-download-annotate-with-title)

@@ -1,5 +1,7 @@
 (setq exec-path (append '("/home/bpanthi/.local/bin") exec-path))
 
+(setq epa-pinentry-mode 'loopback) ;; See: [[id:C896DC59-2D11-4ADC-859F-54E4721C3B3A][Configuring GPG for Emacs in MacOS]]
+
 (use-package emojify
   :ensure t
   :defer t)
@@ -108,6 +110,8 @@
   (defun sp-wrap-quote ()
     (interactive)
     (sp-wrap-with-pair "\""))
+  (sp-with-modes '(org-mode) ;; Source: https://tasshin.com/blog/implementing-a-second-brain-in-emacs-and-org-mode/
+    (sp-local-pair "*" "*"))
   (setq sp-autoskip-closing-pair nil)
   (setq sp-hybrid-kill-entire-symbol nil))
 
@@ -126,9 +130,7 @@ buffer is not visiting a file."
 ;; Projectile
 (use-package projectile
   :ensure t
-  :defer t
   :config
-  (require 'counsel-projectile)
 
   (defun bp/projectile-find-common-lisp-root (dir)
     (if (directory-files dir nil ".asd$")
@@ -156,14 +158,14 @@ buffer is not visiting a file."
     (dolist (b (projectile-project-buffers))
       (with-current-buffer b
         (ignore-errors (whitespace-cleanup)))))
-
+  (projectile-global-mode 1)
   :bind-keymap ("M-P" . projectile-command-map))
 
-(use-package counsel-projectile
-  :ensure t
-  :defer t
-  :config
-  (counsel-projectile-mode 1))
+;; (use-package counsel-projectile
+;;   :ensure t
+;;   :defer t
+;;   :config
+;;   (counsel-projectile-mode 1))
 
 ;; Ace Window
 (use-package ace-window
