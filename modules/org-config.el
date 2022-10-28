@@ -594,7 +594,7 @@ representation for the files to include, as returned by
   (setq org-attach-auto-tag nil
         org-attach-method "mv"
         org-attach-preferred-new-method 'dir
-        org-attach-id-dir ".data/"
+        org-attach-id-dir "data/"
         org-attach-use-inheritance t)
 
   (defun bp/org-link--get-file ()

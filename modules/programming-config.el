@@ -15,6 +15,11 @@
   :after '(lsp-mode))
 
 
+(defun bp/programming-mode-setup ()
+  (add-hook 'before-save-hook #'whitespace-cleanup 0 t))
+
+(add-hook 'prog-mode-hook #'bp/programming-mode-setup)
+
 
 (use-package dap-mode
   :config
