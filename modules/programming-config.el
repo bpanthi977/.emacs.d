@@ -23,7 +23,8 @@
 
 (use-package dap-mode
   :config
-  (setq dap-auto-configure-features '(sessions locals controls tooltip)))
+  (setq dap-auto-configure-features '(sessions locals controls tooltip))
+  (dap-mode -1))
 
 (use-package dap-ui
   :config
@@ -59,7 +60,6 @@
 
   (setq lsp-auto-configure t)
 
-  (setq lsp-ui-sideline-show-hover nil)
   (setq lsp-modeline-diagnostics-enable nil)
   (setq lsp-modeline-workspace-status-enable nil)
 
@@ -68,15 +68,13 @@
   (setq lsp-lens-enable nil)
   (setq lsp-headerline-breadcrumb-enable t)
   ;; Sideline code actions 
-  (setq lsp-ui-sideline-show-code-actions nil)
-  (setq lsp-ui-sideline-show-hover nil)
+  (setf lsp-ui-sideline-show-code-actions t
+        lsp-ui-sideline-show-diagnostics nil
+        lsp-ui-sideline-show-symbol nil
+        lsp-ui-sideline-show-hover nil)
   (setq lsp-modeline-code-actions-enable nil)
   ;; * hide only errors
-  (setq lsp-ui-sideline-show-diagnostics nil)
   (setq lsp-eldoc-enable-hover t)
   (setq lsp-modeline-diagnostics-enable t)
   (setq lsp-signature-auto-activate t)
   (setq lsp-signature-render-documentation t))
-
-
-  
