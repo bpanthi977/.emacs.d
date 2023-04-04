@@ -229,7 +229,9 @@ buffer is not visiting a file."
   :ensure t
   :defer t
   :init
-  (setf transient-history-file (concat savefile-dir "/transient/history.el")))
+  (setf transient-history-file (concat savefile-dir "/transient/history.el"))
+  (setq smerge-command-prefix "\C-cm"))
+
 
 ;; Avy
 (use-package avy
