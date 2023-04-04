@@ -63,6 +63,9 @@
 ;; Truncate lines
 (setq-default truncate-lines t)
 
+;; Tex Input
+(setf default-input-method "TeX") ;; You can toggle this with C-\
+
 ;;smart pairing for all
 (use-package smartparens
   :ensure t
