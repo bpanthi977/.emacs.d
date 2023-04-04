@@ -15,35 +15,18 @@
   (push '("return" . ?➡) prettify-symbols-alist)
   (prettify-symbols-mode t))
 
-(use-package jedi-core
-  :ensure t
-  :commands (jedi-mode)
-  :defer t
-  :hook (python-mode .
-                     (lambda ()
-                       (add-to-list 'company-backends 'company-jedi)
-                       (bp/python-mode-hook)))
+(add-hook 'python-mode-hook #'bp/python-mode-hook)
 
+(use-package lsp-pyright
+  :ensure t
+  :defer nil)
+
+(use-package ein
+  :ensure t
   :config
-  (setf python-environment-directory (concat init-dir "extra/python-environment"))
-  (setq python-shell-interpreter "python")
+  (setf ein:output-area-inlined-images t))
 
-  (bind-keys :map python-mode-map
-             ("C-." . helm-dash-at-point)
-             ("M-." . jedi:goto-definition)
-             ("M-," . jedi:goto-definition-pop-marker)
-             ("M-m d" . jedi:show-doc)))
-
-(use-package company-jedi
-  :ensure t
-  :defer t
-  :after (company jedi-core))
-
-;; (use-package lsp-python-ms
-;;   :ensure t
-;;   :defer t
-;;   :hook (python-mode . #'bp/python-mode-hook)
-;;   :config
-;;   (if windows-system?
-;;       (setf lsp-python-ms-executable "c:/Users/hp/.emacs.d/.cache/lsp/mspyls/Microsoft.Python.LanguageServer.exe")
-;;     (setf lsp-python-ms-executable "~/.emacs.d/.cache/lsp/mspyls/Microsoft.Python.LanguageServer")))
+;; for use in ein
+;; use (elpy-enable) to enable it
+(use-package elpy
+  :ensure t)
