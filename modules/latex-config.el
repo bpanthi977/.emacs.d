@@ -1,4 +1,9 @@
 ;; copied from https://www.emacswiki.org/emacs/AUCTeX
+(case system-type
+  (darwin
+   (setenv "PATH" (concat "/Library/TeX/texbin:" (getenv "PATH")))
+   (push "/Library/TeX/texbin/" exec-path)))
+
 (defun guess-TeX-master (filename)
   "Guess the master file for FILENAME from currently open .tex files."
   (let ((candidate nil)
