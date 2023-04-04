@@ -303,7 +303,9 @@ buffer is not visiting a file."
   (smartrep-define-key bp/global-prefix-map
       "m"
     '(("p" . mc/mark-previous-like-this)
-      ("n" . mc/mark-next-like-this))))
+      ("n" . mc/mark-next-like-this)
+      ("0" . mc/insert-numbers)
+      ("a" . mc/insert-letters))))
 
 (use-package expand-region
   :ensure t
