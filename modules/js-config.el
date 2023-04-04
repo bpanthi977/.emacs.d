@@ -3,8 +3,7 @@
                      "~/.yarn/bin"
                      "~/.bun/bin"
                      "~/.local/bin"
-                     "/opt/homebrew/bin"
-                     "/opt/homebrew/opt/node@14/bin")))
+                     "/opt/homebrew/bin")))
   (setq exec-path (append extra-paths exec-path))
   (setenv "PATH" (cl-reduce (lambda (path dir)
                            (concat dir ":" path))
@@ -33,15 +32,16 @@
   :mode "\\.tsx\\'"
   :config
   (defun bp/typescript-config-from-prettierrc ()
-    (let* ((prettierrc (locate-dominating-file (buffer-file-name) ".prettierrc"))
-           (config (if prettierrc
-                       (with-temp-buffer
-                         (insert-file-contents (concat prettierrc "/.prettierrc"))
-                         (goto-char (point-min))
-                         (json-parse-buffer)))))
-      (when config
-        (when-let ((indent-level (gethash "tabWidth" config)))
-          (setq-local typescript-indent-level indent-level)))))
+    (when (buffer-file-name)
+      (let* ((prettierrc (locate-dominating-file (buffer-file-name)  ".prettierrc"))
+             (config (if prettierrc
+                         (with-temp-buffer
+                           (insert-file-contents (concat prettierrc "/.prettierrc"))
+                           (goto-char (point-min))
+                           (json-parse-buffer)))))
+        (when config
+          (when-let ((indent-level (gethash "tabWidth" config)))
+            (setq-local typescript-indent-level indent-level))))))
 
 
   (defun bp/typescript-mode-hook ()
