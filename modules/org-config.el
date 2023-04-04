@@ -16,6 +16,7 @@
               ("M-m o s". 'bp/org-source-template)
               ("M-m o c t". 'bp/org-capture-thought)
               ("M-m o c n" . 'bp/org-capture-notes)
+              ("M-m o c d" . 'bp/org-capture-definitions)
               ("M-m o v" . org-redisplay-inline-images))
   :bind (:map org-src-mode-map
               ("C-c C-c" . org-edit-src-exit))
@@ -337,6 +338,10 @@ representation for the files to include, as returned by
   (defun bp/org-capture-thought ()
     (interactive)
     (org-capture nil "thoughts"))
+
+  (defun bp/org-capture-definitions ()
+    (interactive)
+    (org-capture nil "definitions"))
 
   (defun bp/org-capture-notes ()
     (interactive)
@@ -692,7 +697,7 @@ representation for the files to include, as returned by
     (concat
      (mapcar #'(lambda (c) (if (equal c ?\[) ?\( (if (equal c ?\]) ?\) c))) string-to-transform))
     )
-  (defun capture-in-visited-org-file ()
+  (defun capture-thoughts-in-visited-org-file ()
     (let* ((buffer (current-buffer))
            (current-point (point)))
       (goto-char 0)
@@ -700,6 +705,15 @@ representation for the files to include, as returned by
           (forward-line)
         (progn (goto-char (point-max))
                (insert "\n* Thoughts")))))
+
+  (defun capture-definitions-in-visited-org-file ()
+    (let* ((buffer (current-buffer))
+           (current-point (point)))
+      (goto-char 0)
+      (if (search-forward-regexp "^\* Definitions" nil t)
+          (forward-line)
+        (progn (goto-char (point-max))
+               (insert "\n* Definitions")))))
 
   (defun capture-note-in-current-heading ()
     (let* ((buffer (current-buffer))
@@ -716,7 +730,7 @@ representation for the files to include, as returned by
                                  "* %? [[%:link][%(transform-square-brackets-to-round-ones \"%:description\")]]\n")
                                 ("t" "Todo" entry (file+headline "~/org/tasks.org" "Tasks")
                                  "* TODO %?\nCREATED: %U\n %i\n  %a")
-                                ("j" "Journal" entry (file+datetree "~/SDocuments/Personal/journal.org.gpg")
+                                ("j" "Journal" entry (file+datetree "~/org/journal.org.gpg")
                                  "* %?\nEntered on %U\n  %i\n  %a")
                                 ("n" "Note" entry (file "~/org/notes.org" )
                                  "* %?\nCREATED: %U\n")
@@ -752,7 +766,9 @@ representation for the files to include, as returned by
 %i")
                                 ("k" "Quote" item (file+headline "~/org/notes.org" "Quotes")
                                  "%? :: %x")
-                                ("thoughts" "Capture Thoughts in a heading at bottom of file" item (function capture-in-visited-org-file)
+                                ("thoughts" "Capture Thoughts in a heading at bottom of file" item (function capture-thoughts-in-visited-org-file)
+                                 "+ %?")
+                                ("definitions" "Capture Definitions in a heading at bottom of file" item (function capture-definitions-in-visited-org-file)
                                  "+ %?")
                                 ("notes" "Capture notes below current heading" item (function capture-note-in-current-heading)
                                  "+ %?\nCREATED: %U\n")
