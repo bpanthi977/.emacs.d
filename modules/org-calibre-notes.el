@@ -1,3 +1,18 @@
+;;;; org-calibre-notes --- Extract highlights and notes from Calibre EPUB reader -*- lexical-binding: t -*-
+
+;; Copyright (C) 2021-2022 Bibek Panthi
+
+;; Author: Bibek Panthi <bpanthi977@gmail.com>
+;; Maintainer: Bibek Panthi <bpanthi977@gmail.com>
+;; URL: https://github.com/bpanthi977/org-calibre-notes
+;; Kewords: epub, calibre, org
+
+;; This file in not part of GNU Emacs
+
+;;; License: MIT
+
+;;; Code:
+
 (cl-defun assort (seq &key (key #'identity) (test #'eql) (start 0) end)
   "Return SEQ assorted by KEY.
 
@@ -120,3 +135,5 @@ From Serapeum Library (Common Lisp)"
         (when savefile
           (find-file savefile)
           (org-calibre-notes/parse-and-insert parsed-json source))))))
+
+;;; org-calibre-notes.el ends here
