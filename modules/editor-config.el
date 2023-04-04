@@ -373,3 +373,27 @@ buffer is not visiting a file."
   :config
   (global-set-key [remap kill-ring-save] #'easy-kill)
   (global-set-key [remap mark-sexp] #'easy-mark))
+
+(use-package eyebrowse
+  :ensure t
+  :demand t
+  :config
+  (eyebrowse-mode t)
+  (smartrep-define-key bp/global-prefix-map
+      "w"
+    '(("." . eyebrowse-switch-to-window-config)
+      ("0" . eyebrowse-switch-to-window-config-0)
+      ("1" . eyebrowse-switch-to-window-config-1)
+      ("2" . eyebrowse-switch-to-window-config-2)
+      ("3" . eyebrowse-switch-to-window-config-3)
+      ("4" . eyebrowse-switch-to-window-config-4)
+      ("5" . eyebrowse-switch-to-window-config-5)
+      ("6" . eyebrowse-switch-to-window-config-6)
+      ("7" . eyebrowse-switch-to-window-config-7)
+      ("8" . eyebrowse-switch-to-window-config-8)
+      ("9" . eyebrowse-switch-to-window-config-9)
+      ("c" . eyebrowse-create-named-window-config)
+      ("," . eyebrowse-rename-window-config)
+      (">" . eyebrowse-next-window-config)
+      ("<" . eyebrowse-prev-window-config)
+      ("p" . eyebrowse-last-window-config))))
