@@ -1,6 +1,7 @@
 (use-package elfeed
   :ensure t
-  :demand t
+  :demand nil
+  :defer t
   :config
   ;; load feeds from org/elfeed.el file (which isn't in public repo)
   (let ((file (expand-file-name "elfeed.el" org-directory)))
@@ -11,6 +12,7 @@
   :ensure t
   :after elfeed
   :demand t
+  :defer t
   :config
   (setq elfeed-tube-auto-save-p nil)
   (setq elfeed-tube-auto-fetch-p t)
@@ -24,6 +26,7 @@
 
 (use-package elfeed-tube-mpv
   :ensure t
+  :defer t
   :bind (:map elfeed-show-mode-map
               ("C-c C-f" . elfeed-tube-mpv-follow-mode)
               ("C-c C-w" . elfeed-tube-mpv-where)))
