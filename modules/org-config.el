@@ -45,6 +45,27 @@
       (when (not (file-directory-p pub-dir))
         (make-directory pub-dir))))
 ;;;;; Blog
+
+
+  (defun bp/org-html--format-image-relative (original-function source attribute info)
+    "Modify the <img src=... /> link to point to path relative to html file instead of org file"
+    (let ((org-file (buffer-file-name)))
+      (cond ((and org-file
+                  org-export-output-directory-prefix
+                  (not (file-name-absolute-p source))
+                  (not (org-publish-get-project-from-filename org-file)))
+             (let* ((output-dir (format "%s/%s/"
+                                        (file-name-directory org-file)
+                                        org-export-output-directory-prefix))
+                    (source (file-relative-name (file-truename source)
+                                                output-dir)))
+               (message "s: %s, org-file: %s" source org-file)
+               (funcall original-function source attribute info)))
+            (t
+             (funcall original-function source attribute info)))))
+
+  (advice-add 'org-html--format-image :around #'bp/org-html--format-image-relative)
+
   (require 'ox-publish)
   (setf org-babel-default-header-args '((:session . "none") (:results . "replace") (:exports . "both")
                                         (:eval . "never-export")
