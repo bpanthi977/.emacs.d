@@ -114,7 +114,7 @@
       (format-time-string format))))
 
 
-(defun org-web-notes/html-to-org (file)
+(cl-defun org-web-notes/html-to-org (file &key (move-file t))
   (interactive "f")
   (setf org-web-note--highlight-id nil
         org-web-note--headings-count 0)
@@ -137,6 +137,8 @@
     (insert
      (with-output-to-string
        (org-web-notes/walk-and-collect0 dom)))
+    (when move-file
+      (move-file-to file "~/org/data/html/"))
     org-web-note--headings-count))
 
 
@@ -153,10 +155,9 @@
       (let ((savefile (org-web-notes/select-save-file source)))
         (when savefile
           (find-file savefile)
-          (org-web-notes/html-to-org source)
+          (org-web-notes/html-to-org source :move-file t)
           (goto-char (point-min))
-          (org-id-get-create)
-          (move-file-to source "~/org/data/html/"))))))
+          (org-id-get-create))))))
 
 (defun org-web-notes-bulk (input-dir output-dir)
   "Parse source html files from `input-dir' and save to similarly named files in `output-dir'"
@@ -174,7 +175,7 @@
                (let ((output-file (expand-file-name (concatenate 'string filename ".org")
                                                     output-dir)))
                  (find-file output-file)
-                 (cond ((= (org-web-notes/html-to-org input) 0)
+                 (cond ((= (org-web-notes/html-to-org input :move-file nil) 0)
                         (set-buffer-modified-p nil)
                         (kill-buffer))
                        (t
