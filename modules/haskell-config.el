@@ -3,11 +3,11 @@
   :defer t
   :config
   
-  (setq exec-path (append '("/home/bpanthi/.cabal/bin")
+  (setq exec-path (append '("~/.cabal/bin")
 			  exec-path))
-  (setq exec-path (append '("/home/bpanthi/.ghcup/bin/")
+  (setq exec-path (append '("~/.ghcup/bin/")
 			  exec-path))
-  (setenv "PATH" (concat "/home/bpanthi/.ghcup/bin/:"
+  (setenv "PATH" (concat "~/.ghcup/bin/:"
 			 (getenv "PATH")))
 
   (setq haskell-process-type 'ghci)
@@ -32,7 +32,3 @@
 
 (use-package lsp-haskell
   :ensure t)
-
-
-
-

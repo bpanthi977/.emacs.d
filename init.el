@@ -64,7 +64,7 @@
    ;; "android-config"
    "python-config"
    ;; "go-config"
-
+   "haskell-config"
    "web-config"
    "latex-config"
    "js-config"
