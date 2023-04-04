@@ -25,6 +25,8 @@
                       (setf org-pretty-entities t)
                       (modify-syntax-entry ?$ "$$" org-mode-syntax-table)
                       (setf org-pretty-entities-include-sub-superscripts nil)
+                      ;; a more noticable bold face for org mode in dark themes (spacemacs-dark)
+                      (face-remap-add-relative 'bold '(:weight bold :foreground "green3"))
                       ;;(org-cdlatex-mode)
                       (electric-indent-mode -1)
                       (setq ispell-parser 'tex)))
