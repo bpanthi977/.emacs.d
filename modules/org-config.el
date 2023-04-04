@@ -1,10 +1,10 @@
 ;; -*- eval: (outshine-mode); -*-
-;;; Org mode
+;; * Org mode
 (require 'cl)
 
 (setq pdf-view-use-scaling t) ;; from https://github.com/vedang/pdf-tools
 (use-package org
-;;;; Bindings and hooks
+;; ** Bindings and hooks
   :defer nil
   :mode (("\\.org$" . org-mode))
   :bind (:map bp/global-prefix-map
@@ -32,14 +32,14 @@
                       (electric-indent-mode -1)
                       (setq ispell-parser 'tex)))
   :config
-;;;; requirements
+;; ** requirements
   (require 'ox-latex)
 ;;  (require 'cdlatex)
   (require 'org-attach)
   ;;(require 'org-ref)
   (require 'org-id)
-;;;; Exporting
-;;;;; Exports to './output' directory
+;; ** Exporting
+;; *** Exports to './output' directory
   (defvar org-export-output-directory-prefix "output" "prefix of directory used for org-mode export")
   (defadvice org-export-output-file-name (before org-add-export-dir activate)
     "Modifies org-export to place exported files in a different directory"
@@ -47,7 +47,6 @@
       (setq pub-dir org-export-output-directory-prefix)
       (when (not (file-directory-p pub-dir))
         (make-directory pub-dir))))
-;;;;; Blog
 
 
   (defun bp/org-html--format-image-relative (original-function source attribute info)
@@ -69,6 +68,7 @@
 
   (advice-add 'org-html--format-image :around #'bp/org-html--format-image-relative)
 
+;; *** Blog
   (require 'ox-publish)
   (setf org-babel-default-header-args '((:session . "none") (:results . "replace") (:exports . "both")
                                         (:eval . "never-export")
@@ -173,7 +173,7 @@ representation for the files to include, as returned by
     (let ((default-directory "~/Development/Web/Blog/"))
       (async-shell-command "~/Development/Web/Blog/syncFtp.sh")))
 
-;;;;; Html Export Theming
+;; *** Html Export Theming
   (defun bp/load-css-from-file (file)
     (message "Loading org html export css")
     (with-temp-buffer
@@ -195,7 +195,7 @@ representation for the files to include, as returned by
               bp/org-html-loaded-timestamp current-timestamp))
       bp/org-html-css))
 
-;;;;; Html Export Theming
+;; *** Html Export Theming
   (defadvice org-html-export-to-html (before html-export-load-css1 activate)
     (setq org-html-head-extra (bp/org-html-css)))
 
@@ -211,7 +211,7 @@ representation for the files to include, as returned by
       (org-html-export-as-html nil)
       (browse-url-of-buffer "*Org HTML Export*")))
 
-;;;;; Comments in between paragraphs
+;; *** Comments in between paragraphs
   ;; This allows comments in between a paragraph
   (defun delete-org-comments (backend)
     (loop for comment in (reverse (org-element-map (org-element-parse-buffer)
@@ -221,7 +221,7 @@ representation for the files to include, as returned by
                                   (org-element-property :end comment))
                 "")))
   (add-hook 'org-export-before-processing-hook 'delete-org-comments)
-;;;; Better Org Outline bindings for show/hide while navigating
+;; ** Better Org Outline bindings for show/hide while navigating
   (defun bp/org-just-show-this ()
     (interactive)
     (org-content 2)
@@ -255,7 +255,7 @@ representation for the files to include, as returned by
                (org-backward-heading-same-level)
                (bp/org-just-show-this)))))
 
-;;;; Customizations
+;; ** Customizations
   (setq org-src-window-setup 'current-window)
   (setq org-hide-emphasis-markers t)
   (setf org-startup-with-inline-images t
@@ -264,7 +264,7 @@ representation for the files to include, as returned by
         org-startup-folded 'content)
   (setf org-id-link-to-org-use-id 'use-existing)
   (setq org-directory "~/synced/Notes/")
-  (setq org-default-notes-file (concat org-directory "/notes.org"))
+  (setq org-default-notes-file (concat org-directory "notes.org"))
   (setq org-log-done t)
 
   ;; Template for source of a fact
@@ -274,7 +274,7 @@ representation for the files to include, as returned by
 
 
 
-;;;;; PDF Viewers
+;; *** PDF Viewers
   (if windows-system?
       (progn
         (setcdr (assoc "\\.pdf\\'" org-file-apps) "e:/Programs/SumatraPDF/SumatraPDF.exe %s")
@@ -285,7 +285,7 @@ representation for the files to include, as returned by
       (pushnew '("\\.pdf::\\([0-9]+\\)?\\'" . default)
                org-file-apps)))
 
-;;;;; Fixing Link Rot
+;; *** Fixing Link Rot
   (defvar bp/org-replace-link-old nil)
   (defvar bp/org-replace-link-new nil)
   (defun bp/org-replace-link (old new)
@@ -309,7 +309,7 @@ representation for the files to include, as returned by
       (with-current-buffer (find-file file)
         (replace-regexp bp/org-replace-link-old bp/org-replace-link-new))))
 
-;;;;; HTML Viewer
+;; *** HTML Viewer
   (defun bp/open-html-file (file link)
     (declare (ignore link))
     (browse-url-of-file file))
@@ -317,7 +317,7 @@ representation for the files to include, as returned by
   (pushnew '("\\.html\\'" . bp/open-html-file)
            org-file-apps)
 
-;;;; Timestamp in TODO Heading
+;; ** Timestamp in TODO Heading
   ;; Switch between TODO, DONE and COMPLETED
   ;; (smartrep-define-key org-mode-map "M-m o"
   ;;   '(("t" . org-todo)))
@@ -329,12 +329,16 @@ representation for the files to include, as returned by
     (bp/insert-created-timestamp))
 
   (ad-activate 'org-insert-todo-heading)
-;;;; Image scaling with text
+;; ** Clocking
+  ;; https://orgmode.org/manual/Clocking-commands.html
+  (setq org-clock-persist 'history)
+  (org-clock-persistence-insinuate)
+;; ** Image scaling with text
   (defadvice text-scale-increase (after bp/image-scaling-on-text-scaling activate)
     (setq org-image-actual-width (list (truncate (* 500 (expt text-scale-mode-step text-scale-mode-amount)))))
     (org-redisplay-inline-images))
 
-;;;; Org capture functions for thoughts and notes in org file
+;; ** Org capture functions for thoughts and notes in org file
   (defun bp/org-capture-thought ()
     (interactive)
     (org-capture nil "thoughts"))
@@ -352,7 +356,7 @@ representation for the files to include, as returned by
   ;;                         (modify-syntax-entry ?< ".")
   ;;                         (modify-syntax-entry ?> ".")))
 
-;;;; org-babel
+;; ** org-babel
   (org-babel-do-load-languages
    'org-babel-load-languages
    '((R . t)
@@ -377,7 +381,7 @@ representation for the files to include, as returned by
      ))
   (setf org-babel-lisp-eval-fn 'slime-eval)
 
-;;;; Linking org files across fs to ~/org/
+;; ** Linking org files across fs to ~/org/
   (defun bp/link-to-~org ()
     (interactive)
     (let ((name (completing-read "File Name: " (remove-if #'null
@@ -391,12 +395,10 @@ representation for the files to include, as returned by
 
 
 (use-package org-id
-  :defer t
+  :defer nil
   :config
   (setf org-id-locations-file-relative t
-        org-id-locations-file (expand-file-name ".org-id-locations" savefile-dir))
-  (defun bp/org-id-update-note-ids ()
-    (org-id-update-id-locations (directory-files-recursively "~/org" "?*.org"))))
+        org-id-locations-file (expand-file-name ".org-id-locations" savefile-dir)))
 
 ;;; Org Latex
 
@@ -410,18 +412,21 @@ representation for the files to include, as returned by
 
   ;; You also need to bug fix the working of `Tranparent' in org.el.
   ;; See personal notes and also install librsvg-2-2.dll
-  (setq org-preview-latex-default-process 'dvisvgm)
+  (setq org-preview-latex-default-process 'dvipng)
   (plist-put org-format-latex-options :background "Transparent")
   (plist-put org-format-latex-options :scale 1.5)
 
   ;; Don't clutter my directiory
-  (setq org-preview-latex-image-directory (if windows-system? "E:/tmp/ltximg/" "/mnt/Data/tmp/ltximg/"))
+  (setq org-preview-latex-image-directory (case system-type
+                                            (windows-nt "E:/tmp/ltximg/")
+                                            (darwin "/tmp/ltximg/")
+                                            (t "/tmp/ltximg/")))
 
   ;; for latex in odt files
   (setq org-latex-to-mathml-convert-command
         "latexmlmath \"%i\" --presentationmathml=%o"
         org-export-with-latex t)
-;;;; Latex preview size scaling
+;; ** Latex preview size scaling
   (defadvice text-scale-increase (after bp/latex-preview-scaling-on-text-scaling activate)
     (plist-put org-format-latex-options :scale (* 1.2 (/ (frame-char-height) 17) (expt text-scale-mode-step text-scale-mode-amount))))
 
@@ -435,7 +440,7 @@ representation for the files to include, as returned by
                  (t 100)))
           (t (error "Unknown latex type"))))
 
-;;;; Latex inserting
+;; ** Latex inserting
   (let ((last-input ""))
     (defvar-local bp/latex-inputs nil)
     (defun bp/org-insert-inline-latex (latex-fragment)
@@ -499,8 +504,8 @@ representation for the files to include, as returned by
                 "\n\\end{equation*}\n"))
       (org-latex-preview)))
 
-;;;; Document Classes
-;;;;; Elsevier Article
+;; ** Document Classes
+;; *** Elsevier Article
 
   (add-to-list 'org-latex-classes
                '("elsarticle"
@@ -543,7 +548,7 @@ representation for the files to include, as returned by
                  ("\\paragraph{%s}" . "\\paragraph*{%s}")
                  ("\\subparagraph{%s}" . "\\subparagraph*{%s}")))
 
-;;;;; Better defaults
+;; *** Better defaults
   (add-to-list 'org-latex-classes
                '("oldarticle"
                  "\\documentclass[11pt,a4paper]{article}
@@ -606,7 +611,7 @@ representation for the files to include, as returned by
           ("stringstyle" "\\color{stringColor}")))
 
 
-;;;; init key bindings
+;; ** init key bindings
   :init
   (with-eval-after-load "org"
     (bind-keys :map org-mode-map
@@ -825,7 +830,7 @@ representation for the files to include, as returned by
   (interactive)
   (setf company-backends '(company-dabbrev)))
 ;;; Research
-;;;; Org Ref
+;; * Org Ref
 (use-package org-ref
   :ensure t
   :defer t
@@ -862,7 +867,7 @@ representation for the files to include, as returned by
   (require 'doi-utils-scihub)
   (setq dbus-debug nil))
 
-;;;; Bibtex
+;; * Bibtex
 ;; (use-package bibtex
 ;;   :ensure t
 ;;   :defer t
@@ -873,7 +878,7 @@ representation for the files to include, as returned by
 ;;      bibtex-completion-pdf-open-function 'org-open-file
 ;;      bibtex-completion-notes-template-one-file
 ;;      "
-;; * ${author-abbrev} - ${title}
+; * ${author-abbrev} - ${title}
 ;;   :PROPERTIES:
 ;;   :Custom_ID: ${=key=}
 ;;   :AUTHOR: ${AUTHOR}
@@ -886,7 +891,7 @@ representation for the files to include, as returned by
 ;; cite:${=key=}
 ;; "))
 
-;;;; Varibles setup
+;; ** Varibles setup
 (defun bp/setup-research-dir-local-variables ()
   (interactive)
   (let ((dir (file-name-directory (buffer-file-name))))
@@ -919,7 +924,7 @@ representation for the files to include, as returned by
     (setq org-ref-pdf-directory (expand-file-name "papers/" dir))))
 
 
-;;; Org-roam
+;; * Org-roam
 (use-package org-roam
   :ensure t
   :defer nil
@@ -939,7 +944,7 @@ representation for the files to include, as returned by
                ("M-m r t" . org-roam-tag-add)))
   :config
   (setf org-roam-mode nil)
-  (setq org-roam-directory (file-truename "~/synced/Notes/")
+  (setq org-roam-directory (file-truename "~/org")
         org-roam-capture-templates '(("d" "default" "plain" "%?"
                                       :target (file+head "${slug}.org"
                                                          "#+title: ${title}\n#+date:%t\n")
@@ -947,6 +952,7 @@ representation for the files to include, as returned by
   (when windows-system?
     (setq org-roam-list-files-commands '((find . "C:/tools/msys64/usr/bin/find.exe") rg)))
   (setq org-roam-graph-viewer nil)
+  (setq org-roam-file-exclude-regexp '("data/" ".stversions/" ".stfolder/"))
   (setq org-roam-db-location
         (cond ((string-equal system-type "gnu/linux")
                (expand-file-name "dbs/linux/org-roam.db" org-roam-directory))
@@ -1015,10 +1021,10 @@ representation for the files to include, as returned by
   (setf org-roam-ui-follow t))
 
 
-;;; org-download
+;; * org-download
 (use-package org-download
   :ensure t
-  :defer nil
+  :demand t
   :commands (org-download-screenshot)
   :config
   (defvar bp/org-download-screenshot-title nil)
@@ -1091,16 +1097,18 @@ Convert TITLE to a filename-suitable slug."
 ;;            (org--latex-preview-region (point-min) (point-max))))
 ;;   )
 
+;; * Presentation
 (use-package org-tree-slide
   :ensure t)
-
-
+;; * org noter
 (use-package org-noter
   :ensure t
   :defer t
   :config
   (setf org-noter-notes-search-path '("~/org/" "~/Documents/synced/BE/")
         org-noter-doc-split-fraction '(0.8 0.2)))
+
+;; * orglink
 (use-package orglink
   :ensure t
   :defer nil
