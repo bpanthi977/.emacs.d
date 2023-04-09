@@ -1,3 +1,5 @@
+(require 'cl)
+
 (use-package company
   :ensure t
   :demand t

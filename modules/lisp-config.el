@@ -1,5 +1,5 @@
 ;;Common Lisp
-
+(require 'cl)
 ;;; Use spaces insted of tabs for lisp family languages
 (add-hook 'lisp-mode-hook (lambda ()
                             (setq-local indent-tabs-mode nil)))

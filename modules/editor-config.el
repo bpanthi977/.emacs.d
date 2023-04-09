@@ -1,3 +1,4 @@
+(require 'cl)
 (setq exec-path (append '("/home/bpanthi/.local/bin") exec-path))
 
 (setq epa-pinentry-mode 'loopback) ;; See: [[id:C896DC59-2D11-4ADC-859F-54E4721C3B3A][Configuring GPG for Emacs in MacOS]]

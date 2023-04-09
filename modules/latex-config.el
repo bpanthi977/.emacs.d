@@ -1,4 +1,5 @@
 ;; copied from https://www.emacswiki.org/emacs/AUCTeX
+(require 'cl)
 (case system-type
   (darwin
    (setenv "PATH" (concat "/Library/TeX/texbin:" (getenv "PATH")))
