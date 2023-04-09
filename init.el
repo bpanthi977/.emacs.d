@@ -15,12 +15,24 @@
 
 (add-to-list 'load-path modules-dir)
 (add-to-list 'load-path (expand-file-name "my-packages" modules-dir))
+
+(defun subdirectories (dir)
+  "List all subdirectories of directory `dir'"
+  (let (result)
+    (dolist (file (file-name-all-completions "" dir))
+      (when (and (directory-name-p file) (not (member file '("./" "../"))))
+        (setq result (nconc result (list (expand-file-name file dir))))))
+    result))
+
+(dolist (package (subdirectories (expand-file-name "my-packages" modules-dir)))
+  (add-to-list 'load-path package))
+
 (add-to-list 'load-path (expand-file-name "git-clones/org-mode/lisp/" modules-dir))
 (add-to-list 'load-path (expand-file-name "git-clones/org-mode/contrib/lisp/" modules-dir))
 (add-to-list 'load-path (expand-file-name "git-clones/org-roam/" modules-dir))
 
 
-;;; taken from Doom emacs 
+;;; taken from Doom emacs
 ;; reduce the frequency of garbage collection by making it happen on
 (defvar last-file-name-handler-alist file-name-handler-alist)
 (setq gc-cons-threshediold 402653184
@@ -31,8 +43,8 @@
 (setq large-file-warning-threshold 100000000)
 
 (defvar windows-system? (if (or (string-equal system-name "windows/nt")
-			   (string-equal system-type "windows-nt"))
-		       t nil))
+                           (string-equal system-type "windows-nt"))
+                       t nil))
 
 
 ;;Load custom file
@@ -40,7 +52,7 @@
 (if (file-exists-p custom-file)
     (load-file custom-file))
 
-;; Declare modules to load 
+;; Declare modules to load
 (defvar load-modules-list
   (list
    "packages-config"
@@ -87,8 +99,8 @@
 ;;   (server-start))
 
 (setq gc-cons-threshold 16777216
-	  gc-cons-percentage 0.1
-	  file-name-handler-alist last-file-name-handler-alist)
+          gc-cons-percentage 0.1
+          file-name-handler-alist last-file-name-handler-alist)
 
 
 (put 'downcase-region 'disabled nil)

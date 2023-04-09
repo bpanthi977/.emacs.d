@@ -30,3 +30,4 @@ modules/*.elc
 custom.el
 /custom.el
 /nov-places
+/elpy/
