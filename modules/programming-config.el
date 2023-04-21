@@ -52,6 +52,7 @@
   :init
   (setq lsp-keymap-prefix "M-m l")
   :config
+  (setf backup-by-copying t)
   (setq lsp-enable-file-watchers nil)
   (setq read-process-output-max (* 1024 1024))
   (setq lsp-idle-delay 3)
