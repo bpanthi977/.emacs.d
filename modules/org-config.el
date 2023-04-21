@@ -1116,7 +1116,6 @@ Convert TITLE to a filename-suitable slug."
   (global-orglink-mode))
 ;; * org-mpv-notes
 (use-package org-mpv-notes
-  :ensure t
   :commands (org-mpv-notes)
   :defer t
   :config

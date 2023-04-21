@@ -145,12 +145,13 @@ buffer is not visiting a file."
           (bp/projectile-find-common-lisp-root parent)))))
 
   (push #'bp/projectile-find-common-lisp-root projectile-project-root-functions)
-  :init
+  (pushnew "*\\node_modules" projectile-globally-ignored-directories)
   (setq projectile-indexing-method 'alien)
   (setq projectile-enable-caching t)
   (setq projectile-cache-file (concat init-dir ".cache/projectile.cache")
         projectile-known-projects-file (concat savefile-dir "/projectile-bookmarks.eld"))
 
+  :init
   (defun bp/projectile-for-all (thunk)
     (interactive)
     (dolist (b (projectile-project-buffers))
@@ -195,6 +196,13 @@ buffer is not visiting a file."
 
   (bind-keys :map bp/global-prefix-map
            ("w n" . make-frame)))
+
+(use-package treemacs
+  :ensure t
+  :init
+  (bind-keys :map bp/global-prefix-map
+           ("w T" . treemacs)
+           ("w t" . treemacs-select-window)))
 
 (use-package yasnippet
   :ensure t

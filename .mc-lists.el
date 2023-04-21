@@ -44,9 +44,11 @@
         isearch-repeat-forward
         kill-region
         kill-visual-line
+        kmacro-end-and-call-macro
         kmacro-start-macro
         lsp-find-definition-mouse
         magit-discard
+        magit-unstage
         makey-key-mode-popup-isearch
         markdown-cycle
         mouse-buffer-menu
