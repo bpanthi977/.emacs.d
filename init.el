@@ -27,6 +27,7 @@
 (dolist (package (subdirectories (expand-file-name "my-packages" modules-dir)))
   (add-to-list 'load-path package))
 
+(add-to-list 'load-path (expand-file-name "other-packages" modules-dir))
 (add-to-list 'load-path (expand-file-name "git-clones/org-mode/lisp/" modules-dir))
 (add-to-list 'load-path (expand-file-name "git-clones/org-mode/contrib/lisp/" modules-dir))
 (add-to-list 'load-path (expand-file-name "git-clones/org-roam/" modules-dir))
