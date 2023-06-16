@@ -62,18 +62,17 @@
 (unless (package-installed-p 'spacemacs)
   (package-install 'spacemacs-theme))
 
-;;; when emacsclient is started by systemd graphics mode is set
-;;; to terminal and thus spacemacs loads a non true-color theme
-;;; which looks dull.
-;;; Here I load spacemacs-common file where #'true-color-p is
-;;; defined, then temporarily set it to return t and load
-;;; spacemacs-dark-theme
-(let ((true-color-p* (symbol-function 'true-color-p)))
-  (require 'spacemacs-common)
-  (setf (symbol-function 'true-color-p) (lambda () t))
-  (unwind-protect (progn
-                    (load-theme 'spacemacs-dark))
-    (setf (symbol-function 'true-color-p) true-color-p*)))
+;; when emacsclient is started by systemd graphics mode is set
+;; to terminal and thus spacemacs loads a non true-color theme
+;; which looks dull.
+;; Here I load spacemacs-common file where #'true-color-p is
+;; defined, then temporarily set it to return t and load
+;; spacemacs-dark-theme
+(defun always-true-color-p (func)
+  t)
+(advice-add 'true-color-p :around #'always-true-color-p)
+(load-theme 'spacemacs-dark)
+(advice-remove 'true-color-p 'al)
 
 (defun wolfe/pretty-symbol-push-default ()
   (push '("!=" . ?≠) prettify-symbols-alist)
@@ -110,5 +109,5 @@
  ;; If there is more than one, they won't work right.
  '(default ((t (:inherit nil :stipple nil
                          ;;:background "#3F3F3F" :foreground "#DCDCCC"
-                         :inverse-video nil :box nil :strike-through nil :overline nil :underline nil :slant normal :weight normal ;; :height 90
+                         :inverse-video nil :box nil :strike-through nil :overline nil :underline nil :slant normal :weight normal :height 130
                          :width normal :foundry "ADBO" :family "Source Code Pro")))))
