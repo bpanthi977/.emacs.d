@@ -217,8 +217,8 @@ representation for the files to include, as returned by
     (loop for comment in (reverse (org-element-map (org-element-parse-buffer)
                                       'comment 'identity))
           do
-          (setf (buffer-substring (org-element-property :begin comment)
-                                  (org-element-property :end comment))
+          (setf (buffer-substring-no-properties (org-element-property :begin comment)
+                                                (org-element-property :end comment))
                 "")))
   (add-hook 'org-export-before-processing-hook 'delete-org-comments)
 ;; ** Better Org Outline bindings for show/hide while navigating
@@ -393,14 +393,14 @@ representation for the files to include, as returned by
   ;; org config complete
   )
 
-
+;; * org-id
 (use-package org-id
   :defer nil
   :config
   (setf org-id-locations-file-relative t
         org-id-locations-file (expand-file-name ".org-id-locations" savefile-dir)))
 
-;;; Org Latex
+;; * Org Latex
 
 (use-package ox-latex
   :defer t
@@ -1010,7 +1010,8 @@ representation for the files to include, as returned by
 ;;   (bind-keys :map bp/global-prefix-map
 ;;              ("r s" . bp/org-roam-server)))
 
-;; Supersedes org-roam-server
+;; * org-roam-ui
+;;; Supersedes org-roam-server
 (use-package org-roam-ui
   :ensure t
   :defer t
