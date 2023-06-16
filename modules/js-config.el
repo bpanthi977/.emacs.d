@@ -10,6 +10,12 @@
                          extra-paths
                          :initial-value (getenv "PATH"))))
 ;; (setq exec-path (append exec-path '("~/.nvm/versions/node/v14.20.0/bin")))
+(use-package json-mode
+  :config
+  (defun bp/json-mode-hook ()
+    (setf js-indent-level 2))
+
+  (add-hook 'json-mode-hook #'bp/json-mode-hook))
 
 (use-package rjsx-mode
   :ensure t
