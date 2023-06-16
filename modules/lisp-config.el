@@ -41,38 +41,39 @@
          (setf inferior-lisp-program "sbcl --core /home/bpanthi/.cache/common-lisp/core --dynamic-space-size 8560"
                common-lisp-hyperspec-root "file:///home/bpanthi/Dev/lisp/HyperSpec-7-0/HyperSpec/"))))
 
-(use-package slime
-  :ensure nil
-  :defer t
-  :commands (slime cl-services)
-  :config
-  (setf bp/lisp-ide 'slime)
-  (define-key lisp-mode-map (kbd "M-m d d") #'slime-documentation)
+;; (use-package slime
+;;   :ensure nil
+;;   :defer t
+;;   :commands (slime cl-services)
+;;   :config
+;;   (setf bp/lisp-ide 'slime)
+;;   (define-key lisp-mode-map (kbd "M-m d d") #'slime-documentation)
 
-  (setq slime-contribs '(slime-asdf slime-banner slime-fancy slime-hyperdoc
-                                    ;;slime-repl-ansi-color
-                                    slime-macrostep slime-mrepl slime-quicklisp
-                                    slime-sbcl-exts slime-scratch slime-sprof
-                                    slime-xref-browser slime-company))
-  (defun slime-sbcl ()
-    (interactive)
-    (let ((inferior-lisp-program "sbcl"))
-      (slime)))
+;;   (setq slime-contribs '(slime-asdf slime-banner slime-fancy slime-hyperdoc
+;;                                     ;;slime-repl-ansi-color
+;;                                     slime-macrostep slime-mrepl slime-quicklisp
+;;                                     slime-sbcl-exts slime-scratch slime-sprof
+;;                                     slime-xref-browser slime-company))
+;;   (defun slime-sbcl ()
+;;     (interactive)
+;;     (let ((inferior-lisp-program "sbcl"))
+;;       (slime)))
 
-  (defun slime-ccl ()
-    (interactive)
-    (let ((inferior-lisp-program "ccl"))
-      (slime)))
-  (config-lisp))
+;;   (defun slime-ccl ()
+;;     (interactive)
+;;     (let ((inferior-lisp-program "ccl"))
+;;       (slime)))
+;;   (config-lisp))
 
-(use-package slime-company
-  :ensure nil
-  :defer t)
+;; (use-package slime-company
+;;   :ensure nil
+;;   :defer t)
 
 (use-package sly
   :ensure t
   :config
   (setf bp/lisp-ide 'sly)
+  (define-key sly-mode-map (kbd "C-c M-p") #'sly-mrepl-set-package)
   (config-lisp))
 
 (use-package lisp-markup
