@@ -29,4 +29,11 @@
 
 (setq use-package-verbose t)
 
+(use-package exec-path-from-shell
+  :ensure t
+  :defer nil
+  :config
+  (when (or (memq window-system '(mac ns x))
+            (daemonp))
+    (exec-path-from-shell-initialize)))
 ;;(setf package-check-signature nil)
