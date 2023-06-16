@@ -42,6 +42,9 @@
   (setq-local make-default-makefile "~/.emacs.d/modules/makefiles/default-c-makefile")
   (wolfe/pretty-symbol-push-default))
 
+(use-package cmake-mode
+  :ensure t
+  :defer t)
 
 ;; (defun setup-irony-keys ()
 ;;   (interactive)
