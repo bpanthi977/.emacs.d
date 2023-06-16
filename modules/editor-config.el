@@ -186,6 +186,8 @@ buffer is not visiting a file."
   (smartrep-define-key bp/global-prefix-map
       "w"
     '(("o" . other-window)
+      ("u" . evil-window-up)
+      ("d" . evil-window-down)
       ("w" . ace-window)
       ("D" . delete-window)
       ("k" . kill-buffer-and-window)
@@ -241,21 +243,34 @@ buffer is not visiting a file."
   (setf transient-history-file (concat savefile-dir "/transient/history.el"))
   (setq smerge-command-prefix "\C-cm"))
 
+(use-package wgrep
+  :ensure t
+  :defer nil)
 
 ;; Avy
 (use-package avy
   :ensure t
   :defer t
   :bind (:map bp/global-prefix-map
-              ("g g" . bp/avy-goto-char-end)
+              ("g g" . bp/avy-goto-char-end-timer)
               ("g c" . avy-goto-char)
               ("g s" . avy-goto-char-timer)
-              ("g l" . avy-goto-line))
+              ("g l" . avy-goto-line)
+              ("j" . bp/avy-goto-char-end))
   :config
-  (defun bp/avy-goto-char-end ()
+  (defun bp/avy-goto-char-end-timer ()
     (interactive)
     (when (avy-goto-char-timer)
       (forward-char 1)))
+
+  (defun bp/avy-goto-char-end (char &optional arg)
+    (interactive (list (read-char "char: " t)
+                       current-prefix-arg))
+    (when (avy-goto-char char arg)
+      (forward-char 1)))
+
+  (global-set-key (kbd "M-SPC") #'bp/avy-goto-char-end)
+  (global-set-key (kbd "M-S-SPC") #'avy-goto-char-timer)
   (setf avy-timeout-seconds 0.3))
 
 (use-package god-mode
@@ -353,6 +368,7 @@ buffer is not visiting a file."
 ;; Dired
 (use-package dired
   :config
+  (setq dired-listing-switches "-alh")
   (defun dired-open-file ()
     "In dired, open the file named on this line."
     (interactive)

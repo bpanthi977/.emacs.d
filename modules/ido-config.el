@@ -78,7 +78,11 @@
     (when (and buffer-file-name
 			   (file-exists-p buffer-file-name)
 			   (not (file-writable-p buffer-file-name)))
-      (find-alternate-file (concat "/sudo:root@localhost:" buffer-file-name)))))
+      (find-alternate-file (concat "/sudo:root@localhost:" buffer-file-name))))
+
+  (ivy-configure 'counsel-M-x
+    :initial-input ""))
+
 
 
 (use-package swiper
