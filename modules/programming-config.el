@@ -56,19 +56,28 @@
 (use-package lsp-mode
   :hook ((lsp-mode . lsp-enable-which-key-integration))
   :ensure t 
-  :defer t 
+  :defer nil
   :commands (lsp lsp-mode)
-  :config
+  :init
   (bind-keys :map lsp-mode-map
 	     ("M-." . lsp-find-definition)
+             ("M-m ." . lsp-ivy-workspace-symbol)
 	     ("M-?" . lsp-find-references)
 	     ("M-," . pop-tag-mark)
              ("M-m d d" . lsp-ui-doc-glance)
-             ("M-m d D" . lsp-ui-doc-show))
+             ("M-m d D" . lsp-ui-doc-show)
+             ("M-m l r o" . bp/lsp-organize-imports))
   (define-key lsp-mode-map (kbd "M-m l") lsp-command-map)
-  :init
+  (defun bp/lsp-organize-imports ()
+    (interactive)
+    (lsp-remove-unused)
+    (lsp-organize-imports))
   (setq lsp-keymap-prefix "M-m l")
   :config
+  (setf lsp-disabled-clients '(semgrep-ls))
+
+  (lsp-make-interactive-code-action fix-all "source.fixAll")
+  (lsp-make-interactive-code-action remove-unused "source.removeUnused")
   (setf backup-by-copying t)
   (setq lsp-enable-file-watchers nil)
   (setq read-process-output-max (* 1024 1024))
