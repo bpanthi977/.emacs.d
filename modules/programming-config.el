@@ -36,6 +36,23 @@
     (,dap-ui--debug-window-buffer . ((side . bottom) (slot . 3) (window-width . 0.20)))
     (,dap-ui--repl-buffer . ((side . bottom) (slot . 1) (window-height . 0.45))))))  
 
+(use-package lsp-ivy
+  :ensure t
+  :defer t
+  :after lsp)
+
+(use-package iedit
+  :ensure t
+  :defer t
+  :config
+  (defun bp/lsp-iedit (&optional arg)
+    (interactive "P")
+    (print arg)
+    (if (or arg (not lsp-mode))
+        (iedit-mode)
+      (lsp-iedit-highlights)))
+  (global-set-key (kbd "C-;") #'bp/lsp-iedit))
+
 (use-package lsp-mode
   :hook ((lsp-mode . lsp-enable-which-key-integration))
   :ensure t 
