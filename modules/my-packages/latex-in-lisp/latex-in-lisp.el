@@ -64,6 +64,16 @@
                   (add-text-properties beg end (list 'display (create-image file)))
                   t)))))))))
 
+(defun latex-in-lisp/render-region-math ()
+  (interactive)
+  (let* ((beg (mark))
+         (end (point))
+         (math-string (buffer-substring beg end))
+         (latex-string (format "\\begin{math}\n%s\n\\end{math}" math-string)))
+    (let ((file (latex-in-lisp/create-image latex-string)))
+      (add-text-properties beg end (list 'display (create-image file)))
+      t)))
+
 (defun latex-in-lisp/toggle-image ()
   (interactive)
   (or (latex-in-lisp/remove-image-at-point)
