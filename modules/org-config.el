@@ -61,7 +61,6 @@
                                         org-export-output-directory-prefix))
                     (source (file-relative-name (file-truename source)
                                                 output-dir)))
-               (message "s: %s, org-file: %s" source org-file)
                (funcall original-function source attribute info)))
             (t
              (funcall original-function source attribute info)))))

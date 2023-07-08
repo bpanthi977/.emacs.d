@@ -139,3 +139,11 @@
   :defer t
   :config
   (setf dictionary-server "localhost"))
+
+(use-package epa
+  :ensure t
+  :defer nil
+  :config
+  (epa-file-enable)
+  (setq epa-file-select-keys nil)
+  (setq epa-pinentry-mode 'loopback))

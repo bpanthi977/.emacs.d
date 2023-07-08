@@ -208,7 +208,7 @@ buffer is not visiting a file."
 
 (use-package yasnippet
   :ensure t
-  :defer t
+  :defer nil
   :preface
   (defun company-mode/backend-with-yas (backend)
     (if (and (listp backend) (member 'company-yasnippet backend))
@@ -220,6 +220,10 @@ buffer is not visiting a file."
   :config
   (add-to-list 'company-backends 'company-yasnippet)
   (setq company-backends (mapcar #'company-mode/backend-with-yas company-backends)))
+
+(use-package yasnippet-snippets
+  :ensure t
+  :defer nil)
 
 (use-package markdown-mode
   :ensure t
@@ -369,6 +373,7 @@ buffer is not visiting a file."
 (use-package dired
   :config
   (setq dired-listing-switches "-alh")
+  (setf dired-dwim-target t)
   (defun dired-open-file ()
     "In dired, open the file named on this line."
     (interactive)
