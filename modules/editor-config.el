@@ -25,6 +25,9 @@
 (setq-default tab-width 8)
 (setq tab-width 8)
 
+;; Enable subword mode so that forward-word, kill-word, ... stop
+;; at sub word boundaries like PascaCase or camelCase
+(global-subword-mode 1)
 
 (setq-default indent-tabs-mode t)
 ;; disable annoying blink-matching-paren
