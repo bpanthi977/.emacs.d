@@ -242,14 +242,6 @@ buffer is not visiting a file."
 ;; Abbrev
 (setq abbrev-file-name (concat savefile-dir "/abbrev_defs"))
 
-;; Magit
-(use-package magit
-  :ensure t
-  :defer t
-  :init
-  (setf transient-history-file (concat savefile-dir "/transient/history.el"))
-  (setq smerge-command-prefix "\C-cm"))
-
 (use-package wgrep
   :ensure t
   :defer nil)
