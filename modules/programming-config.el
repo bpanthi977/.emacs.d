@@ -143,3 +143,8 @@ SPLITTER to determine the prefix to include."
         (insert (car (s-split splitter commit-type)) padding))))
 
   (add-hook 'find-file-hook 'bp/git-commit-mode-hook))
+
+;; orgit
+;;; Save magit buffer/commit links to org mode
+(use-package orgit
+  :ensure t)
