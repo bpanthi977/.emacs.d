@@ -2,7 +2,6 @@
 ;; * Org mode
 (require 'cl)
 
-(setq pdf-view-use-scaling t) ;; from https://github.com/vedang/pdf-tools
 (use-package org
 ;; ** Bindings and hooks
   :defer nil

@@ -56,6 +56,10 @@
 (bind-keys :map bp/global-prefix-map
            ("e o" . bp/capture-screenshot))
 
+(use-package org-pdftools
+  :ensure t
+  :hook (org-mode . org-pdftools-setup-link))
+
 (use-package pdf-tools
   :pin manual  ;; because package updates may require rebuilding the executable
   :defer t
@@ -65,12 +69,13 @@
   ;; http://pragmaticemacs.com/emacs/view-and-annotate-pdfs-in-emacs-with-pdf-tools/
   ;; initialise
   ;;(pdf-tools-install)
-  ;; open pdfs scaled to fit page
-  (setq-default pdf-view-display-size 'fit-page)
+  (setq pdf-view-use-scaling t) ;; from https://github.com/vedang/pdf-tools
+
+  ;; open pdfs scaled to fit width
+  (setq-default pdf-view-display-size 'fit-width)
   ;; automatically annotate highlights (Highlight using {C-c C-a h} )
   ;; (setq pdf-annot-activate-created-annotations t)
   ;; use normal isearch
-
   :config
   (define-key pdf-view-mode-map (kbd "C-s") 'isearch-forward)
   (defun bp/pdf-slight-up ()
@@ -92,7 +97,9 @@
   (bind-keys :map pdf-view-mode-map
              ((kbd "x") . bp/pdf-slight-up)
              ((kbd "z") . bp/pdf-slight-down)
-             ((kbd "C-c i") . bp/pdf-highlight-and-take-note)))
+             ((kbd "C-c i") . bp/pdf-highlight-and-take-note))
+  :init
+  (pdf-loader-install))
 
 (use-package nov
   :ensure t
