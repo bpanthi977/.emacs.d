@@ -121,7 +121,7 @@
       "📚: docs (Changes to documentation)"
       "💄: style (Formatting, missing semi colons, etc; no code change)"
       "♻️: refactor (Refactoring production code)"
-      "☑️: tests (Adding tests, refactoring test; no production code change)"
+      "📋: tests (Adding tests, refactoring test; no production code change)"
       "🧹: chore (Updating build tasks, package manager configs, etc; no production code change)")
     "Commit message guidelines.")
 
