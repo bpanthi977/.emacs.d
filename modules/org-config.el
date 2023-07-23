@@ -1019,6 +1019,16 @@ representation for the files to include, as returned by
   :config
   (setf org-roam-ui-follow t))
 
+;; * org-transclusion
+(use-package org-transclusion
+  :ensure t
+  :after org
+  :init
+  (bind-keys :map org-mode-map
+             ("M-m o t" . org-transclusion-add))
+  :config
+  (cl-pushnew 'keyword org-transclusion-exclude-elements)
+  (setf org-transclusion-add-all-on-activate t))
 
 ;; * org-download
 (use-package org-download
