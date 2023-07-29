@@ -726,6 +726,19 @@ representation for the files to include, as returned by
         (progn (goto-char (point-max))
                (insert "\n* Notes")))))
 
+  ;; Emacs uses 32bit seconds since unix epoch. So, dates beyound 2038 and
+  ;; before 1970 are not representable across some emacs code. calendar and org-mode
+  ;; can support dates beyond this. but the default is restrictive.
+  ;; let's not force to use only compatible dates in org-mode
+  (setf org-read-date-force-compatible-dates nil)
+
+  ;; file+datetree with :time-prompt t will ask for a date
+  ;; using org-read-date. Add a keybinding to use the most recently used
+  ;; timestamp in that prompt. Press "l" (l stands for last)
+  (org-defkey org-read-date-minibuffer-local-map (kbd "l")
+              (lambda () (interactive)
+                (insert (or org-last-inserted-timestamp ""))))
+
   (setq org-capture-templates `(
                                 ("p" "Protocol" entry (file+headline ,(concat org-directory "notes.org") "Inbox")
                                  "* %^{Title}\nSource: %u, %c\n #+BEGIN_QUOTE\n%i\n#+END_QUOTE\n\n\n%?")
@@ -734,6 +747,11 @@ representation for the files to include, as returned by
                                 ("t" "Todo" entry (file+headline "~/org/tasks.org" "Tasks")
                                  "* TODO %?\nCREATED: %U\n %i\n  %a")
                                 ("j" "Journal" entry (file+datetree "~/org/journal.org.gpg")
+                                 "* %?\nEntered on %U\n  %i\n  %a")
+                                ("e" "Event" entry (file+datetree "~/org/dates.org")
+                                 "* %?\n %i \n %a \n"
+                                 :time-prompt t)
+                                ("w" "Words" entry (file "~/org/words.org")
                                  "* %?\nEntered on %U\n  %i\n  %a")
                                 ("n" "Note" entry (file "~/org/notes.org" )
                                  "* %?\nCREATED: %U\n")
