@@ -949,7 +949,6 @@ representation for the files to include, as returned by
                                       :unnarrowed t)))
   (when windows-system?
     (setq org-roam-list-files-commands '((find . "C:/tools/msys64/usr/bin/find.exe") rg)))
-  (setq org-roam-graph-viewer nil)
   (setq org-roam-file-exclude-regexp '("data/" ".stversions/" ".stfolder/"))
   (setq org-roam-db-location
         (cond ((string-equal system-type "gnu/linux")
@@ -958,55 +957,14 @@ representation for the files to include, as returned by
                (expand-file-name "dbs/windows/org-roam.db" org-roam-directory))
               ((string-equal system-type "darwin")
                (expand-file-name "dbs/darwin/org-roam.db" org-roam-directory))))
-;;  The file-truename function is only necessary when you use symbolic
-;;  links inside org-roam-directory: Org-roam does not resolve
-;;  symbolic links. One can however instruct Emacs to always resolve
-;;  symlinks, at a performance cost, also, changes in file won't be reflected
-;;  in roam db because (org-roam-file-p) would return nil on such files p
-;;  (setq find-file-visit-truename nil)
 
   (org-roam-db-autosync-mode 1)
-
-  (defun bp/org-roam-headers (header)
-    (interactive)
-    (goto-char 0)
-    (xref-push-marker-stack)
-    (if (search-forward (concat "\n" header) nil t)
-        (progn
-          (move-end-of-line 1)
-          (unless (eql (char-before) ?\ )
-            (insert " ")))
-      (progn
-        (goto-line 2)
-        (insert header " \n")
-        (move-end-of-line 0))))
-
-  (defun bp/org-roam-alias ()
-    (interactive)
-    (bp/org-roam-headers "#+ROAM_ALIAS:")))
-
-;;; Org roam server
-
-;; (use-package org-roam-server
-;;   :ensure t
-;;   :defer t
-;;   :config
-;;   (setq org-roam-server-host "127.0.0.1"
-;;         org-roam-server-port 8080
-;;         org-roam-server-export-inline-images t
-;;         org-roam-server-authenticate nil
-;;         org-roam-server-network-poll t
-;;         org-roam-server-network-arrows nil
-;;         org-roam-server-network-label-truncate t
-;;         org-roam-server-network-label-truncate-length 60
-;;         org-roam-server-network-label-wrap-length 20)
-;;   :init
-;;   (defun bp/org-roam-server ()
-;;     (interactive)
-;;     (org-roam-server-mode t)
-;;     (browse-url "http://127.0.0.1:8080"))
-;;   (bind-keys :map bp/global-prefix-map
-;;              ("r s" . bp/org-roam-server)))
+  (defun bp/buffer-file-truename (args)
+    (let ((file (first args)))
+      (when-let (path (or file (buffer-file-name (buffer-base-buffer))))
+        (list (file-truename path)))))
+  (advice-remove 'org-roam-file-p #'bp/buffer-file-truename)
+  (advice-add 'org-roam-file-p :filter-args #'bp/buffer-file-truename))
 
 ;; * org-roam-ui
 ;;; Supersedes org-roam-server
@@ -1022,10 +980,18 @@ representation for the files to include, as returned by
 ;; * org-transclusion
 (use-package org-transclusion
   :ensure t
-  :after org
   :init
   (bind-keys :map org-mode-map
-             ("M-m o t" . org-transclusion-add))
+             ("M-m o t t" . org-transclusion-add)
+             ("M-m o t l" . bp/org-transclusion-insert-link))
+
+  (defun bp/org-transclusion-insert-link ()
+    (interactive)
+    (insert "#+transclude: ")
+    (when (org-insert-link)
+      (move-beginning-of-line 1)
+      (insert "#+transclude: ")))
+
   :config
   (cl-pushnew 'keyword org-transclusion-exclude-elements)
   (setf org-transclusion-add-all-on-activate t))
