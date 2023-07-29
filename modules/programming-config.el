@@ -118,11 +118,14 @@
   (defvar bp/version-control/valid-commit-title-prefixes
     '("🎁: feature (A new feature)"
       "🐛: bug fix (A bug fix)"
+      "⚡️: performance (Improvement in performance without adding external feature)"
       "📚: docs (Changes to documentation)"
       "💄: style (Formatting, missing semi colons, etc; no code change)"
       "♻️: refactor (Refactoring production code)"
       "📋: tests (Adding tests, refactoring test; no production code change)"
-      "🧹: chore (Updating build tasks, package manager configs, etc; no production code change)")
+      "🧹: chore (Updating build tasks, package manager configs, etc; no production code change)"
+      "🚧: wip (Work in progress code)"
+      "✂️: rebase (Rebase needed)")
     "Commit message guidelines.")
 
   (cl-defun bp/git-commit-mode-hook (&key (splitter ":") (padding " "))
