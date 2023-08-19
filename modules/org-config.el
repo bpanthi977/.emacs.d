@@ -215,9 +215,8 @@ representation for the files to include, as returned by
     (loop for comment in (reverse (org-element-map (org-element-parse-buffer)
                                       'comment 'identity))
           do
-          (setf (buffer-substring-no-properties (org-element-property :begin comment)
-                                                (org-element-property :end comment))
-                "")))
+          (delete-region (org-element-property :begin comment)
+                         (org-element-property :end comment))))
   (add-hook 'org-export-before-processing-hook 'delete-org-comments)
 ;; ** Better Org Outline bindings for show/hide while navigating
   (defun bp/org-just-show-this ()
@@ -331,10 +330,12 @@ representation for the files to include, as returned by
   ;; https://orgmode.org/manual/Clocking-commands.html
   (setq org-clock-persist 'history)
   (org-clock-persistence-insinuate)
+
 ;; ** Image scaling with text
   (defadvice text-scale-increase (after bp/image-scaling-on-text-scaling activate)
-    (setq org-image-actual-width (list (truncate (* 500 (expt text-scale-mode-step text-scale-mode-amount)))))
-    (org-redisplay-inline-images))
+    (when (eql major-mode 'org-mode)
+      (setq org-image-actual-width (list (truncate (* 500 (expt text-scale-mode-step text-scale-mode-amount)))))
+      (org-redisplay-inline-images)))
 
 ;; ** Org capture functions for thoughts and notes in org file
   (defun bp/org-capture-thought ()
@@ -410,9 +411,8 @@ representation for the files to include, as returned by
 
   ;; You also need to bug fix the working of `Tranparent' in org.el.
   ;; See personal notes and also install librsvg-2-2.dll
-  (setq org-preview-latex-default-process 'dvipng)
+  (setq org-preview-latex-default-process 'dvisvgm)
   (plist-put org-format-latex-options :background "Transparent")
-  (plist-put org-format-latex-options :scale 1.5)
 
   ;; Don't clutter my directiory
   (setq org-preview-latex-image-directory (case system-type
@@ -425,18 +425,34 @@ representation for the files to include, as returned by
         "latexmlmath \"%i\" --presentationmathml=%o"
         org-export-with-latex t)
 ;; ** Latex preview size scaling
-  (defadvice text-scale-increase (after bp/latex-preview-scaling-on-text-scaling activate)
-    (plist-put org-format-latex-options :scale (* 1.2 (/ (frame-char-height) 17) (expt text-scale-mode-step text-scale-mode-amount))))
+  ;; Adapted from https://karthinks.com/software/scaling-latex-previews-in-emacs/
 
+  (defun bp/adjust-latex-previews-scale ()
+    "Adjust the size of latex preview fragments when changing the
+buffer's text scale."
+    (pcase major-mode
+      ('latex-mode
+       (dolist (ov (overlays-in (point-min) (point-max)))
+         (if (eq (overlay-get ov 'category)
+                 'preview-overlay)
+             (bp/latex-preview--resize-fragment ov))))
+      ('org-mode
+       (dolist (ov (overlays-in (point-min) (point-max)))
+         (if (eq (overlay-get ov 'org-overlay-type)
+                 'org-latex-overlay)
+             (bp/latex-preview--resize-fragment ov))))))
 
-  (defun bp/calculate-ascent-for-latex (text type)
-    (cond ((eql type 'latex-environment) 'center)
-          ((eql type 'latex-fragment)
-           (cond ((find ?| text) 70)
-                 ((find ?_ text) 80)
-                 ((search "\\neq" text) 70)
-                 (t 100)))
-          (t (error "Unknown latex type"))))
+  (defun bp/latex-preview--resize-fragment (ov)
+    (overlay-put
+     ov 'display
+     (cons 'image
+           (plist-put
+            (cdr (overlay-get ov 'display))
+            :scale (* 2 (/ (frame-char-height) 12) (expt text-scale-mode-step text-scale-mode-amount))))))
+
+  (add-hook 'text-scale-mode-hook #'bp/adjust-latex-previews-scale)
+  (defadvice org-latex-preview (after bp/org-latex-preview--adjust-scale activate)
+    (bp/adjust-latex-previews-scale))
 
 ;; ** Latex inserting
   (let ((last-input ""))
