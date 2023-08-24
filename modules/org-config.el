@@ -40,7 +40,7 @@
 ;; ** Exporting
 ;; *** Exports to './output' directory
   (defvar org-export-output-directory-prefix "output" "prefix of directory used for org-mode export")
-  (defadvice org-export-output-file-name (before org-add-export-dir activate)
+  (defadvice org-export-output-file-name (before org-add-export-dir activate )
     "Modifies org-export to place exported files in a different directory"
     (when (not pub-dir)
       (setq pub-dir org-export-output-directory-prefix)
@@ -48,13 +48,19 @@
         (make-directory pub-dir))))
 
 
+  (defvar bp/org-publishing-file nil)
+  (defun org-publish-file--publishing-flag-around (f &rest args)
+    (let ((bp/org-publishing-file t))
+      (apply f args)))
+  (advice-add 'org-publish-file :around #'org-publish-file--publishing-flag-around)
+
   (defun bp/org-html--format-image-relative (original-function source attribute info)
     "Modify the <img src=... /> link to point to path relative to html file instead of org file"
     (let ((org-file (buffer-file-name)))
       (cond ((and org-file
                   org-export-output-directory-prefix
                   (not (file-name-absolute-p source))
-                  (not (org-publish-get-project-from-filename org-file)))
+                  (not bp/org-publishing-file))
              (let* ((output-dir (format "%s/%s/"
                                         (file-name-directory org-file)
                                         org-export-output-directory-prefix))
@@ -66,59 +72,19 @@
 
   (advice-add 'org-html--format-image :around #'bp/org-html--format-image-relative)
 
-;; *** Blog
+;; *** Blog and Braindump
   (require 'ox-publish)
   (setf org-babel-default-header-args '((:session . "none") (:results . "replace") (:exports . "both")
                                         (:eval . "never-export")
                                         (:cache . "no") (:noweb . "no") (:hlines . "no") (:tangle . "no")))
 
-  (defun bp/org-publish-find-date (file project)
-    (let ((file (org-publish--expand-file-name file project)))
-      (or (org-publish-cache-get-file-property file :sitemap-date nil t)
-          (org-publish-cache-set-file-property
-           file :sitemap-date
-           (if (file-directory-p file)
-               (file-attribute-modification-time (file-attributes file))
-             (let ((date (org-publish-find-property file :date project)))
-               ;; DATE is a secondary string.  If it contains
-               ;; a time-stamp, convert it to internal format.
-               ;; Otherwise, use FILE modification time.
-               (cond (date
-                      (let* ((date* (ignore-errors
-                                      (org-time-string-to-time (org-no-properties (first date))))))
-                        (or date*
-                            (error "Invalid time string ~a" (org-no-properties (first date))))))
-                     ((file-exists-p file)
-                      (file-attribute-modification-time (file-attributes file)))
-                     (t (error "No such file: \"%s\"" file)))))))))
-
-  (defun bp/org-publish-sitemap-entry (entry style project)
-    (cond ((not (directory-name-p entry))
-           (format "%s [[file:%s][%s]]"
-                   (format-time-string "%b %d, %Y" (bp/org-publish-find-date entry project))
-                   entry
-                   (org-publish-find-title entry project)))
-          ((eql style 'tree)
-           (file-name-nondirectory (directory-file-name entry)))
-          (t entry)))
-
-  (defun bp/org-publish-sitemap (title list)
-    "Sitem map, as a string.
-TITLE is the title of the site map.  LIST is an internal
-representation for the files to include, as returned by
-`org-list-to-lisp'."
-    (concat "#+TITLE: " title "\n"
-            "#+SETUPFILE: ./templates/sitemap.org"
-            "\n\n"
-            (org-list-to-org list)))
-
   (defun bp/org-html-preamble (export-options)
     (let ((date (org-export-get-date export-options)))
       (if date
           (concat "<p class=\"date\">Date: "
-                  (org-export-data date export-options)
+                  (org-export-data date export-options))
                   "</p>")
-        "")))
+      ""))
 
   (defun bp/html-postamble (args)
     (let ((file (getf args :input-file)))
@@ -128,12 +94,29 @@ representation for the files to include, as returned by
                   (search  "errors/" file))
         (let ((feedback-string
                (format "<hr/>You can send your feedback, queries <a href=\"mailto:bpanthi977@gmail.com?subject=Feedback: %s\">here</a>"
-                       (substring-no-properties (car (getf args :title)))))
+                       (when-let ((title (car (getf args :title))))
+                         (substring-no-properties title))))
               (visits-claps "<span id=\"visits\"></span><span id=\"claps\"></span>")
               (sendme-claps "<div id=\"claps-message\"></div>"))
           (concat feedback-string
                   visits-claps
                   sendme-claps)))))
+
+  ;; this hook is run in the temporary org buffer being exported
+  ;; before any processing is done
+  (defun bp/org-publish--add-setupfile (&rest args)
+    (goto-char (point-min))
+    (search-forward "#+title")
+    (beginning-of-line)
+    (insert "#+SETUPFILE: ./blog/templates/braindump.org\n"))
+
+  (defun bp/org-html-publish-to-html (&rest args)
+    (let (;; add setupfile
+          (org-export-before-processing-functions (cons #'bp/org-publish--add-setupfile
+                                                        org-export-before-processing-functions))
+          ;; exclude headings with :personal: tag
+          (org-export-exclude-tags (cons "PERSONAL" (cons "personal" org-export-exclude-tags))))
+      (apply #'org-html-publish-to-html args)))
 
   (setq org-publish-project-alist
         '(
@@ -148,22 +131,41 @@ representation for the files to include, as returned by
            :auto-preamble t
            :html-preamble bp/org-html-preamble ;; org-html-preamble
            :html-postamble bp/html-postamble
-
-           ;; :auto-sitemap t
-           ;; :sitemap-filename "sitemap.org"
-           ;; :sitemap-title "Bibek Panthi"
-           ;; :sitemap-sort-files anti-chronologically
-           ;; :sitemap-function bp/org-publish-sitemap
-           ;; :sitemap-format-entry bp/org-publish-sitemap-entry
            )
           ("blog-static"
            :base-directory "~/org/blog/"
-           :base-extension "html\\|css\\|js\\|png\\|jpg\\|gif\\|pdf\\|mp3\\|ogg\\|swf\\|svg\\|php\\|ico"
+           :base-extension "html\\|xml\\|css\\|js\\|png\\|jpg\\|gif\\|pdf\\|mp3\\|ogg\\|swf\\|svg\\|php\\|ico\\|json"
            :publishing-directory "~/Development/Web/Blog/blog/"
            :recursive t
            :publishing-function org-publish-attachment
            )
           ("blog" :components ("blog-org" "blog-static"))
+
+          ("braindump-org"
+           :base-directory "~/Documents/synced/Notes/"
+           :base-extension "org"
+           :publishing-directory "~/Development/Web/Blog/blog/braindump/"
+           :exclude "notes.org\\|tasks.org"
+           :recursive nil
+           :publishing-function bp/org-html-publish-to-html
+           :headline-levels 4             ; Just the default for this project.
+           :auto-preamble t
+           :html-preamble bp/org-html-preamble ;; org-html-preamble
+           :html-postamble bp/html-postamble
+           :auto-sitemap t
+           :sitemap-filename "index.org"
+
+           :sitemap-ignore-case t
+           :sitemap-title "Bibek's Digital Garden"
+           )
+          ("braindump-static"
+           :base-directory "~/Documents/synced/Notes/data/"
+           :base-extension "html\\|xml\\|css\\|js\\|png\\|jpg\\|gif\\|pdf\\|mp3\\|ogg\\|swf\\|svg\\|php\\|ico"
+           :publishing-directory "~/Development/Web/Blog/blog/braindump/data/"
+           :recursive t
+           :publishing-function org-publish-attachment
+           )
+          ("braindump" :components ("braindump-org" "braindump-static"))
           ))
 
   (defun bp/org-upload-blog ()
@@ -193,7 +195,9 @@ representation for the files to include, as returned by
               bp/org-html-loaded-timestamp current-timestamp))
       bp/org-html-css))
 
-;; *** Html Export Theming
+  ;; Don't use inline styling, instead just export selector class
+  (setf org-html-htmlize-output-type 'css)
+;; *** Html Export
   (defadvice org-html-export-to-html (before html-export-load-css1 activate)
     (setq org-html-head-extra (bp/org-html-css)))
 
@@ -202,12 +206,19 @@ representation for the files to include, as returned by
 
   (setq org-html-validation-link nil)
 
+  (defun bp/org-html-src-block--wrap-with-details (f &rest args)
+    (let ((html (apply f args)))
+      (format "<details open><summary><span class='org-details-collapse'>&lt; Collapse code block</span><span class='org-details-expand'>&gt; Expand code block</span></summary>\n%s</details>" html)))
+
+  (advice-add 'org-html-src-block :around #'bp/org-html-src-block--wrap-with-details)
 
   (defun bp/org-view-html-export ()
     (interactive)
     (let ((org-export-show-temporary-export-buffer nil))
       (org-html-export-as-html nil)
       (browse-url-of-buffer "*Org HTML Export*")))
+
+
 
 ;; *** Comments in between paragraphs
   ;; This allows comments in between a paragraph
@@ -998,7 +1009,72 @@ buffer's text scale."
       (when-let (path (or file (buffer-file-name (buffer-base-buffer))))
         (list (file-truename path)))))
   (advice-remove 'org-roam-file-p #'bp/buffer-file-truename)
-  (advice-add 'org-roam-file-p :filter-args #'bp/buffer-file-truename))
+  (advice-add 'org-roam-file-p :filter-args #'bp/buffer-file-truename)
+
+  ;; ** org-roam publish backreferences and refs
+  (defun bp/org-roam-private-node? (node)
+    (or (cl-find-if (lambda (s)
+                  (string-equal-ignore-case "private" s))
+                (org-roam-node-tags node))
+        (string-suffix-p "gpg" (org-roam-node-file node))))
+
+  (defun bp/org-roam-backlink-nodes (node)
+    (mapcar #'org-roam-backlink-source-node (org-roam-backlinks-get node)))
+
+  (cl-defun bp/org-room-collect-backlinks-and-refs (backend)
+    (when-let ((node (org-roam-node-at-point))
+               (_ (not (bp/org-roam-private-node? node))))
+      (let* ((source-node (org-roam-node-at-point))
+             (source-file (org-roam-node-file source-node))
+             (nodes-in-file (--filter (s-equals? (org-roam-node-file it) source-file)
+                                      (org-roam-node-list)))
+             (refs (cl-remove-duplicates
+                    (apply #'cl-concatenate 'list
+                           (mapcar #'org-roam-node-refs nodes-in-file))
+                    :test #'string-equal))
+             ;; get backlinks from non-private notes
+             (backlinks (cl-remove-duplicates
+                         (--filter (and (not (bp/org-roam-private-node? it))
+                                        (not (string-equal (org-roam-node-file it)
+                                                           source-file)))
+                                   (apply #'cl-concatenate 'list
+                                          (mapcar #'bp/org-roam-backlink-nodes
+                                                  nodes-in-file)))
+                         :key #'org-roam-node-id
+                         :test #'string-equal)))
+        (when refs
+          (let ((reflinks (org-roam-reflinks-get node)))
+            (goto-char (point-max))
+            (insert "
+#+begin_export html
+<hr />
+<h3>References</h3>
+#+end_export
+")
+            (dolist (ref refs)
+              (insert (format "\n+ %s" ref))
+              (let ((reflinks-filtered (--filter (string-suffix-p (org-roam-reflink-ref it) ref)
+                                                 reflinks)))
+                (dolist (reflink reflinks-filtered)
+                  (let ((node (org-roam-reflink-source-node reflink)))
+                    (insert (format " ([[id:%s][%s]]) "
+                                    (org-roam-node-id node)
+                                    (org-roam-node-title node)))))))))
+
+        (when backlinks
+          (goto-char (point-max))
+          (insert "
+#+begin_export html
+<hr />
+<h3>Backlinks</h3>
+#+end_export
+")
+          (dolist (backlink backlinks)
+            (insert (format "\n+ [[id:%s][%s]]"
+                            (org-roam-node-id backlink)
+                            (org-roam-node-title backlink))))))))
+
+  (add-hook 'org-export-before-processing-hook 'bp/org-room-collect-backlinks-and-refs))
 
 ;; * org-roam-ui
 ;;; Supersedes org-roam-server
@@ -1017,7 +1093,8 @@ buffer's text scale."
   :init
   (bind-keys :map org-mode-map
              ("M-m o t t" . org-transclusion-add)
-             ("M-m o t l" . bp/org-transclusion-insert-link))
+             ("M-m o t l" . bp/org-transclusion-insert-link)
+             ("M-m o t a" . org-transclusion-add-all))
 
   (defun bp/org-transclusion-insert-link ()
     (interactive)
@@ -1028,7 +1105,8 @@ buffer's text scale."
 
   :config
   (cl-pushnew 'keyword org-transclusion-exclude-elements)
-  (setf org-transclusion-add-all-on-activate t))
+  (setf org-transclusion-add-all-on-activate t)
+  (pushnew #'org-transclusion-add-all org-export-before-processing-functions))
 
 ;; * org-download
 (use-package org-download
@@ -1069,8 +1147,9 @@ Convert TITLE to a filename-suitable slug."
 
   (defun bp/org-download-annotate-with-title (link)
     (prog1
-        (when bp/org-download-screenshot-title
-          (concat  "#+CAPTION: " bp/org-download-screenshot-title "\n"))
+        (concat (when bp/org-download-screenshot-title
+                  (concat  "#+CAPTION: " bp/org-download-screenshot-title "\n"))
+                "#+ATTR_ORG: :width 400 \n")
       (setf bp/org-download-screenshot-title nil)))
 
   ;; modifies org-download.el org-download--dir-2 function
