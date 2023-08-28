@@ -117,6 +117,8 @@
   :config
   (defvar bp/version-control/valid-commit-title-prefixes
     '("🎁: feature (A new feature)"
+      "🎨: design/ui (Design changes that don't add feature)"
+      "⏪: revert (Revert back changes)"
       "🐛: bug fix (A bug fix)"
       "⚡️: performance (Improvement in performance without adding external feature)"
       "📚: docs (Changes to documentation)"
@@ -128,7 +130,16 @@
       "✂️: rebase (Rebase needed)")
     "Commit message guidelines.")
 
-  (cl-defun bp/git-commit-mode-hook (&key (splitter ":") (padding " "))
+  (defun bp/magit-commit-emoji ()
+    (interactive)
+    (let ((splitter ":")
+          (padding " ")
+          (commit-type (completing-read "Commit title prefix: "
+                                        bp/version-control/valid-commit-title-prefixes nil t)))
+      (goto-char (point-min))
+      (insert (car (s-split splitter commit-type)) padding)))
+
+  (defun bp/git-commit-mode-hook ()
     "If the first line is empty, prompt for commit type and insert it.
 
 Add PADDING between inserted commit type and start of title.  For
@@ -140,10 +151,7 @@ SPLITTER to determine the prefix to include."
                  (goto-char (point-min))
                  (beginning-of-line-text)
                  (looking-at-p "^$")))
-      (let ((commit-type (completing-read "Commit title prefix: "
-                                          bp/version-control/valid-commit-title-prefixes nil t)))
-        (goto-char (point-min))
-        (insert (car (s-split splitter commit-type)) padding))))
+      (bp/magit-commit-emoji)))
 
   (add-hook 'find-file-hook 'bp/git-commit-mode-hook))
 
