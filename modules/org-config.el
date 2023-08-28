@@ -268,7 +268,7 @@
   (setq org-src-window-setup 'current-window)
   (setq org-hide-emphasis-markers t)
   (setf org-startup-with-inline-images t
-        org-image-actual-width 500
+        org-image-actual-width '(500)
         org-startup-with-latex-preview nil
         org-startup-folded 'content)
   (setf org-id-link-to-org-use-id 'use-existing)
