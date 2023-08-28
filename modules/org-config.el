@@ -77,14 +77,13 @@
   (setf org-babel-default-header-args '((:session . "none") (:results . "replace") (:exports . "both")
                                         (:eval . "never-export")
                                         (:cache . "no") (:noweb . "no") (:hlines . "no") (:tangle . "no")))
-
   (defun bp/org-html-preamble (export-options)
     (let ((date (org-export-get-date export-options)))
       (if date
           (concat "<p class=\"date\">Date: "
-                  (org-export-data date export-options))
+                  (org-export-data date export-options)
                   "</p>")
-      ""))
+        "")))
 
   (defun bp/html-postamble (args)
     (let ((file (getf args :input-file)))
@@ -115,13 +114,15 @@
           (org-export-before-processing-functions (cons #'bp/org-publish--add-setupfile
                                                         org-export-before-processing-functions))
           ;; exclude headings with :personal: tag
-          (org-export-exclude-tags (cons "PERSONAL" (cons "personal" org-export-exclude-tags))))
+          (org-export-exclude-tags (cl-concatenate 'list '("PRESONAL" "personal" "private" "PRIVATE")
+                                                   org-export-exclude-tags)))
+
       (apply #'org-html-publish-to-html args)))
 
   (setq org-publish-project-alist
         '(
           ("blog-org"
-           :base-directory "~/org/blog/"
+           :base-directory "~/Documents/synced/Notes/blog/"
            :exclude "templates/*"
            :base-extension "org"
            :publishing-directory "~/Development/Web/Blog/blog/"
@@ -145,22 +146,22 @@
            :base-directory "~/Documents/synced/Notes/"
            :base-extension "org"
            :publishing-directory "~/Development/Web/Blog/blog/braindump/"
-           :exclude "notes.org\\|tasks.org"
+           :exclude "^notes.org\\|^tasks.org"
            :recursive nil
            :publishing-function bp/org-html-publish-to-html
            :headline-levels 4             ; Just the default for this project.
            :auto-preamble t
            :html-preamble bp/org-html-preamble ;; org-html-preamble
            :html-postamble bp/html-postamble
-           :auto-sitemap t
-           :sitemap-filename "index.org"
 
+           :auto-sitemap t
+           :sitemap-filename "sitemap.org"
            :sitemap-ignore-case t
            :sitemap-title "Bibek's Digital Garden"
            )
           ("braindump-static"
            :base-directory "~/Documents/synced/Notes/data/"
-           :base-extension "html\\|xml\\|css\\|js\\|png\\|jpg\\|gif\\|pdf\\|mp3\\|ogg\\|swf\\|svg\\|php\\|ico"
+           :base-extension "html\\|xml\\|css\\|js\\|png\\|jpg\\|gif\\|pdf\\|mp3\\|ogg\\|swf\\|svg\\|php\\|ico\\|mkv\\|lisp"
            :publishing-directory "~/Development/Web/Blog/blog/braindump/data/"
            :recursive t
            :publishing-function org-publish-attachment
@@ -1011,10 +1012,11 @@ buffer's text scale."
   (advice-remove 'org-roam-file-p #'bp/buffer-file-truename)
   (advice-add 'org-roam-file-p :filter-args #'bp/buffer-file-truename)
 
-  ;; ** org-roam publish backreferences and refs
+;; ** org-roam publish backreferences and refs
   (defun bp/org-roam-private-node? (node)
     (or (cl-find-if (lambda (s)
-                  (string-equal-ignore-case "private" s))
+                      (or (string-equal-ignore-case "private" s)
+                          (string-equal-ignore-case "personal" s)))
                 (org-roam-node-tags node))
         (string-suffix-p "gpg" (org-roam-node-file node))))
 
