@@ -137,8 +137,8 @@ buffer is not visiting a file."
 ;; Projectile
 (use-package projectile
   :ensure t
+  :defer nil
   :config
-
   (defun bp/projectile-find-common-lisp-root (dir)
     (if (directory-files dir nil ".asd$")
         dir
@@ -153,6 +153,7 @@ buffer is not visiting a file."
   (setq projectile-enable-caching t)
   (setq projectile-cache-file (concat init-dir ".cache/projectile.cache")
         projectile-known-projects-file (concat savefile-dir "/projectile-bookmarks.eld"))
+  (projectile-load-known-projects)
 
   :init
   (defun bp/projectile-for-all (thunk)
@@ -166,8 +167,14 @@ buffer is not visiting a file."
     (dolist (b (projectile-project-buffers))
       (with-current-buffer b
         (ignore-errors (whitespace-cleanup)))))
-  (projectile-global-mode 1)
+  (projectile-mode 1)
   :bind-keymap ("M-P" . projectile-command-map))
+
+(use-package helm-projectile
+  :ensure t
+  :init
+  ;; (setq helm-projectile-fuzzy-match nil)
+  (helm-projectile-on))
 
 ;; (use-package counsel-projectile
 ;;   :ensure t
