@@ -527,6 +527,19 @@ PROJECT is the current project."
                                                                   (`(("TITLE" . ,val))
                                                                    val)))))))
       (make-symbolic-link (buffer-file-name) (concat "~/org/" name ".org"))))
+;; ** Open email links (mid)
+  (org-link-set-parameters "mid" :follow #'org-mid-follow)
+
+  (defvar org-mid-email-program (case system-type
+                             (darwin "/Applications/Thunderbird.app/Contents/MacOS/thunderbird")
+                             (t "thunderbird")))
+
+  (defun org-mid-follow (path &optional arg)
+    "Open the email `PATH'"
+    (make-process :name "thunderbird"
+                  :command (list org-mid-email-program
+                                 (concat "mid:" path))))
+
   ;; org config complete
   )
 
