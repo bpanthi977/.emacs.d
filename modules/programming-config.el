@@ -109,7 +109,6 @@
   (setq lsp-signature-auto-activate t)
   (setq lsp-signature-render-documentation t))
 
-
 ;; Magit
 (use-package magit
   :ensure t
@@ -117,7 +116,10 @@
   :init
   (setf transient-history-file (concat savefile-dir "/transient/history.el"))
   (setq smerge-command-prefix "\C-cm")
+  (bind-keys :map bp/global-prefix-map
+             ("g b" . magit-log-buffer-file))
   :config
+  (global-set-key (kbd "C-x C-g") #'magit-dispatch)
   (defvar bp/version-control/valid-commit-title-prefixes
     '("🎁: feature (A new feature)"
       "🎨: design/ui (Design changes that don't add feature)"
@@ -157,6 +159,11 @@ SPLITTER to determine the prefix to include."
       (bp/magit-commit-emoji)))
 
   (add-hook 'find-file-hook 'bp/git-commit-mode-hook))
+
+(use-package forge
+  :ensure t
+  :defer t
+  :after magit)
 
 ;; orgit
 ;;; Save magit buffer/commit links to org mode
