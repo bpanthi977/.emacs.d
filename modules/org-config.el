@@ -31,12 +31,16 @@
                       (electric-indent-mode -1)
                       (setq ispell-parser 'tex)))
   :config
+;; ** Indent
+(setf org-startup-indented t)
 ;; ** requirements
   (require 'ox-latex)
 ;;  (require 'cdlatex)
   (require 'org-attach)
   ;;(require 'org-ref)
   (require 'org-id)
+  (require 'ol-man)
+  (require 'ol-info)
 ;; ** Exporting
 ;; *** Exports to './output' directory
   (defvar org-export-output-directory-prefix "output" "prefix of directory used for org-mode export")
@@ -398,7 +402,7 @@ PROJECT is the current project."
         org-startup-with-latex-preview nil
         org-startup-folded 'content)
   (setf org-id-link-to-org-use-id 'use-existing)
-  (setq org-directory "~/synced/Notes/")
+  (setq org-directory "~/org/")
   (setq org-default-notes-file (concat org-directory "notes.org"))
   (setq org-log-done t)
 
@@ -911,7 +915,7 @@ buffer's text scale."
                                  "* %^{Title}\nSource: %u, %c\n #+BEGIN_QUOTE\n%i\n#+END_QUOTE\n\n\n%?")
                                 ("L" "Protocol Link" entry (file+headline ,(concat org-directory "notes.org") "Inbox")
                                  "* %? [[%:link][%(transform-square-brackets-to-round-ones \"%:description\")]]\n")
-                                ("t" "Todo" entry (file+headline "~/org/tasks.org" "Tasks")
+                                ("t" "Todo" entry (file+datetree "~/org/tasks.org")
                                  "* TODO %?\nCREATED: %U\n %i\n  %a")
                                 ("j" "Journal" entry (file+datetree "~/org/journal.org.gpg")
                                  "* %?\nEntered on %U\n  %i\n  %a")
@@ -1183,6 +1187,7 @@ buffer's text scale."
                                                   nodes-in-file)))
                          :key #'org-roam-node-id
                          :test #'string-equal)))
+
         (when refs
           (let ((reflinks (org-roam-reflinks-get node)))
             (goto-char (point-max))

@@ -1,8 +1,8 @@
 (setenv "PATH" (concat "/home/bpanthi/.local/bin:"
-			 (getenv "PATH")))
+                         (getenv "PATH")))
 
 (setq exec-path (append '("/home/bpanthi/.local/bin")
-			exec-path))
+                        exec-path))
 
 (use-package flycheck
   :ensure t
@@ -11,22 +11,26 @@
 
 (use-package lsp-ui
   :ensure t
-  :defer t 
+  :defer t
   :after '(lsp-mode))
 
 
 (defun bp/programming-mode-setup ()
+  (setf show-trailing-whitespace t)
   (add-hook 'before-save-hook #'whitespace-cleanup 0 t))
 
 (add-hook 'prog-mode-hook #'bp/programming-mode-setup)
 
 
 (use-package dap-mode
+  :ensure t
+  :defer t
   :config
   (setq dap-auto-configure-features '(sessions locals controls tooltip))
   (dap-mode -1))
 
 (use-package dap-ui
+  :defer t
   :config
   (setq dap-ui-buffer-configurations
   `((,dap-ui--locals-buffer . ((side . bottom) (slot . 1) (window-width . 0.20)))
@@ -34,7 +38,7 @@
     (,dap-ui--sessions-buffer . ((side . bottom) (slot . 3) (window-width . 0.20)))
     (,dap-ui--breakpoints-buffer . ((side . left) (slot . 2) (window-width . ,treemacs-width)))
     (,dap-ui--debug-window-buffer . ((side . bottom) (slot . 3) (window-width . 0.20)))
-    (,dap-ui--repl-buffer . ((side . bottom) (slot . 1) (window-height . 0.45))))))  
+    (,dap-ui--repl-buffer . ((side . bottom) (slot . 1) (window-height . 0.45))))))
 
 (use-package lsp-ivy
   :ensure t
@@ -55,35 +59,34 @@
 
 (use-package lsp-mode
   :hook ((lsp-mode . lsp-enable-which-key-integration))
-  :ensure t 
-  :defer nil
+  :ensure t
+  :demand t
   :commands (lsp lsp-mode)
+  :bind (:map lsp-mode-map
+              ("M-." . lsp-find-definition)
+              ("M-m ." . lsp-ivy-workspace-symbol)
+              ("M-?" . lsp-find-references)
+              ("M-," . pop-tag-mark)
+              ("M-m d d" . lsp-ui-doc-glance)
+              ("M-m d D" . lsp-ui-doc-show)
+              ("M-m l r o" . bp/lsp-organize-imports))
   :init
-  (bind-keys :map lsp-mode-map
-	     ("M-." . lsp-find-definition)
-             ("M-m ." . lsp-ivy-workspace-symbol)
-	     ("M-?" . lsp-find-references)
-	     ("M-," . pop-tag-mark)
-             ("M-m d d" . lsp-ui-doc-glance)
-             ("M-m d D" . lsp-ui-doc-show)
-             ("M-m l r o" . bp/lsp-organize-imports))
-  (define-key lsp-mode-map (kbd "M-m l") lsp-command-map)
+  (setq lsp-keymap-prefix "M-m l")
+  :config
   (defun bp/lsp-organize-imports ()
     (interactive)
     (lsp-remove-unused)
     (lsp-organize-imports))
-  (setq lsp-keymap-prefix "M-m l")
-  :config
+
   (setf lsp-disabled-clients '(semgrep-ls))
 
   (lsp-make-interactive-code-action fix-all "source.fixAll")
   (lsp-make-interactive-code-action remove-unused "source.removeUnused")
-  (setf backup-by-copying t)
   (setq lsp-enable-file-watchers nil)
   (setq read-process-output-max (* 1024 1024))
   (setq lsp-idle-delay 3)
   (setq flycheck-check-syntax-automatically '(save idle-change)
-	flycheck-idle-change-delay 3)
+        flycheck-idle-change-delay 3)
 
   (setq lsp-auto-configure t)
 
@@ -94,7 +97,7 @@
   (setq lsp-ui-doc-enable nil)
   (setq lsp-lens-enable nil)
   (setq lsp-headerline-breadcrumb-enable t)
-  ;; Sideline code actions 
+  ;; Sideline code actions
   (setf lsp-ui-sideline-show-code-actions t
         lsp-ui-sideline-show-diagnostics nil
         lsp-ui-sideline-show-symbol nil

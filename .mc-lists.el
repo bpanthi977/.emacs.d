@@ -39,6 +39,7 @@
         indent-for-tab-command
         isearch-delete-char
         isearch-exit
+        isearch-forward
         isearch-forward-regexp
         isearch-printing-char
         isearch-repeat-forward
@@ -48,11 +49,13 @@
         kmacro-start-macro
         lsp-find-definition-mouse
         magit-discard
+        magit-stage
         magit-unstage
         makey-key-mode-popup-isearch
         markdown-cycle
         mouse-buffer-menu
         mouse-set-region
+        nxml-electric-slash
         org-archive-subtree
         org-beginning-of-line
         org-ctrl-c-ctrl-c
@@ -63,6 +66,7 @@
         org-kill-line
         org-return-indent
         org-self-insert-command
+        org-shiftmetaleft
         org-shiftmetaright
         org-table-eval-formula
         org-yank
@@ -85,10 +89,12 @@
         sp-remove-active-pair-overlay
         sp-transpose-sexp
         sp-up-sexp
+        swiper
         transpose-sexps
         transpose-words
         upcase-initials-region
         wdired--self-insert
+        wdired-finish-edit
         wdired-next-line
         ))
 
@@ -97,7 +103,11 @@
         dap-tooltip-mouse-motion
         diff-goto-source
         dired-unmark-backward
+        iedit-mode
+        iedit-switch-to-mc-mode
+        mark-whole-buffer
         markdown-outdent-or-delete
+        swiper
         text-scale-increase
         write-file
         ))

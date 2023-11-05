@@ -6,7 +6,9 @@
   ;; load feeds from org/elfeed.el file (which isn't in public repo)
   (let ((file (expand-file-name "elfeed.el" org-directory)))
     (when (file-exists-p file)
-      (load file))))
+      (load file)))
+  'elfeed-show-mode
+  (add-hook 'elfeed-show-mode-hook #'visual-line-mode))
 
 (use-package elfeed-tube
   :ensure t
