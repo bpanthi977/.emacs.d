@@ -250,19 +250,24 @@ need region."
                (buffer-list))))
 
   (defun bp/org-nov-jump (path)
-    (if (string-match "^\\(.*\\)::\\([0-9]+\\):\\([0-9]+\\)$" path)
-        (let* ((file (match-string 1 path))
-               (index (string-to-number (match-string 2 path)))
-               (point (string-to-number (match-string 3 path)))
+    (cond ((string-match "^\\(.*\\)::\\([0-9]+\\):\\([0-9]+\\)$" path)
+           (let* ((file (match-string 1 path))
+                  (index (string-to-number (match-string 2 path)))
+                  (point (string-to-number (match-string 3 path)))
 
-               (buffer (bp/nov-find-buffer-visiting file)))
-          (if (not buffer)
-              (bp/org-nov-open-new-window path)
-            (save-excursion
-              (print buffer)
-              (switch-to-buffer-other-frame buffer)
-              (nov--find-file nil index point))))
-      (error "Invalid nov.el link")))
+                  (buffer (bp/nov-find-buffer-visiting file)))
+             (if (not buffer)
+                 (bp/org-nov-open-new-window path)
+               (save-excursion
+                 (print buffer)
+                 (switch-to-buffer-other-frame buffer)
+                 (nov--find-file nil index point)))))
+          ((string-match "^\\(.*\\).epub" path)
+           (let ((buffer (bp/nov-find-buffer-visiting path)))
+             (if buffer
+                 (switch-to-buffer-other-frame buffer)
+               (nov--find-file path 0 0))))
+          (t (error "Invalid nov.el link"))))
 
   (org-link-set-parameters "nov" :follow #'bp/org-nov-jump))
 
