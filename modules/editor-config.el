@@ -7,6 +7,11 @@
   :ensure t
   :defer t)
 
+;; Kill whole line when at column zero
+(setq kill-whole-line t)
+;; Sentences end in single space
+;; forward-sentence, fill-paragraph and friends will work better
+(setf sentence-end-double-space nil)
 ;; Newline at end of file
 (setq require-final-newline t)
 ;; delete the selection with a keypress
