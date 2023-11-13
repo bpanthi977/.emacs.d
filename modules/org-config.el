@@ -330,6 +330,12 @@ PROJECT is the current project."
     (let ((project (assoc "braindump-rss" org-publish-project-alist)))
       (org-publish-sitemap project "data/rss.xml")))
 
+  (defun bp/org-publish-braindump-sitemap ()
+    (interactive)
+    (let ((project (assoc "braindump-rss" org-publish-project-alist)))
+      (org-publish-sitemap (cl-concatenate 'list '(:sitemap t) project)
+                           "sitemap.org")))
+
 ;; **** Publish List
   (setq org-publish-project-alist
         '(
@@ -378,7 +384,7 @@ PROJECT is the current project."
            :html-preamble bp/org-html-preamble ;; org-html-preamble
            :html-postamble (lambda (args) (bp/html-postamble bp/braindump-rss-url bp/braindump-rss-icon args))
 
-           :auto-sitemap t
+           :auto-sitemap nil
            :sitemap-filename "sitemap.org"
            :sitemap-ignore-case t
            :sitemap-format-entry bp/format-sitemap-entry
