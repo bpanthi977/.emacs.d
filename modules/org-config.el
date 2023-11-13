@@ -126,16 +126,22 @@
       (apply #'org-html-publish-to-html args)))
 
 ;; **** Braindump Sitemap
+  (defun bp/org-project-entry-unlistedp (entry project)
+    (let ((tags (org-publish-find-property entry :filetags project)))
+      (cl-member "unlisted" tags :test #'string-equal-ignore-case)))
+
   (defun bp/format-sitemap-entry (entry style project)
     "Format for site map ENTRY, as a string.
 ENTRY is a file name.  STYLE is the style of the sitemap.
 PROJECT is the current project."
     (cond ((not (directory-name-p entry))
-           (format "%s [[file:%s][%s]]"
-                   (format-time-string "%Y-%m-%d" (org-publish-find-date entry project))
-                   ;;(format-time-string "%Y-%m-%d" (file-attribute-modification-time (file-attributes (org-publish--expand-file-name entry project))))
-                   entry
-                   (org-publish-find-title entry project)))
+           (if (bp/org-project-entry-unlistedp entry project)
+               ""
+             (format "%s [[file:%s][%s]]"
+                       (format-time-string "%Y-%m-%d" (org-publish-find-date entry project))
+                       ;;(format-time-string "%Y-%m-%d" (file-attribute-modification-time (file-attributes (org-publish--expand-file-name entry project))))
+                       entry
+                       (org-publish-find-title entry project))))
           ((eq style 'tree)
            ;; Return only last subdir.
            (file-name-nondirectory (directory-file-name entry)))
@@ -182,7 +188,10 @@ representation for the files to include, as returned by
     "Format ENTRY for the RSS feed.
 ENTRY is a file name.  STYLE is either 'list' or 'tree'.
 PROJECT is the current project."
-    (cond ((not (directory-name-p entry))
+    (cond ((and (not (directory-name-p entry))
+                (bp/org-project-entry-unlistedp entry project))
+           "")
+          ((not (directory-name-p entry))
            (let* ((file (org-publish--expand-file-name entry project))
                   (title (org-publish-find-title entry project))
                   (date (format-time-string "%Y-%m-%d" (org-publish-find-date entry project)))
