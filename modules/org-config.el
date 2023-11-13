@@ -90,21 +90,27 @@
                   "</p>")
         "")))
 
-  (defun bp/html-postamble (args)
-    (let ((file (getf args :input-file)))
-      (unless (or (string-suffix-p "index.org" file)
-                  (string-suffix-p "sitemap.org" file)
-                  (string-suffix-p "meta.org" file)
-                  (search  "errors/" file))
-        (let ((feedback-string
-               (format "<hr/>You can send your feedback, queries <a href=\"mailto:bpanthi977@gmail.com?subject=Feedback: %s\">here</a>"
-                       (when-let ((title (car (getf args :title))))
-                         (substring-no-properties title))))
-              (visits-claps "<span id=\"visits\"></span><span id=\"claps\"></span>")
-              (sendme-claps "<div id=\"claps-message\"></div>"))
-          (concat feedback-string
-                  visits-claps
-                  sendme-claps)))))
+  (defun bp/html-postamble (rss-url icon-url args)
+    (let ((file (getf args :input-file))
+          (rss (format "<a href=\"%s\"><img src=\"%s\" /></a>"
+                       rss-url icon-url)))
+      (cond ((or (string-suffix-p "index.org" file)
+                 (string-suffix-p "sitemap.org" file))
+             rss)
+            ((or (string-suffix-p "meta.org" file)
+                 (search  "errors/" file))
+             nil)
+            (t
+             (let ((feedback-string
+                    (format "<hr/>You can send your feedback, queries <a href=\"mailto:bpanthi977@gmail.com?subject=Feedback: %s\">here</a>"
+                            (when-let ((title (car (getf args :title))))
+                              (substring-no-properties title))))
+                   (visits-claps "<span id=\"visits\"></span><span id=\"claps\"></span>")
+                   (sendme-claps "<div id=\"claps-message\"></div>"))
+               (concat feedback-string
+                       visits-claps
+                       sendme-claps
+                       rss))))))
 
   ;; this hook is run in the temporary org buffer being exported
   ;; before any processing is done
@@ -159,6 +165,13 @@ PUB-DIR is when the output will be placed."
   (defvar bp/rfc-822-format-time "%a, %d %b %y %H:%M:%S %z")
   (defvar bp/rfc-3339-format-time "%Y-%m-%dT%H:%M:%S%:z")
   (defvar bp/braindump-base-url "https://bpanthi977.github.io/braindump/")
+  (defvar bp/braindump-rss-url "https://bpanthi977.github.io/braindump/data/rss.xml")
+  (defvar bp/braindump-rss-icon "https://bpanthi977.github.io/braindump/data/rss.png")
+
+  (defvar bp/blog-base-url "https://bpanthi977.github.io/")
+  (defvar bp/blog-rss-url "https://bpanthi977.github.io/rss.xml")
+  (defvar bp/blog-rss-icon "https://bpanthi977.github.io/img/rss.png")
+
 
   (defun rw/format-rss-feed (title list)
     "Generate RSS feed, as a string.
@@ -168,12 +181,13 @@ representation for the files to include, as returned by
     (concat
      (format "<?xml version=\"1.0\" encoding=\"utf-8\"?>
    <feed xmlns=\"http://www.w3.org/2005/Atom\">
-     <title type=\"text\">Bibek's Digital Garden</title>
+     <title type=\"text\">%s</title>
      <updated>%s</updated>
      <link rel=\"self\" type=\"application/atom+xml\" href=\"%sdata/rss.xml\"/>
      <id>%s</id>
      <generator uri=\"https://www.gnu.org/software/emacs/\" version=\"29.1\">Emacs</generator>
 "
+             title
              (format-time-string bp/rfc-3339-format-time (current-time))
              bp/braindump-base-url
              bp/braindump-base-url)
@@ -184,7 +198,7 @@ representation for the files to include, as returned by
 </feed>"))
 
 
-  (defun rw/format-rss-feed-entry (entry style project)
+  (defun rw/format-rss-feed-entry (baseurl entry style project)
     "Format ENTRY for the RSS feed.
 ENTRY is a file name.  STYLE is either 'list' or 'tree'.
 PROJECT is the current project."
@@ -195,7 +209,7 @@ PROJECT is the current project."
            (let* ((file (org-publish--expand-file-name entry project))
                   (title (org-publish-find-title entry project))
                   (date (format-time-string "%Y-%m-%d" (org-publish-find-date entry project)))
-                  (link (url-encode-url (concat bp/braindump-base-url (file-name-sans-extension entry) ".html")))
+                  (link (url-encode-url (concat baseurl (file-name-sans-extension entry) ".html")))
                   (id (with-temp-buffer
                         (insert-file-contents file)
                         (let ((ids (org-property-values "id")))
@@ -244,11 +258,23 @@ PROJECT is the current project."
            :base-extension "org"
            :publishing-directory "~/Development/Web/Blog/blog/"
            :recursive t
+           :exclude "^meta.org\\|^rss.xml"
            :publishing-function org-html-publish-to-html
            :headline-levels 4             ; Just the default for this project.
            :auto-preamble t
            :html-preamble bp/org-html-preamble ;; org-html-preamble
-           :html-postamble bp/html-postamble
+           :html-postamble (lambda (args) (bp/html-postamble bp/blog-rss-url bp/blog-rss-icon args))
+
+           :author "Bibek Panthi"
+           :auto-sitemap t
+           :sitemap-filename "rss.xml"
+           :sitemap-title "Bibek's Blog"
+           :sitemap-style list
+           :sitemap-sort-files anti-chronologically
+           :sitemap-function rw/format-rss-feed
+           :sitemap-format-entry (lambda (&rest args)
+                                   (apply #'rw/format-rss-feed-entry bp/blog-base-url args))
+
            )
           ("blog-static"
            :base-directory "~/org/blog/"
@@ -269,7 +295,7 @@ PROJECT is the current project."
            :headline-levels 4             ; Just the default for this project.
            :auto-preamble t
            :html-preamble bp/org-html-preamble ;; org-html-preamble
-           :html-postamble bp/html-postamble
+           :html-postamble (lambda (args) (bp/html-postamble bp/braindump-rss-url bp/braindump-rss-icon args))
 
            :auto-sitemap t
            :sitemap-filename "sitemap.org"
@@ -293,10 +319,13 @@ PROJECT is the current project."
            :author "Bibek Panthi"
            :auto-sitemap t
            :sitemap-filename "data/rss.xml"
+           :sitemap-title "Bibek's Digital Garden"
            :sitemap-style list
            :sitemap-sort-files anti-chronologically
            :sitemap-function rw/format-rss-feed
-           :sitemap-format-entry rw/format-rss-feed-entry)
+           :sitemap-format-entry (lambda (&rest args)
+                                   (apply #'rw/format-rss-feed-entry bp/braindump-base-url args))
+           )
 
           ("braindump-static"
            :base-directory "~/Documents/synced/Notes/data/"
