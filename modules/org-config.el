@@ -669,6 +669,11 @@ PROJECT is the current project."
                   :command (list org-mid-email-program
                                  (concat "mid:" path))))
 
+  (defun bp/insert-email-link (message-id)
+    (interactive "sMessage Id:")
+    (let ((stripped (string-trim message-id "<" ">")))
+      (insert "[[mid:" stripped "]]")))
+
   ;; org config complete
   )
 
