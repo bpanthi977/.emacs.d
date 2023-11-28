@@ -169,3 +169,13 @@ SPLITTER to determine the prefix to include."
 ;;; Save magit buffer/commit links to org mode
 (use-package orgit
   :ensure t)
+
+
+;;; git-link
+;;; Copy url to github/bitbucket/... for current buffer and line number
+(use-package git-link
+  :ensure t
+  :defer t
+  :bind (("C-c l" . git-link))
+  :config
+  (setf git-link-use-commit t))
