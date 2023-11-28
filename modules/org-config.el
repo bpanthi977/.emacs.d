@@ -19,18 +19,24 @@
               ("M-m o v" . org-redisplay-inline-images))
   :bind (:map org-src-mode-map
               ("C-c C-c" . org-edit-src-exit))
-  :hook (org-mode . (lambda ()
-                      (org-content 2)
-                      (smartparens-mode 1)
-                      (setf org-pretty-entities t)
-                      (modify-syntax-entry ?$ "$$" org-mode-syntax-table)
-                      (setf org-pretty-entities-include-sub-superscripts nil)
-                      ;; a more noticable bold face for org mode in dark themes (spacemacs-dark)
-                      (face-remap-add-relative 'bold '(:weight bold :foreground "green3"))
-                      ;;(org-cdlatex-mode)
-                      (electric-indent-mode -1)
-                      (setq ispell-parser 'tex)))
+  :hook (org-mode . (lambda () (bp/org-mode-hook)))
   :config
+
+  (defun bp/org-mode-hook ()
+    (org-content 2)
+    (smartparens-mode 1)
+    (setf org-pretty-entities t)
+    (modify-syntax-entry ?$ "$$" org-mode-syntax-table)
+    (setf org-pretty-entities-include-sub-superscripts nil)
+    ;; a more noticable bold face for org mode in dark themes (spacemacs-dark)
+    (face-remap-add-relative 'bold '(:weight bold :foreground "green3"))
+    ;; auto-fill-mode
+    (auto-fill-mode)
+    (setq default-justification 'full)
+    ;;(org-cdlatex-mode)
+    (electric-indent-mode -1)
+    (setq ispell-parser 'tex))
+
 ;; ** Indent
 (setf org-startup-indented t)
 ;; ** requirements

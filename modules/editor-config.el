@@ -11,6 +11,7 @@
 (setq kill-whole-line t)
 ;; Sentences end in single space
 ;; forward-sentence, fill-paragraph and friends will work better
+(setq-default fill-column 80)
 (setf sentence-end-double-space nil)
 ;; Newline at end of file
 (setq require-final-newline t)
