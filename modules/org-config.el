@@ -1493,7 +1493,7 @@ Convert TITLE to a filename-suitable slug."
         org-mpv-notes-ocr-command "tesseract"
         org-mpv-notes-ocr-command-args "-")
 
-  (smartrep-define-key org-mpv-notes-map "M-n"
+  (smartrep-define-key org-mpv-notes-mode-map "M-n"
     `(;; keys used for moving in the video
       ("b" . mpv-seek-backward)
       ("q" . keyboard-quit)
