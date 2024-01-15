@@ -82,6 +82,7 @@
 
   (lsp-make-interactive-code-action fix-all "source.fixAll")
   (lsp-make-interactive-code-action remove-unused "source.removeUnused")
+  (lsp-make-interactive-code-action import-all "source.addMissingImports")
   (setq lsp-enable-file-watchers nil)
   (setq read-process-output-max (* 1024 1024))
   (setq lsp-idle-delay 3)
