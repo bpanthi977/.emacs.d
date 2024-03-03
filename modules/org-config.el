@@ -295,7 +295,6 @@ PROJECT is the current project."
           ((not (directory-name-p entry))
            (let* ((file (org-publish--expand-file-name entry project))
                   (title (org-publish-find-title entry project))
-                  (date (format-time-string "%Y-%m-%d" (org-publish-find-date entry project)))
                   (link (url-encode-url (concat baseurl (file-name-sans-extension entry) ".html")))
                   (id (with-temp-buffer
                         (insert-file-contents file)
