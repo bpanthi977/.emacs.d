@@ -246,7 +246,10 @@ buffer is not visiting a file."
   :defer t
   :mode "\\.md\\'"
   :config
-  (setf markdown-command "/home/bpanthi/.local/bin/pandoc -f gfm"))
+  (setf markdown-command
+        (cl-case system-type
+          (darwin "/opt/homebrew/bin/pandoc -f gfm")
+          (gnu/linux "/home/bpanthi/.local/bin/pandoc -f gfm"))))
 
 (global-set-key (kbd "M-.") 'find-function-at-point)
 

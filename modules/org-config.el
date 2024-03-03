@@ -32,7 +32,7 @@
     (face-remap-add-relative 'bold '(:weight bold :foreground "green3"))
     ;; auto-fill-mode
     (auto-fill-mode)
-    (setq default-justification 'full)
+    (setq default-justification 'left)
     ;;(org-cdlatex-mode)
     (electric-indent-mode -1)
     (setq ispell-parser 'tex))
