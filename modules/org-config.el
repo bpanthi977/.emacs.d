@@ -1371,6 +1371,7 @@ buffer's text scale."
 ;; * org-transclusion
 (use-package org-transclusion
   :ensure t
+  :hook (org-mode . org-transclusion-mode)
   :init
   (bind-keys :map org-mode-map
              ("M-m o t t" . org-transclusion-add)
