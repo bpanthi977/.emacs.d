@@ -27,7 +27,9 @@
 
 (use-package lsp-pyright
   :ensure t
-  :defer nil)
+  :defer nil
+  :config
+  (setf lsp-pyright-multi-root nil))
 
 (use-package ein
   :ensure t
