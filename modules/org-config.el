@@ -1443,7 +1443,6 @@ Convert TITLE to a filename-suitable slug."
 
   (set-default 'org-download-image-dir "./data/")
   (set-default 'org-download-heading-lvl nil)
-  (setf org-mpv-notes-save-image-function #'org-download-image)
 
   (setq org-download-method 'directory
         org-download-screenshot-method "xfce4-screenshooter -r -o cat > %s"
@@ -1486,29 +1485,11 @@ Convert TITLE to a filename-suitable slug."
   (global-orglink-mode))
 ;; * org-mpv-notes
 (use-package org-mpv-notes
-  :commands (org-mpv-notes)
+  :commands (org-mpv-notes-mode)
   :defer t
   :config
   (setf org-mpv-notes-save-image-function #'org-download-image
         org-mpv-notes-ocr-command "tesseract"
         org-mpv-notes-ocr-command-args "-")
 
-  (smartrep-define-key org-mpv-notes-mode-map "M-n"
-    `(;; keys used for moving in the video
-      ("b" . mpv-seek-backward)
-      ("q" . keyboard-quit)
-      ("f" . mpv-seek-forward)
-      ("F" . mpv-toggle-fullscreen)
-      ("<left>" . mpv-seek-backward)
-      ("<right>" . mpv-seek-forward)
-      ("<up>" . mpv-seek-double-step)
-      ("<down>" . mpv-seek-halve-step)
-      ("]" . org-mpv-speed-up)
-      ("[" . org-mpv-speed-down)
-      ;; keys used for moving in the notes
-      ("n" . org-mpv-notes-next-timestamp)
-      ("p" . org-mpv-notes-previous-timestamp)
-      ("SPC" . mpv-pause)
-      ("a" . mpv-seek-halve-step)
-      ("d" . mpv-seek-double-step)
-      ("." . org-mpv-notes-this-timestamp))))
+  (define-key org-mpv-notes-mode-map (kbd "M-n") (smartrep-map org-mpv-notes-key-bindings)))

@@ -67,7 +67,7 @@
    "make-config"
    "c-config"
    "csharp-config"
-   "okular"
+   ;;"okular"
    "org-config"
    "elfeed-config"
    "org-mpv-notes"
