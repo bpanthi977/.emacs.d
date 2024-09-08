@@ -47,6 +47,7 @@
 	   ("e e" . hippie-expand)
 	   ("e t" . toggle-truncate-lines)
 	   ("e c" . upcase-initials-region)
+           ("e a" . align-regexp)
 	   ;; file
 	   ("f r" . recover-this-file)
 	   ("f d" . diff-buffer-with-file)
