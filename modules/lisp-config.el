@@ -48,7 +48,7 @@
 ;;   :config
 ;;   (setf bp/lisp-ide 'slime)
 ;;   (define-key lisp-mode-map (kbd "M-m d d") #'slime-documentation)
-
+;;   (setf org-babel-lisp-eval-fn 'slime-eval)
 ;;   (setq slime-contribs '(slime-asdf slime-banner slime-fancy slime-hyperdoc
 ;;                                     ;;slime-repl-ansi-color
 ;;                                     slime-macrostep slime-mrepl slime-quicklisp
@@ -74,6 +74,7 @@
   :config
   (setf bp/lisp-ide 'sly)
   (define-key sly-mode-map (kbd "C-c M-p") #'sly-mrepl-set-package)
+  (setf org-babel-lisp-eval-fn 'sly-eval)
   (config-lisp))
 
 (use-package lisp-markup

@@ -650,7 +650,6 @@ PROJECT is the current project."
      (C . t)
      (shell . t)
      ))
-  (setf org-babel-lisp-eval-fn 'slime-eval)
 
 ;; ** Linking org files across fs to ~/org/
   (defun bp/link-to-~org ()
