@@ -143,6 +143,7 @@ buffer is not visiting a file."
 ;; Projectile
 (use-package projectile
   :ensure t
+  :pin "nongnu" ;; because the melpa package is unstable
   :defer nil
   :config
   (defun bp/projectile-find-common-lisp-root (dir)
