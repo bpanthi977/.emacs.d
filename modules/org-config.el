@@ -48,6 +48,23 @@
   (require 'ol-man)
   (require 'ol-info)
 ;; ** Exporting
+;; *** Export using beamer
+  (cl-pushnew '("beamer-show-heading" . "
+#+BEGIN_EXPORT latex
+\\AtBeginSection[]{
+  \\begin{frame}
+  \\vfill
+  \\centering
+  \\begin{beamercolorbox}[sep=8pt,center,shadow=true,rounded=true]{title}
+    \\usebeamerfont{title}\\insertsectionhead\\par%
+  \\end{beamercolorbox}
+  \\vfill
+  \\end{frame}
+}
+#+end_export
+")
+              org-export-global-macros)
+
 ;; *** Export to html with useful anchors
   ;; Adpated from https://github.com/alphapapa/unpackaged.el#export-to-html-with-useful-anchors
   (advice-add #'org-export-get-reference :override #'unpackaged/org-export-get-reference)
@@ -695,7 +712,9 @@ PROJECT is the current project."
   :commands (bp/org-insert-inline-latex bp/org-insert-last-inline-latex  bp/org-insert-latex-equation bp/org-insert-last-inline-latex)
   :config
   ;; For proper rendering of unicode symbols on latex
-  (setq org-latex-inputenc-alist '(("utf8" . "utf8x")))
+  ;; This messes with beamer
+  ;; (setq org-latex-inputenc-alist '(("utf8" . "utf8x")))
+
   (setq org-latex-default-packages-alist (cons '("mathletters" "ucs" nil) org-latex-default-packages-alist))
 
   ;; You also need to bug fix the working of `Tranparent' in org.el.
@@ -908,6 +927,7 @@ buffer's text scale."
           ("basicstyle" "\\footnotesize")
           ("showstringspaces" "false")
           ("numbers" "left")
+          ("basicstyle" "\\ttfamily\\footnotesize")
           ("numberstyle" "\\tiny\\color{commentsColor}")
           ("commentstyle" "\\color{commentsColor}\\textit")
           ("keywordstyle" "\\color{keywordsColor}\\bfseries")
