@@ -495,7 +495,8 @@ PROJECT is the current project."
       (org-html-export-as-html nil)
       (browse-url-of-buffer "*Org HTML Export*")))
 
-
+  ;; Mark broken links as [BROKEN-LINK: <link title>] in the html output
+  (setf org-export-with-broken-links 'mark)
 
 ;; *** Comments in between paragraphs
   ;; This allows comments in between a paragraph
@@ -666,6 +667,8 @@ PROJECT is the current project."
      (C . t)
      (shell . t)
      ))
+
+  (setf org-export-use-babel nil)
 
 ;; ** Linking org files across fs to ~/org/
   (defun bp/link-to-~org ()
