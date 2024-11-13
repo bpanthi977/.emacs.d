@@ -229,8 +229,8 @@
                                                         org-export-before-processing-functions))
           ;; exclude headings with :personal: tag
           (org-export-exclude-tags (cl-concatenate 'list '("PRESONAL" "personal" "private" "PRIVATE")
-                                                   org-export-exclude-tags)))
-
+                                                   org-export-exclude-tags))
+          (org-html-head-include-default-style nil))
       (apply #'org-html-publish-to-html args)))
 
 ;; **** Braindump Sitemap
@@ -254,6 +254,12 @@ PROJECT is the current project."
            ;; Return only last subdir.
            (file-name-nondirectory (directory-file-name entry)))
           (t entry)))
+
+  (defun bp/org-publish-braindump-sitemap ()
+    (interactive)
+    (let ((project (assoc "braindump-org" org-publish-project-alist)))
+      (org-publish-sitemap (cl-concatenate 'list '(:sitemap t) project)
+                           "sitemap.org")))
 
 ;; **** Braindump RSS
   ;; Inspired from https://writepermission.com/org-blogging-rss-feed.html
@@ -298,7 +304,6 @@ representation for the files to include, as returned by
 
      "
 </feed>"))
-
 
   (defun rw/format-rss-feed-entry (baseurl entry style project)
     "Format ENTRY for the RSS feed.
@@ -349,12 +354,6 @@ PROJECT is the current project."
     (interactive)
     (let ((project (assoc "braindump-rss" org-publish-project-alist)))
       (org-publish-sitemap project "data/rss.xml")))
-
-  (defun bp/org-publish-braindump-sitemap ()
-    (interactive)
-    (let ((project (assoc "braindump-rss" org-publish-project-alist)))
-      (org-publish-sitemap (cl-concatenate 'list '(:sitemap t) project)
-                           "sitemap.org")))
 
 ;; **** Publish List
   (setq org-publish-project-alist
@@ -409,6 +408,8 @@ PROJECT is the current project."
            :sitemap-ignore-case t
            :sitemap-format-entry bp/format-sitemap-entry
            :sitemap-title "Bibek's Digital Garden"
+           :sitemap-style list
+           :sitemap-sort-files anti-chronologically
            )
 
           ("braindump-rss"
