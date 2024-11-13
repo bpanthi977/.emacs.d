@@ -1499,15 +1499,15 @@ Convert TITLE to a filename-suitable slug."
   :defer nil
   :config
   (global-orglink-mode))
+
 ;; * org-mpv-notes
 (use-package org-mpv-notes
   :commands (org-mpv-notes-mode)
   :defer t
+  :hook (org-mode . org-mpv-notes-setup-link)
   :config
-  (setf org-mpv-notes-save-image-function #'org-download-image
-        org-mpv-notes-ocr-command "tesseract"
-        org-mpv-notes-ocr-command-args "-")
-
+  (setf org-mpv-notes-preferred-backend 'mpv)
+  (setf org-mpv-notes-save-image-function #'org-download-image)
   (define-key org-mpv-notes-mode-map (kbd "M-n") (smartrep-map org-mpv-notes-key-bindings)))
 
 ;; * org-tree-slide
