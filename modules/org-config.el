@@ -9,6 +9,7 @@
   :bind (:map bp/global-prefix-map
               ("o l" . org-store-link)
               ("o L" . org-id-store-link)
+              ("o f" . org-footnote-action)
               ("o e" . org-emphasize))
   :bind (:map org-mode-map
               ("M-m o h" . 'bp/org-view-html-export)
@@ -30,11 +31,11 @@
     (setf org-pretty-entities-include-sub-superscripts nil)
     ;; a more noticable bold face for org mode in dark themes (spacemacs-dark)
     (face-remap-add-relative 'bold '(:weight bold :foreground "green3"))
-    ;; auto-fill-mode
-    (auto-fill-mode)
     (setq default-justification 'left)
     ;;(org-cdlatex-mode)
     (electric-indent-mode -1)
+    (setf show-trailing-whitespace t)
+    (add-hook 'before-save-hook #'whitespace-cleanup 0 t)
     (setq ispell-parser 'tex))
 
 ;; ** Indent
