@@ -1396,15 +1396,13 @@ buffer's text scale."
   :init
   (bind-keys :map org-mode-map
              ("M-m o t t" . org-transclusion-add)
-             ("M-m o t l" . bp/org-transclusion-insert-link)
-             ("M-m o t a" . org-transclusion-add-all))
+             ("M-m o t i" . bp/org-transclusion-insert)
+             ("M-m o t a" . org-transclusion-add-all)
+             ("M-m o t d" . org-transclusion-deactivate))
 
-  (defun bp/org-transclusion-insert-link ()
+  (defun bp/org-transclusion-insert ()
     (interactive)
-    (insert "#+transclude: ")
-    (when (org-insert-link)
-      (move-beginning-of-line 1)
-      (insert "#+transclude: ")))
+    (insert "#+transclude: "))
 
   :config
   (cl-pushnew 'keyword org-transclusion-exclude-elements)
