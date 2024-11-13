@@ -67,6 +67,9 @@
               org-export-global-macros)
 
 ;; *** Export to html with useful anchors
+  (setf org-html-prefer-user-labels t)
+  (advice-add #'org-publish-resolve-external-link :around #'bp/org-publish-resolve-external-link)
+
   ;; Adpated from https://github.com/alphapapa/unpackaged.el#export-to-html-with-useful-anchors
   (advice-add #'org-export-get-reference :override #'unpackaged/org-export-get-reference)
 
@@ -74,46 +77,38 @@
     "Like `org-export-get-reference', except uses heading titles instead of random numbers."
     (let ((cache (plist-get info :internal-references)))
       (or (car (rassq datum cache))
+          (when (org-html-standalone-image-p datum info)
+            (let ((figure-number (org-export-get-ordinal
+                                  (org-element-map datum 'link
+                                    #'identity info t)
+                                  info nil #'org-html-standalone-image-p)))
+              (format "figure-%d" figure-number)))
           (let* ((crossrefs (plist-get info :crossrefs))
                  (cells (org-export-search-cells datum))
-                 ;; Preserve any pre-existing association between
-                 ;; a search cell and a reference, i.e., when some
-                 ;; previously published document referenced a location
-                 ;; within current file (see
-                 ;; `org-publish-resolve-external-link').
-                 ;;
-                 ;; However, there is no guarantee that search cells are
-                 ;; unique, e.g., there might be duplicate custom ID or
-                 ;; two headings with the same title in the file.
-                 ;;
-                 ;; As a consequence, before re-using any reference to
-                 ;; an element or object, we check that it doesn't refer
-                 ;; to a previous element or object.
                  (new (or (cl-some
                            (lambda (cell)
                              (let ((stored (cdr (assoc cell crossrefs))))
                                (when stored
-                                 (let ((old (org-export-format-reference stored)))
-                                   (and (not (assoc old cache)) stored)))))
+                                 (if (not (numberp stored))
+                                     stored
+                                   (let ((old (org-export-format-reference stored)))
+                                     (and (not (assoc old cache)) stored))))))
                            cells)
                           (when (org-element-property :raw-value datum)
-                            ;; Heading with a title
                             (unpackaged/org-export-new-title-reference datum cache))
-                          ;; NOTE: This probably breaks some Org Export
-                          ;; feature, but if it does what I need, fine.
                           (org-export-format-reference
                            (org-export-new-reference cache))))
                  (reference-string new))
-            ;; Cache contains both data already associated to
-            ;; a reference and in-use internal references, so as to make
-            ;; unique references.
             (dolist (cell cells) (push (cons cell new) cache))
-            ;; Retain a direct association between reference string and
-            ;; DATUM since (1) not every object or element can be given
-            ;; a search cell (2) it permits quick lookup.
             (push (cons reference-string datum) cache)
             (plist-put info :internal-references cache)
             reference-string))))
+
+  (advice-add #'org-export-format-reference :around #'bp/org-export-format-reference)
+  (defun bp/org-export-format-reference (f reference)
+    (if (stringp reference)
+      reference
+      (funcall f reference)))
 
   (defun unpackaged/org-export-new-title-reference (datum cache)
     "Return new reference for DATUM that is unique in CACHE."
@@ -132,7 +127,9 @@
                                          0)))
                          (setf ,place (format "%s--%s" s1 (cl-incf suffix)))))))
       (let* ((title (org-element-property :raw-value datum))
-             (ref (url-hexify-string (substring-no-properties title)))
+             (ref (if (eql org-export-current-backend 'html)
+                      (url-hexify-string (substring-no-properties title))
+                    (string-replace " " "-" (substring-no-properties title))))
              (parent (org-element-property :parent datum)))
         (while (--any (equal ref (car it))
                       cache)
