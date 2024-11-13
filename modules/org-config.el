@@ -1465,9 +1465,6 @@ Convert TITLE to a filename-suitable slug."
 ;;            (org--latex-preview-region (point-min) (point-max))))
 ;;   )
 
-;; * Presentation
-(use-package org-tree-slide
-  :ensure t)
 ;; * org noter
 (use-package org-noter
   :ensure t
@@ -1492,3 +1489,31 @@ Convert TITLE to a filename-suitable slug."
         org-mpv-notes-ocr-command-args "-")
 
   (define-key org-mpv-notes-mode-map (kbd "M-n") (smartrep-map org-mpv-notes-key-bindings)))
+
+;; * org-tree-slide
+(use-package org-tree-slide
+  :ensure t
+  :defer t
+  :bind (:map org-tree-slide-mode-map
+              ("C-<right>" . org-tree-slide-move-next-tree)
+              ("C-<left>" . org-tree-slide-move-previous-tree))
+  :config
+  (defvar my-hide-org-meta-line-p nil)
+  (defun my-hide-org-meta-line ()
+    (interactive)
+    (setq my-hide-org-meta-line-p t)
+    (set-face-attribute 'org-meta-line nil
+                        :foreground (face-attribute 'default :background)
+                        :background (face-attribute 'default :background)))
+  (defun my-show-org-meta-line ()
+    (interactive)
+    (setq my-hide-org-meta-line-p nil)
+    (set-face-attribute 'org-meta-line nil :foreground nil :background nil))
+
+  (defun my-toggle-org-meta-line ()
+    (interactive)
+    (if my-hide-org-meta-line-p
+              (my-show-org-meta-line) (my-hide-org-meta-line)))
+
+  (add-hook 'org-tree-slide-play-hook #'my-hide-org-meta-line)
+  (add-hook 'org-tree-slide-stop-hook #'my-show-org-meta-line))
