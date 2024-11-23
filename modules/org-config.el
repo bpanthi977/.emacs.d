@@ -257,103 +257,50 @@ PROJECT is the current project."
 
   (defun bp/org-publish-braindump-sitemap ()
     (interactive)
-    (let ((project (assoc "braindump-org" org-publish-project-alist)))
+    (let ((project (assoc "braindump-org" org-publish-project-alist))
+          (org-transclusion-add-all-on-activate nil))
       (org-publish-sitemap (cl-concatenate 'list '(:sitemap t) project)
                            "sitemap.org")))
 
-;; **** Braindump RSS
-  ;; Inspired from https://writepermission.com/org-blogging-rss-feed.html
-
-  (defun rw/org-rss-publish-to-rss (plist filename pub-dir)
-    "Publish RSS with PLIST, only when FILENAME is 'rss.org'.
-PUB-DIR is when the output will be placed."
-    (print filename)
-    nil)
-
-  (defvar bp/rfc-822-format-time "%a, %d %b %y %H:%M:%S %z")
-  (defvar bp/rfc-3339-format-time "%Y-%m-%dT%H:%M:%S%:z")
-  (defvar bp/braindump-base-url "https://bpanthi977.github.io/braindump/")
+;; **** Braindump & Blog RSS
   (defvar bp/braindump-rss-url "https://bpanthi977.github.io/braindump/data/rss.xml")
   (defvar bp/braindump-rss-icon "https://bpanthi977.github.io/braindump/data/rss.png")
 
-  (defvar bp/blog-base-url "https://bpanthi977.github.io/")
   (defvar bp/blog-rss-url "https://bpanthi977.github.io/rss.xml")
   (defvar bp/blog-rss-icon "https://bpanthi977.github.io/img/rss.png")
 
+  (defun bp/insert-rss-entry ()
+    (interactive)
+    (let ((node (org-roam-node-read)))
+      (when node
+        (let ((pub-date (format-time-string "%Y-%m-%d %a %H:%M"
+                                            (org-roam-node-file-mtime node)))
+              (rss-permlink (format "%s.html" (file-name-base (org-roam-node-file node))))
+              (id (org-roam-node-id node))
+              (title (org-roam-node-title node)))
+          (insert (format "
+* %s
+:PROPERTIES:
+:PUBDATE:  %s
+:RSS_PERMALINK: %s
+:ROAM_EXCLUDE: t
+:END:
 
-  (defun rw/format-rss-feed (title list)
-    "Generate RSS feed, as a string.
-TITLE is the title of the RSS feed.  LIST is an internal
-representation for the files to include, as returned by
-`org-list-to-lisp'.  PROJECT is the current project."
-    (concat
-     (format "<?xml version=\"1.0\" encoding=\"utf-8\"?>
-   <feed xmlns=\"http://www.w3.org/2005/Atom\">
-     <title type=\"text\">%s</title>
-     <updated>%s</updated>
-     <link rel=\"self\" type=\"application/atom+xml\" href=\"%sdata/rss.xml\"/>
-     <id>%s</id>
-     <generator uri=\"https://www.gnu.org/software/emacs/\" version=\"29.1\">Emacs</generator>
+#+transclude: [[id:%s][%s]] :level 2
 "
-             title
-             (format-time-string bp/rfc-3339-format-time (current-time))
-             bp/braindump-base-url
-             bp/braindump-base-url)
-
-     (org-list-to-subtree list 1 '(:icount "" :istart ""))
-
-     "
-</feed>"))
-
-  (defun rw/format-rss-feed-entry (baseurl entry style project)
-    "Format ENTRY for the RSS feed.
-ENTRY is a file name.  STYLE is either 'list' or 'tree'.
-PROJECT is the current project."
-    (cond ((and (not (directory-name-p entry))
-                (bp/org-project-entry-unlistedp entry project))
-           "")
-          ((not (directory-name-p entry))
-           (let* ((file (org-publish--expand-file-name entry project))
-                  (title (org-publish-find-title entry project))
-                  (link (url-encode-url (concat baseurl (file-name-sans-extension entry) ".html")))
-                  (id (with-temp-buffer
-                        (insert-file-contents file)
-                        (let ((ids (org-property-values "id")))
-                          (if ids
-                              (concat "urn:uuid:"
-                                      (first ids))
-                            link)))))
-             (format "
- <entry>
-    <title type=\"text\">%s</title>
-    <link href=\"%s\" />
-    <id>%s</id>
-    <published>%s</published>
-    <updated>%s</updated>
-    <author>
-      <name>Bibek Panthi</name>
-    </author>
-    <content type=\"text/html\">
-      <a href=\"%s\">%s</a>
-    </content>
-  </entry>"
-
-                     (org-html-encode-plain-text title)
-                     link
-                     id
-                     (format-time-string bp/rfc-3339-format-time (org-publish-find-date entry project))
-                     (format-time-string bp/rfc-3339-format-time (bp/last-modified-time file))
-                     link
-                     link)))
-          ((eq style 'tree)
-           ;; Return only last subdir.
-           (file-name-nondirectory (directory-file-name entry)))
-          (t entry)))
+                          title pub-date rss-permlink id title))))))
 
   (defun bp/org-publish-braindump-rss ()
     (interactive)
-    (let ((project (assoc "braindump-rss" org-publish-project-alist)))
-      (org-publish-sitemap project "data/rss.xml")))
+    (let ((rss-file (file-truename "~/org/rss.org")))
+      (save-excursion
+        (find-file rss-file)
+        (org-transclusion-add-all)
+        (org-rss-export-to-rss)
+        (org-transclusion-deactivate)
+        (copy-file (expand-file-name "output/rss.xml" (file-name-directory rss-file))
+                   (expand-file-name "data/rss.xml" (file-name-directory rss-file))
+                   t))))
 
 ;; **** Publish List
   (setq org-publish-project-alist
@@ -364,7 +311,7 @@ PROJECT is the current project."
            :base-extension "org"
            :publishing-directory "~/Development/Web/Blog/blog/"
            :recursive t
-           :exclude "^meta.org\\|^rss.xml"
+           :exclude "^meta.org\\|^rss.xml|^rss.org"
            :publishing-function org-html-publish-to-html
            :headline-levels 4             ; Just the default for this project.
            :auto-preamble t
@@ -372,23 +319,13 @@ PROJECT is the current project."
            :html-postamble (lambda (args) (bp/html-postamble bp/blog-rss-url bp/blog-rss-icon args))
 
            :author "Bibek Panthi"
-           :auto-sitemap t
-           :sitemap-filename "rss.xml"
-           :sitemap-title "Bibek's Blog"
-           :sitemap-style list
-           :sitemap-sort-files anti-chronologically
-           :sitemap-function rw/format-rss-feed
-           :sitemap-format-entry (lambda (&rest args)
-                                   (apply #'rw/format-rss-feed-entry bp/blog-base-url args))
-
-           )
+           :auto-sitemap nil)
           ("blog-static"
            :base-directory "~/org/blog/"
            :base-extension "html\\|xml\\|css\\|js\\|png\\|jpg\\|gif\\|pdf\\|mp3\\|ogg\\|swf\\|svg\\|php\\|ico\\|json"
            :publishing-directory "~/Development/Web/Blog/blog/"
            :recursive t
-           :publishing-function org-publish-attachment
-           )
+           :publishing-function org-publish-attachment)
           ("blog" :components ("blog-org" "blog-static"))
 
           ("braindump-org"
@@ -409,40 +346,15 @@ PROJECT is the current project."
            :sitemap-format-entry bp/format-sitemap-entry
            :sitemap-title "Bibek's Digital Garden"
            :sitemap-style list
-           :sitemap-sort-files anti-chronologically
-           )
-
-          ("braindump-rss"
-           :base-directory "~/Documents/synced/Notes/"
-           :base-extension "org"
-           :publishing-directory "~/Development/Web/Blog/blog/braindump/"
-           :exclude "^notes.org\\|^tasks.org\\|^sitemap.org"
-           :html-link-home "https://bpanthi977.github.com/braindump/"
-           :html-link-use-abs-url t
-           :section-number nil
-           :table-of-contents nil
-           :recursive nil
-           :publishing-function rw/org-rss-publish-to-rss
-
-           :author "Bibek Panthi"
-           :auto-sitemap t
-           :sitemap-filename "data/rss.xml"
-           :sitemap-title "Bibek's Digital Garden"
-           :sitemap-style list
-           :sitemap-sort-files anti-chronologically
-           :sitemap-function rw/format-rss-feed
-           :sitemap-format-entry (lambda (&rest args)
-                                   (apply #'rw/format-rss-feed-entry bp/braindump-base-url args))
-           )
+           :sitemap-sort-files anti-chronologically)
 
           ("braindump-static"
            :base-directory "~/Documents/synced/Notes/data/"
            :base-extension "html\\|xml\\|css\\|js\\|png\\|jpg\\|gif\\|pdf\\|mp3\\|ogg\\|swf\\|svg\\|php\\|ico\\|mkv\\|lisp"
            :publishing-directory "~/Development/Web/Blog/blog/braindump/data/"
            :recursive t
-           :publishing-function org-publish-attachment
-           )
-          ("braindump" :components ("braindump-org" "braindump-static"))
+           :publishing-function org-publish-attachment)
+          ("braindump" :components ("braindump-org" "braindump-static" "braindump-rss"))
           ))
 
   (defun bp/org-upload-blog ()
@@ -668,7 +580,8 @@ PROJECT is the current project."
      (shell . t)
      ))
 
-  (setf org-export-use-babel nil)
+  ;; Don't set to nil otherwise source block headers (like :exports results) won't have any effect
+  (setf org-export-use-babel t)
 
 ;; ** Linking org files across fs to ~/org/
   (defun bp/link-to-~org ()
