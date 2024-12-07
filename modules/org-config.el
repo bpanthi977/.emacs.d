@@ -839,6 +839,7 @@ buffer's text scale."
   (setq org-latex-listings-options
         '(("frame" "lines")
           ("breaklines" "true")
+          ("columns" "fullflexible") ;; makes so that code is copy-pastable. i.e. no extra spaces between characters
           ("basicstyle" "\\footnotesize")
           ("showstringspaces" "false")
           ("numbers" "left")
