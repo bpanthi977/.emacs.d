@@ -290,9 +290,11 @@ PROJECT is the current project."
 "
                           title pub-date rss-permlink id title))))))
 
+  (defvar bp/org-publish-braindump-rss-p nil)
   (defun bp/org-publish-braindump-rss ()
     (interactive)
-    (let ((rss-file (file-truename "~/org/rss.org")))
+    (let ((rss-file (file-truename "~/org/rss.org"))
+          (bp/org-publish-braindump-rss-p t))
       (save-excursion
         (find-file rss-file)
         (org-transclusion-add-all)
@@ -397,7 +399,11 @@ PROJECT is the current project."
 
   (defun bp/org-html-src-block--wrap-with-details (f &rest args)
     (let ((html (apply f args)))
-      (format "<details open><summary><span class='org-details-collapse'>&lt; Collapse code block</span><span class='org-details-expand'>&gt; Expand code block</span></summary>\n%s</details>" html)))
+      ;; Only wrap with details for html export
+      ;; not for rss export
+      (if bp/org-publish-braindump-rss-p
+          html
+        (format "<details open><summary><span class='org-details-collapse'>&lt; Collapse code block</span><span class='org-details-expand'>&gt; Expand code block</span></summary>\n%s</details>" html))))
 
   (advice-add 'org-html-src-block :around #'bp/org-html-src-block--wrap-with-details)
 
