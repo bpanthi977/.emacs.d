@@ -561,6 +561,7 @@ PROJECT is the current project."
      (lisp . t)
      (C . t)
      (shell . t)
+     (org . t)
      ))
 
   ;; Don't set to nil otherwise source block headers (like :exports results) won't have any effect
@@ -592,7 +593,6 @@ PROJECT is the current project."
     (interactive "sMessage Id:")
     (let ((stripped (string-trim message-id "<" ">")))
       (insert "[[mid:" stripped "]]")))
-
   ;; org config complete
   )
 

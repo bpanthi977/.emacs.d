@@ -192,3 +192,7 @@ SPLITTER to determine the prefix to include."
   :bind (("C-c l" . git-link))
   :config
   (setf git-link-use-commit t))
+
+;; vterm
+(use-package vterm
+  :ensure t)

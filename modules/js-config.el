@@ -32,6 +32,9 @@
 
   (setf flycheck-javascript-eslint-executable "/home/bpanthi/.node_modules/bin/eslint"))
 
+(use-package prettier-js
+  :ensure t)
+
 (use-package typescript-mode
   :ensure t
   :defer t

@@ -285,3 +285,7 @@ need region."
   (epa-file-enable)
   (setq epa-file-select-keys nil)
   (setq epa-pinentry-mode 'loopback))
+
+;; For doing recursive directory diffs
+(use-package ztree
+  :ensure t)
