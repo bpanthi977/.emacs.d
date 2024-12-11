@@ -307,29 +307,6 @@ PROJECT is the current project."
 ;; **** Publish List
   (setq org-publish-project-alist
         '(
-          ("blog-org"
-           :base-directory "~/Documents/synced/Notes/blog/"
-           :exclude "templates/*"
-           :base-extension "org"
-           :publishing-directory "~/Development/Web/Blog/blog/"
-           :recursive t
-           :exclude "^meta.org\\|^rss.xml|^rss.org"
-           :publishing-function org-html-publish-to-html
-           :headline-levels 4             ; Just the default for this project.
-           :auto-preamble t
-           :html-preamble bp/org-html-preamble ;; org-html-preamble
-           :html-postamble (lambda (args) (bp/html-postamble bp/blog-rss-url bp/blog-rss-icon args))
-
-           :author "Bibek Panthi"
-           :auto-sitemap nil)
-          ("blog-static"
-           :base-directory "~/org/blog/"
-           :base-extension "html\\|xml\\|css\\|js\\|png\\|jpg\\|gif\\|pdf\\|mp3\\|ogg\\|swf\\|svg\\|php\\|ico\\|json"
-           :publishing-directory "~/Development/Web/Blog/blog/"
-           :recursive t
-           :publishing-function org-publish-attachment)
-          ("blog" :components ("blog-org" "blog-static"))
-
           ("braindump-org"
            :base-directory "~/Documents/synced/Notes/"
            :base-extension "org"
