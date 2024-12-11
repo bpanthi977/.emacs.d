@@ -21,24 +21,35 @@
 
 (add-hook 'prog-mode-hook #'bp/programming-mode-setup)
 
-
 (use-package dap-mode
   :ensure t
   :defer t
+  :bind (:map global-map
+              ("M-m d f" . dap-switch-stack-frame)
+              ("M-m d s" . dap-debug)
+              ("M-m d x" . dap-disconnect)
+              ("M-m d l" . dap-ui-locals)
+              ("M-m d e" . dap-ui-expressions))
   :config
-  (setq dap-auto-configure-features '(sessions locals controls tooltip))
-  (dap-mode -1))
+  (setq dap-auto-configure-features '(locals))
+  (setq dap-output-window-min-height 50)
+  (dap-mode 1)
+  (define-key global-map (kbd "M-m d r")
+              (smartrep-map '(("i" . dap-step-in)
+                              ("o" . dap-step-out)
+                              ("c" . dap-continue)
+                              ("x" . dap-ui-delete-session)))))
 
 (use-package dap-ui
   :defer t
   :config
   (setq dap-ui-buffer-configurations
-  `((,dap-ui--locals-buffer . ((side . bottom) (slot . 1) (window-width . 0.20)))
-    (,dap-ui--expressions-buffer . ((side . bottom) (slot . 2) (window-width . 0.20)))
-    (,dap-ui--sessions-buffer . ((side . bottom) (slot . 3) (window-width . 0.20)))
-    (,dap-ui--breakpoints-buffer . ((side . left) (slot . 2) (window-width . ,treemacs-width)))
-    (,dap-ui--debug-window-buffer . ((side . bottom) (slot . 3) (window-width . 0.20)))
-    (,dap-ui--repl-buffer . ((side . bottom) (slot . 1) (window-height . 0.45))))))
+        `((,dap-ui--locals-buffer . ((side . bottom) (slot . 1) (window-width . 0.40)))
+          (,dap-ui--expressions-buffer . ((side . bottom) (slot . 2) (window-width . 0.20)))
+          (,dap-ui--sessions-buffer . ((side . bottom) (slot . 3) (window-width . 0.20)))
+          (,dap-ui--breakpoints-buffer . ((side . left) (slot . 2) (window-width . ,treemacs-width)))
+          (,dap-ui--debug-window-buffer . ((side . bottom) (slot . 3) (window-width . 0.20)))
+          (,dap-ui--repl-buffer . ((side . bottom) (slot . 1) (window-height . 0.45))))))
 
 (use-package lsp-ivy
   :ensure t
