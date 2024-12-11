@@ -122,7 +122,8 @@
   :config
   (global-set-key (kbd "C-x C-g") #'magit-dispatch)
   (defvar bp/version-control/valid-commit-title-prefixes
-    '("🎁: feature (A new feature)"
+    '(": no emoji"
+      "🎁: feature (A new feature)"
       "🎨: design/ui (Design changes that don't add feature)"
       "⏪: revert (Revert back changes)"
       "🐛: bug fix (A bug fix)"
@@ -138,12 +139,12 @@
 
   (defun bp/magit-commit-emoji ()
     (interactive)
-    (let ((splitter ":")
-          (padding " ")
-          (commit-type (completing-read "Commit title prefix: "
-                                        bp/version-control/valid-commit-title-prefixes nil t)))
+    (let* ((splitter ":")
+           (commit-type (completing-read "Commit title prefix: "
+                                         bp/version-control/valid-commit-title-prefixes nil t))
+           (emoji (car (s-split splitter commit-type))))
       (goto-char (point-min))
-      (insert (car (s-split splitter commit-type)) padding)))
+      (insert emoji (if (string-equal emoji "") "" " "))))
 
   (defun bp/git-commit-mode-hook ()
     "If the first line is empty, prompt for commit type and insert it.
