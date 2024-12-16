@@ -1131,39 +1131,6 @@ buffer's text scale."
 ;; cite:${=key=}
 ;; "))
 
-;; ** Varibles setup
-(defun bp/setup-research-dir-local-variables ()
-  (interactive)
-  (let ((dir (file-name-directory (buffer-file-name))))
-    (add-dir-local-variable 'org-mode  'org-roam-directory dir)
-    (add-dir-local-variable 'org-mode
-                            'org-roam-db-location (expand-file-name (format "org-roam-%s.db" (if windows-system? "w" "l")) dir))
-    (add-dir-local-variable 'org-mode
-                            'bibtex-completion-bibliography (expand-file-name "references.bib" dir))
-    (add-dir-local-variable 'org-mode
-                            'org-ref-default-bibliography (list (expand-file-name "references.bib" dir)))
-    (add-dir-local-variable 'org-mode
-                            'bibtex-completion-notes-path (expand-file-name "notes.org" dir))
-    (add-dir-local-variable 'org-mode
-                            'org-ref-bibliography-notes (expand-file-name "notes.org" dir))
-    (add-dir-local-variable 'org-mode
-                            'bibtex-completion-library-path (expand-file-name "papers/" dir))
-    (add-dir-local-variable 'org-mode
-                            'org-ref-pdf-directory (expand-file-name "papers/" dir))))
-
-(defun bp/setup-research-folder-variables ()
-  (interactive)
-  (let ((dir (file-name-directory (buffer-file-name))))
-    (setq org-roam-directory dir)
-    (setq org-roam-db-location (expand-file-name (format "org-roam-%s.db" (if windows-system? "w" "l")) dir))
-    (setq bibtex-completion-bibliography (expand-file-name "references.bib" dir))
-    (setq org-ref-default-bibliography (list (expand-file-name "references.bib" dir)))
-    (setq bibtex-completion-notes-path (expand-file-name "notes.org" dir))
-    (setq org-ref-bibliography-notes (expand-file-name "notes.org" dir))
-    (setq bibtex-completion-library-path (expand-file-name "papers/" dir))
-    (setq org-ref-pdf-directory (expand-file-name "papers/" dir))))
-
-
 ;; * Org-roam
 (use-package org-roam
   :ensure t
