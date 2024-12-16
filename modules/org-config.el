@@ -1188,6 +1188,14 @@ buffer's text scale."
         org-roam-capture-templates '(("d" "default" "plain" "%?"
                                       :target (file+head "${slug}.org"
                                                          "#+title: ${title}\n#+date:%t\n")
+                                      :unnarrowed t)
+                                     ("p" "private" "plain" "%?"
+                                      :target (file+head "private/${slug}.org"
+                                                         "#+title: ${title}\n#+date:%t\n")
+                                      :unnarrowed t)
+                                     ("e" "encrypted private notes" "plain" "%?"
+                                      :target (file+head "private/${slug}.org.gpg"
+                                                         "#+title: ${title}\n#+date:%t\n")
                                       :unnarrowed t)))
   (when windows-system?
     (setq org-roam-list-files-commands '((find . "C:/tools/msys64/usr/bin/find.exe") rg)))
