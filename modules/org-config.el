@@ -193,13 +193,10 @@
         "")))
 
   (defun bp/html-postamble (rss-url icon-url args)
-    (let ((file (getf args :input-file))
-          (rss (format "<a href=\"%s\"><img src=\"%s\" /></a>"
-                       rss-url icon-url)))
+    (let ((file (getf args :input-file)))
       (cond ((or (string-suffix-p "index.org" file)
-                 (string-suffix-p "sitemap.org" file))
-             rss)
-            ((or (string-suffix-p "meta.org" file)
+                 (string-suffix-p "sitemap.org" file)
+                 (string-suffix-p "meta.org" file)
                  (search  "errors/" file))
              nil)
             (t
@@ -211,8 +208,7 @@
                    (sendme-claps "<div id=\"claps-message\"></div>"))
                (concat feedback-string
                        visits-claps
-                       sendme-claps
-                       rss))))))
+                       sendme-claps))))))
 
   ;; this hook is run in the temporary org buffer being exported
   ;; before any processing is done
