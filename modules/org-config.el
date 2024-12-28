@@ -68,7 +68,6 @@
 
 ;; *** Export to html with useful anchors
   (setf org-html-prefer-user-labels t)
-  (advice-add #'org-publish-resolve-external-link :around #'bp/org-publish-resolve-external-link)
 
   ;; Adpated from https://github.com/alphapapa/unpackaged.el#export-to-html-with-useful-anchors
   (advice-add #'org-export-get-reference :override #'unpackaged/org-export-get-reference)
@@ -229,6 +228,7 @@
           (org-html-head-include-default-style nil))
       (apply #'org-html-publish-to-html args)))
 
+  (setf org-export-allow-bind-keywords t)
 ;; **** Braindump Sitemap
   (defun bp/org-project-entry-unlistedp (entry project)
     (let ((tags (org-publish-find-property entry :filetags project)))
