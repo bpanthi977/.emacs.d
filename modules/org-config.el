@@ -294,6 +294,7 @@ PROJECT is the current project."
                           title pub-date rss-permlink id title))))))
 
   (defvar bp/org-publish-braindump-rss-p nil)
+  (defvar bp/org-publish-braindump-dir "~/Development/Web/Blog/blog/braindump/")
   (defun bp/org-publish-braindump-rss ()
     (interactive)
     (let ((rss-file (file-truename "~/org/rss.org"))
@@ -307,15 +308,18 @@ PROJECT is the current project."
         (org-transclusion-deactivate)
         (copy-file (expand-file-name "output/rss.xml" (file-name-directory rss-file))
                    (expand-file-name "data/rss.xml" (file-name-directory rss-file))
+                   t)
+        (copy-file (expand-file-name "output/rss.xml" (file-name-directory rss-file))
+                   (cl-concatenate 'string bp/org-publish-braindump-dir "data/rss.xml")
                    t))))
 
 ;; **** Publish List
   (setq org-publish-project-alist
-        '(
+        `(
           ("braindump-org"
            :base-directory "~/Documents/synced/Notes/"
            :base-extension "org"
-           :publishing-directory "~/Development/Web/Blog/blog/braindump/"
+           :publishing-directory ,bp/org-publish-braindump-dir
            :exclude "^notes.org\\|^tasks.org\\|^rss.org"
            :recursive nil
            :publishing-function bp/org-html-publish-to-html
@@ -335,7 +339,7 @@ PROJECT is the current project."
           ("braindump-static"
            :base-directory "~/Documents/synced/Notes/data/"
            :base-extension "html\\|xml\\|css\\|js\\|png\\|jpg\\|gif\\|pdf\\|mp3\\|ogg\\|swf\\|svg\\|php\\|ico\\|mkv\\|lisp"
-           :publishing-directory "~/Development/Web/Blog/blog/braindump/data/"
+           :publishing-directory ,(cl-concatenate 'string bp/org-publish-braindump-dir "data/")
            :recursive t
            :publishing-function org-publish-attachment)
           ("braindump" :components ("braindump-org" "braindump-static" "braindump-rss"))
