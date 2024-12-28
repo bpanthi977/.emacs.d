@@ -177,6 +177,13 @@
 
   (advice-add 'org-html--format-image :around #'bp/org-html--format-image-relative)
 
+  (defun bp/org-mpv-notes-export-path-translation (path)
+    (if bp/org-publishing-file
+        path
+      (format "../%s" path)))
+
+  (setf org-mpv-notes-export-path-translation #'bp/org-mpv-notes-export-path-translation)
+
 ;; *** Blog and Braindump
 ;; **** Blog and Braindump Common
   (require 'ox-publish)
@@ -290,7 +297,9 @@ PROJECT is the current project."
   (defun bp/org-publish-braindump-rss ()
     (interactive)
     (let ((rss-file (file-truename "~/org/rss.org"))
-          (bp/org-publish-braindump-rss-p t))
+          (bp/org-publishing-file t)
+          (bp/org-publish-braindump-rss-p t)
+          (bp/braindump-publish-dir ""))
       (save-excursion
         (find-file rss-file)
         (org-transclusion-add-all)
