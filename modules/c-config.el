@@ -1,12 +1,12 @@
 (install-packages (list ;;'irony
-			'helm-dash
-			'flycheck
-			'company
-			;;'company-irony
-			;;'company-irony-c-headers))
-			'rtags
-			'company-rtags
-			))
+                        'helm-dash
+                        'flycheck
+                        'company
+                        ;;'company-irony
+                        ;;'company-irony-c-headers))
+                        'rtags
+                        'company-rtags
+                        ))
 (defun my-create-compilation-db-file ()
   (interactive)
   (async-shell-command "make clean ; bear make -k"))
@@ -20,9 +20,9 @@
 (defun my-c-make-run ()
   (let* ((name (file-name-base (buffer-file-name)))
          (args (read-string (format "bin/%s " name))))
-	(let ((default-directory (concat default-directory "/bin")))
-	  (async-shell-command (format "%s %s" name args)
-						   (get-buffer-create "output")))
+        (let ((default-directory (concat default-directory "/bin")))
+          (async-shell-command (format "%s %s" name args)
+                                                   (get-buffer-create "output")))
     (set-window-buffer (car (last (window-list-1))) "output")
     (switch-to-buffer-other-window "output" )))
 
@@ -35,7 +35,7 @@
 (defun setup-c-make ()
   (interactive)
   (setup-make-keys)
-  (setq-local make-compile-func #'my-c-make-compile)		
+  (setq-local make-compile-func #'my-c-make-compile)
   (setq-local make-run-func #'my-c-make-run)
   (setq-local make-link-func #'my-c-make-link)
   (setq-local make-compile-run-func #'my-make-compile-link-run-file)
@@ -45,6 +45,12 @@
 (use-package cmake-mode
   :ensure t
   :defer t)
+
+(use-package dap-codelldb
+  :ensure nil
+  :defer t
+  :after (:and (:or c-mode c++-mode)
+               dap-mode))
 
 ;; (defun setup-irony-keys ()
 ;;   (interactive)
@@ -63,7 +69,7 @@
 ;;    (setf company-irony-ignore-case t)
 ;;   (setup-c-make)
 ;;   (setup-irony-keys)
-  
+
 ;;   (add-to-list 'company-backends 'company-irony)
 ;;   (add-to-list 'company-backends 'company-irony-c-headers)
 ;;   (define-key irony-mode-map [remap completion-at-point]
@@ -96,7 +102,7 @@
 
 ;; (defun my-rtags-on ()
 ;;   (require 'rtags)
-  
+
 ;;   (unless (rtags-executable-find "rc") (error "Binary rc is not installed!"))
 ;;   (unless (rtags-executable-find "rdm") (error "Binary rdm is not installed!"))
 
