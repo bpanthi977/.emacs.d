@@ -34,7 +34,7 @@
 
 ;; pixel-scrolling (i.e. smooth scrolling) works in Emacs29
 ;; For more info see https://www.emacswiki.org/emacs/SmoothScrolling
-(pixel-scroll-precision-mode t)
+;; (pixel-scroll-precision-mode t)
 
 ;; show available keybindings after you start typing
 (use-package which-key
