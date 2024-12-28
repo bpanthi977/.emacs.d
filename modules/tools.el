@@ -78,6 +78,7 @@
   (pdf-loader-install)
 
   :config
+  (require 'org-pdftools)
   (setf pdf-annot-list-format
         '((page . 3)
           (label . 12)
