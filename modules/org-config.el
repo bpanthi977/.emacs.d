@@ -979,6 +979,8 @@ buffer's text scale."
                                  "* %? [[%:link][%(transform-square-brackets-to-round-ones \"%:description\")]]\n")
                                 ("t" "Todo" entry (file+datetree "~/org/tasks.org")
                                  "* TODO %?\nCREATED: %U\n %i\n  %a")
+                                ("c" "Clock" entry (file+datetree "~/org/tasks.org")
+                                 "* %? \n" :clock-in t :clock-keep t)
                                 ("j" "Journal" entry (file+datetree "~/org/private/journal.org.gpg")
                                  "* %?\nEntered on %U\n  %i\n  %a")
                                 ("e" "Event" entry (file+datetree "~/org/private/dates.org")
