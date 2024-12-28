@@ -199,10 +199,11 @@ buffer is not visiting a file."
   (setq aw-keys '(?a ?s ?d ?f ?j ?k ?l))
 
   (setq treemacs-is-never-other-window t)
-
+  (define-key global-map (kbd "C-x O") #'other-frame)
   (smartrep-define-key bp/global-prefix-map
       "w"
     '(("o" . other-window)
+      ("O" . other-frame)
       ("u" . evil-window-up)
       ("d" . evil-window-down)
       ("w" . ace-window)
@@ -356,7 +357,8 @@ buffer is not visiting a file."
 (use-package unfill
   :ensure t
   :bind (:map bp/global-prefix-map
-              ("e u" . unfill-paragraph))
+              ("e u" . unfill-paragraph)
+              ("e f" . fill-paragraph))
   :commands (unfill-paragraph unfill-toggle unfill-region))
 
 (add-hook 'text-mode-hook (lambda ()
@@ -439,3 +441,7 @@ buffer is not visiting a file."
       (">" . eyebrowse-next-window-config)
       ("<" . eyebrowse-prev-window-config)
       ("p" . eyebrowse-last-window-config))))
+
+(use-package evil
+  :ensure t
+  :bind ("C-c e" . evil-mode))
