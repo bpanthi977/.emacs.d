@@ -453,7 +453,7 @@ PROJECT is the current project."
         org-startup-with-latex-preview nil
         org-startup-folded 'content)
   (setf org-id-link-to-org-use-id 'use-existing)
-  (setq org-directory "~/org/")
+  (setq org-directory "~/Documents/synced/Notes/")
   (setq org-default-notes-file (concat org-directory "notes.org"))
   (setq org-log-done t)
 
