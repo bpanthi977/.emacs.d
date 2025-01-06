@@ -19,8 +19,8 @@
 
 (defun bp/log4cl ()
     (interactive)
-    (load "/mnt/Data/Dev/lisp/quicklisp/log4slime-setup.el")
-    (global-log4slime-mode 1))
+    (load "~/quicklisp/log4sly-setup.el")
+    (global-log4sly-mode 1))
 
 (defun cl-services ()
   (interactive)
