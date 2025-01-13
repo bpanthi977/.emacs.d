@@ -293,6 +293,7 @@ PROJECT is the current project."
 "
                           title pub-date rss-permlink id title))))))
 
+  (setf org-rss-use-entry-url-as-guid nil)
   (defvar bp/org-publish-braindump-rss-p nil)
   (defvar bp/org-publish-braindump-dir "~/Development/Web/Blog/blog/braindump/")
   (defun bp/org-publish-braindump-rss ()
@@ -338,7 +339,7 @@ PROJECT is the current project."
 
           ("braindump-static"
            :base-directory "~/Documents/synced/Notes/data/"
-           :base-extension "html\\|xml\\|css\\|js\\|png\\|jpg\\|gif\\|pdf\\|mp3\\|ogg\\|swf\\|svg\\|php\\|ico\\|mkv\\|lisp"
+           :base-extension "html\\|xml\\|css\\|js\\|png\\|jpg\\|gif\\|pdf\\|mp3\\|ogg\\|swf\\|svg\\|php\\|ico\\|mkv\\|lisp\\|mp4"
            :publishing-directory ,(cl-concatenate 'string bp/org-publish-braindump-dir "data/")
            :recursive t
            :publishing-function org-publish-attachment)
@@ -362,6 +363,7 @@ PROJECT is the current project."
   (defun bp/last-modified-time (file)
     (file-attribute-modification-time (file-attributes file)))
 
+  (setf org-html-head-include-default-style nil)
   (defvar bp/org-html-css nil)
   (defvar bp/org-html-loaded-timestamp nil)
   (defun bp/org-html-css ()
@@ -375,6 +377,8 @@ PROJECT is the current project."
   ;; Don't use inline styling, instead just export selector class
   (setf org-html-htmlize-output-type 'css)
 ;; *** Html Export
+  (defvar-local bp/org-html-export-wrap-codeblocks t)
+
   (defadvice org-html-export-to-html (before html-export-load-css1 activate)
     (setq org-html-head-extra (bp/org-html-css)))
 
@@ -387,7 +391,8 @@ PROJECT is the current project."
     (let ((html (apply f args)))
       ;; Only wrap with details for html export
       ;; not for rss export
-      (if bp/org-publish-braindump-rss-p
+      (if (or bp/org-publish-braindump-rss-p
+              (not bp/org-html-export-wrap-codeblocks))
           html
         (format "<details open><summary><span class='org-details-collapse'>&lt; Collapse code block</span><span class='org-details-expand'>&gt; Expand code block</span></summary>\n%s</details>" html))))
 
