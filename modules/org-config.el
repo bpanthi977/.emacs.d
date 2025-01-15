@@ -829,6 +829,22 @@ buffer's text scale."
                  ("\\paragraph{%s}" . "\\paragraph*{%s}")
                  ("\\subparagraph{%s}" . "\\subparagraph*{%s}")))
 
+  (add-to-list 'org-latex-classes
+               '("beamer"
+                 "\\documentclass[presentation]{beamer}
+\\usepackage{lmodern}
+\\usepackage{geometry}
+\\usepackage{listings}
+\\usepackage{color}
+\\definecolor{commentsColor}{rgb}{0.497495, 0.497587, 0.497464}
+\\definecolor{keywordsColor}{rgb}{0.000000, 0.000000, 0.635294}
+\\definecolor{stringColor}{rgb}{0.558215, 0.000000, 0.135316}"
+                 ("\\section{%s}" . "\\section*{%s}")
+                 ("\\subsection{%s}" . "\\subsection*{%s}")
+                 ("\\subsubsection{%s}" . "\\subsubsection*{%s}")
+                 ("\\paragraph{%s}" . "\\paragraph*{%s}")
+                 ("\\subparagraph{%s}" . "\\subparagraph*{%s}"))))
+
   (setq org-latex-listings 'listings)
   (setq org-latex-custom-lang-environments nil)
 
@@ -1211,7 +1227,8 @@ buffer's text scale."
     (mapcar #'org-roam-backlink-source-node (org-roam-backlinks-get node)))
 
   (cl-defun bp/org-room-collect-backlinks-and-refs (backend)
-    (when-let ((node (org-roam-node-at-point))
+    (when-let ((_ (eql backend 'html))
+               (node (org-roam-node-at-point))
                (_ (not (bp/org-roam-private-node? node))))
       (let* ((source-node (org-roam-node-at-point))
              (source-file (org-roam-node-file source-node))
