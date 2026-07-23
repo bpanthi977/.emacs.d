@@ -28,6 +28,13 @@ Populated lazily: an entry only exists once a hook event has fired for it.")
 
 (defconst bp/agent-sessions-buffer-name "*Agent Sessions*")
 
+(defcustom bp/agent-sessions-terminal 'vterm
+  "Terminal emulator backend used for agent sessions.
+Either `vterm' or `eat'.  Only the selected package needs to be installed;
+it is loaded lazily the first time a session terminal is created."
+  :type '(choice (const :tag "vterm" vterm)
+                 (const :tag "eat" eat)))
+
 (defcustom bp/agent-sessions-show-all-worktrees nil
   "When non-nil, list every worktree of a repo, even those with no session.
 This makes it easy to spin up a new session in an idle worktree with the
@@ -159,6 +166,33 @@ Agents typically set this to something like the current task/session summary.")
 (with-eval-after-load 'vterm
   (unless (advice-member-p #'bp/agent-sessions--capture-title 'vterm--set-title)
     (advice-add 'vterm--set-title :before #'bp/agent-sessions--capture-title)))
+
+(defun bp/agent-sessions--eat-advice (orig-fun program arg display-fn)
+  "Give eat sessions the same id injection/registration as vterm.
+Injects EMACS_AGENT_SESSION_ID via `process-environment' (which `eat-exec'
+inherits when it spawns the shell) and registers the resulting buffer."
+  (let* ((id (format "%d-%d" (emacs-pid) (cl-incf bp/agent-session-counter)))
+         (process-environment
+          (cons (format "EMACS_AGENT_SESSION_ID=%s" id) process-environment))
+         (buf (funcall orig-fun program arg display-fn)))
+    (when (buffer-live-p buf)
+      (puthash id buf bp/agent-session-id->buffer)
+      (with-current-buffer buf
+        (setq-local bp/agent-session-id id)
+        (add-hook 'kill-buffer-hook #'bp/agent-session--cleanup nil t)))
+    buf))
+
+;; eat's default title handler is `ignore', so instead capture the title by
+;; advising the emulator's title setter, which runs with the eat buffer
+;; current (same idea as the `vterm--set-title' advice above).
+(defun bp/agent-sessions--eat-capture-title (title &rest _)
+  (setq-local bp/agent-session-title title))
+
+(with-eval-after-load 'eat
+  (unless (advice-member-p #'bp/agent-sessions--eat-advice 'eat--1)
+    (advice-add 'eat--1 :around #'bp/agent-sessions--eat-advice))
+  (unless (advice-member-p #'bp/agent-sessions--eat-capture-title 'eat--t-set-title)
+    (advice-add 'eat--t-set-title :after #'bp/agent-sessions--eat-capture-title)))
 
 (defun bp/agent-session--clear-attention-on-focus ()
   "Downgrade needs-attention to `stopped' for the session in the selected window.
@@ -461,6 +495,16 @@ run `project-switch-project' in that directory."
            (message "No worktree directory at point."))))
       (_ (message "Nothing to do here.")))))
 
+(defun bp/agent-sessions-display ()
+  "Display the session at point in another window, staying in the dashboard."
+  (interactive)
+  (let* ((session (bp/agent-sessions--session-at-point))
+         (buf (and session (plist-get session :buffer))))
+    (if (buffer-live-p buf)
+        ;; inhibit-same-window: never reuse/replace the dashboard's own window.
+        (display-buffer buf '(nil (inhibit-same-window . t)))
+      (message "No session at point."))))
+
 (defun bp/agent-sessions-kill ()
   (interactive)
   (let* ((session (bp/agent-sessions--session-at-point))
@@ -487,12 +531,34 @@ worktree heading, a repo heading, or an individual session row."
         (setq section (oref section parent)))
       nil)))
 
-(defun bp/agent-sessions--create-vterm (dir &optional name)
-  "Open a new vterm in DIR named <NAME>-<n>-vterm.
-NAME defaults to DIR's basename (typically the worktree name)."
-  (let* ((default-directory (file-name-as-directory dir))
-         (base (or name (file-name-nondirectory (directory-file-name dir)))))
-    (vterm-other-window (format "%s-vterm" base))))
+(defun bp/agent-sessions--terminal-open (dir bufname)
+  "Open the configured terminal in DIR in another window; return the buffer.
+BUFNAME is the desired buffer name.  Loads the backend package lazily."
+  (let ((default-directory (file-name-as-directory dir)))
+    (pcase bp/agent-sessions-terminal
+      ('vterm (require 'vterm) (vterm-other-window bufname))
+      ('eat (require 'eat)
+            (let ((eat-buffer-name bufname))
+              ;; arg non-nil, non-number => eat--1 uses `generate-new-buffer'.
+              (eat-other-window nil t)))
+      (_ (error "Unknown `bp/agent-sessions-terminal': %S"
+                bp/agent-sessions-terminal)))))
+
+(defun bp/agent-sessions--terminal-send (buf string)
+  "Send STRING followed by Enter to the terminal in BUF."
+  (with-current-buffer buf
+    (pcase bp/agent-sessions-terminal
+      ('vterm (vterm-send-string string) (vterm-send-return))
+      ('eat (eat-term-send-string eat-terminal string)
+            (eat-term-send-string eat-terminal "\r")))))
+
+(defun bp/agent-sessions--create-terminal (dir &optional name)
+  "Open a new terminal in DIR named <NAME>-<backend>.
+NAME defaults to DIR's basename (typically the worktree name).  The backend
+is `bp/agent-sessions-terminal'."
+  (let* ((base (or name (file-name-nondirectory (directory-file-name dir))))
+         (bufname (format "%s-%s" base bp/agent-sessions-terminal)))
+    (bp/agent-sessions--terminal-open dir bufname)))
 
 (defun bp/agent-sessions-new-vterm ()
   "Create a new vterm in the worktree at point, named after that worktree."
@@ -501,7 +567,7 @@ NAME defaults to DIR's basename (typically the worktree name)."
          (dir (plist-get ctx :path)))
     (if (or (null dir) (not (file-directory-p dir)))
         (message "No worktree at point.")
-      (bp/agent-sessions--create-vterm dir (plist-get ctx :name)))))
+      (bp/agent-sessions--create-terminal dir (plist-get ctx :name)))))
 
 ;;;###autoload
 (defun bp/agent-session-switch-or-new ()
@@ -541,7 +607,7 @@ creating one."
          (buf (and choice (cdr (assoc choice cands)))))
     (if (buffer-live-p buf)
         (pop-to-buffer buf)
-      (bp/agent-sessions--create-vterm
+      (bp/agent-sessions--create-terminal
        root (plist-get (bp/agent-session--repo-info root) :worktree)))))
 
 (defun bp/agent-sessions--rows ()
@@ -640,35 +706,42 @@ the `elisp:' links produced by `org-store-link' on a session row."
       (error "No resume command configured for agent type `%s'" agent))
     (unless (file-directory-p default-directory)
       (error "Worktree no longer exists: %s" worktree-path))
-    (let ((buf (bp/agent-sessions--create-vterm
+    (let ((buf (bp/agent-sessions--create-terminal
                 default-directory
                 (plist-get (bp/agent-session--repo-info default-directory) :worktree))))
-      (with-current-buffer buf
-        (vterm-send-string (format template session-id))
-        (vterm-send-return))
+      (bp/agent-sessions--terminal-send buf (format template session-id))
       buf)))
 
+(defun bp/agent-sessions--store-link-for (session)
+  "Store an `elisp:' resume link for SESSION via `org-link-store-props'.
+Return non-nil on success, nil when SESSION lacks the info to build a link."
+  (when session
+    (let* ((path (or (plist-get session :worktree-path)
+                     (let ((buf (plist-get session :buffer)))
+                       (and (buffer-live-p buf)
+                            (buffer-local-value 'default-directory buf)))))
+           (agent (plist-get session :agent-type))
+           (sid (plist-get session :agent-session-id))
+           (worktree (plist-get session :worktree)))
+      (when (and path sid)
+        (org-link-store-props
+         :type "elisp"
+         :link (format "elisp:(bp/agent-session-start %S '%s %S)"
+                       (file-name-as-directory path) agent sid)
+         :description (format "%s %s %s" (or worktree "?") agent sid))
+        t))))
+
 (defun bp/agent-sessions--org-store-link (&optional _interactive)
-  "Store an `elisp:' link that resumes the session on the current row.
-Registered as the `:store' handler for `org-store-link' in
-`bp/agent-sessions-mode'."
-  (when (derived-mode-p 'bp/agent-sessions-mode)
-    (let ((session (bp/agent-sessions--session-at-point)))
-      (when session
-        (let* ((path (or (plist-get session :worktree-path)
-                         (let ((buf (plist-get session :buffer)))
-                           (and (buffer-live-p buf)
-                                (buffer-local-value 'default-directory buf)))))
-               (agent (plist-get session :agent-type))
-               (sid (plist-get session :agent-session-id))
-               (worktree (plist-get session :worktree)))
-          (when (and path sid)
-            (org-link-store-props
-             :type "elisp"
-             :link (format "elisp:(bp/agent-session-start %S '%s %S)"
-                           (file-name-as-directory path) agent sid)
-             :description (format "%s %s %s" (or worktree "?") agent sid))
-            t))))))
+  "Store an `elisp:' link that resumes a Claude/Codex session.
+Works both on a session row in `bp/agent-sessions-mode' and inside a vterm
+buffer that has an active session (keyed by the buffer-local
+`bp/agent-session-id').  Registered as the `:store' handler for
+`org-store-link'."
+  (bp/agent-sessions--store-link-for
+   (cond ((derived-mode-p 'bp/agent-sessions-mode)
+          (bp/agent-sessions--session-at-point))
+         (bp/agent-session-id
+          (gethash bp/agent-session-id bp/agent-sessions)))))
 
 (with-eval-after-load 'ol
   (org-link-set-parameters "agent-session"
@@ -690,6 +763,7 @@ repo > worktree > session tree with foldable sections (TAB to fold/unfold)."
             #'bp/agent-sessions--sync-default-directory nil t))
 
 (define-key bp/agent-sessions-mode-map (kbd "RET") #'bp/agent-sessions-jump)
+(define-key bp/agent-sessions-mode-map (kbd "v") #'bp/agent-sessions-display)
 (define-key bp/agent-sessions-mode-map (kbd "k") #'bp/agent-sessions-kill)
 (define-key bp/agent-sessions-mode-map (kbd "g") #'bp/agent-sessions-refresh)
 (define-key bp/agent-sessions-mode-map (kbd "s") #'bp/agent-sessions-toggle-sort)
