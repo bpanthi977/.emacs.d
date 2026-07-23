@@ -17,3 +17,4 @@
 (load* "outline-mode.el")
 (load* "eye-care.el")
 (load* "dired.el")
+(load* "agent-sessions.el")
