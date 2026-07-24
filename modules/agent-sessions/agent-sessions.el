@@ -14,6 +14,11 @@
 (require 'magit-section)
 (require 'project)
 
+(defconst bp/agent-sessions--dir
+  (file-name-directory (or load-file-name buffer-file-name
+                           (locate-library "agent-sessions") default-directory))
+  "Directory this package lives in; its hook forwarder scripts sit beside it.")
+
 (defvar bp/agent-session-id->buffer (make-hash-table :test 'equal)
   "Session id -> vterm buffer, populated for every vterm buffer at creation.")
 
@@ -41,6 +46,12 @@ This makes it easy to spin up a new session in an idle worktree with the
 `+' key (`bp/agent-sessions-new-vterm').  Only repos that already have at
 least one session are shown; the option controls whether their empty
 worktrees are listed too."
+  :type 'boolean)
+
+(defcustom bp/agent-session-notify-on-attention t
+  "When non-nil, show a desktop notification when a session needs attention.
+The notification fires only on the transition into `needs-attention'/`error',
+not on every hook event, so a session that stays waiting is announced once."
   :type 'boolean)
 
 (defvar bp/agent-sessions-sort-by-activity nil
@@ -149,23 +160,27 @@ Populates the cache on first use; `bp/agent-sessions-refresh' clears it."
       (puthash id buf bp/agent-session-id->buffer)
       (with-current-buffer buf
         (setq-local bp/agent-session-id id)
-        (add-hook 'kill-buffer-hook #'bp/agent-session--cleanup nil t)))
+        (add-hook 'kill-buffer-hook #'bp/agent-session--cleanup nil t))
+      (bp/agent-sessions--refresh-if-visible))
     buf))
-
-(with-eval-after-load 'vterm
-  (unless (advice-member-p #'bp/agent-sessions--vterm-advice 'vterm--internal)
-    (advice-add 'vterm--internal :around #'bp/agent-sessions--vterm-advice)))
 
 (defvar-local bp/agent-session-title nil
   "Terminal title most recently set by this vterm's process (OSC escape), if any.
 Agents typically set this to something like the current task/session summary.")
 
+(defvar-local bp/agent-session-title-override nil
+  "A user-chosen title for this session, set via the dashboard's `e' command.
+When non-nil it takes precedence over `bp/agent-session-title' everywhere the
+session is labelled, so the agent's OSC title updates don't clobber it.")
+
+(defvar-local bp/agent-session--branched-from nil
+  "When non-nil, a cons (PARENT-SID . LABEL) recording the session this one was
+branched/forked from.  Set on a freshly branched terminal (by the `b' command
+or `bp/agent-sessions-mark-parent') so its agent session records the parentage
+once its first hook fires, and preserved across subsequent hook events.")
+
 (defun bp/agent-sessions--capture-title (title)
   (setq-local bp/agent-session-title title))
-
-(with-eval-after-load 'vterm
-  (unless (advice-member-p #'bp/agent-sessions--capture-title 'vterm--set-title)
-    (advice-add 'vterm--set-title :before #'bp/agent-sessions--capture-title)))
 
 (defun bp/agent-sessions--eat-advice (orig-fun program arg display-fn)
   "Give eat sessions the same id injection/registration as vterm.
@@ -179,7 +194,8 @@ inherits when it spawns the shell) and registers the resulting buffer."
       (puthash id buf bp/agent-session-id->buffer)
       (with-current-buffer buf
         (setq-local bp/agent-session-id id)
-        (add-hook 'kill-buffer-hook #'bp/agent-session--cleanup nil t)))
+        (add-hook 'kill-buffer-hook #'bp/agent-session--cleanup nil t))
+      (bp/agent-sessions--refresh-if-visible))
     buf))
 
 ;; eat's default title handler is `ignore', so instead capture the title by
@@ -187,12 +203,6 @@ inherits when it spawns the shell) and registers the resulting buffer."
 ;; current (same idea as the `vterm--set-title' advice above).
 (defun bp/agent-sessions--eat-capture-title (title &rest _)
   (setq-local bp/agent-session-title title))
-
-(with-eval-after-load 'eat
-  (unless (advice-member-p #'bp/agent-sessions--eat-advice 'eat--1)
-    (advice-add 'eat--1 :around #'bp/agent-sessions--eat-advice))
-  (unless (advice-member-p #'bp/agent-sessions--eat-capture-title 'eat--t-set-title)
-    (advice-add 'eat--t-set-title :after #'bp/agent-sessions--eat-capture-title)))
 
 (defun bp/agent-session--clear-attention-on-focus ()
   "Downgrade needs-attention to `stopped' for the session in the selected window.
@@ -213,7 +223,38 @@ spuriously."
           (puthash id (plist-put session :status 'stopped) bp/agent-sessions)
           (bp/agent-sessions--refresh-if-visible))))))
 
-(add-hook 'buffer-list-update-hook #'bp/agent-session--clear-attention-on-focus)
+(defun bp/agent-session--desktop-notify (title body)
+  "Show a desktop notification with TITLE and BODY.
+Uses `osascript' on macOS, D-Bus `notifications-notify' where available, and
+falls back to the echo area otherwise.  Always non-blocking."
+  (cond
+   ((eq system-type 'darwin)
+    (call-process "osascript" nil 0 nil
+                  "-e" (format "display notification %S with title %S"
+                               body title)))
+   ((fboundp 'notifications-notify)
+    (notifications-notify :title title :body body))
+   (t (message "%s: %s" title body))))
+
+(defun bp/agent-session--notify-attention (buf agent-type info status)
+  "Notify that BUF's AGENT-TYPE session needs attention.
+INFO is the repo plist from `bp/agent-session--repo-info'; STATUS is the new
+\(attention-worthy) status.  The notification title is `<repo> - <worktree>';
+the body names the agent type, state, and its terminal title (task summary)."
+  (let* ((repo (plist-get info :repo))
+         (wt (plist-get info :worktree))
+         (where (cond ((and repo wt) (format "%s - %s" repo wt))
+                      (wt wt)
+                      (repo repo)
+                      (t (buffer-name buf))))
+         (title (or (buffer-local-value 'bp/agent-session-title buf)
+                    (buffer-name buf))))
+    (bp/agent-session--desktop-notify
+     where
+     (format "%s %s: %s"
+             agent-type
+             (if (eq status 'error) "error" "needs attention")
+             title))))
 
 (defun bp/agent-hook-notify (session-id agent-type payload-file)
   "Entry point called via emacsclient from the Claude/Codex hook scripts."
@@ -238,40 +279,232 @@ spuriously."
          (agent-session-id (or (and payload (gethash "session_id" payload))
                                (and payload (gethash "conversation_id" payload))
                                (and payload (gethash "thread_id" payload))
-                               (and existing (plist-get existing :agent-session-id)))))
+                               (and existing (plist-get existing :agent-session-id))))
+         ;; Path to this session's transcript (Claude includes it on every
+         ;; hook, notably SessionStart). Used to auto-detect fork parentage.
+         (transcript-path (or (and payload (gethash "transcript_path" payload))
+                              (and existing (plist-get existing :transcript-path)))))
     (when (buffer-live-p buf)
-      (let ((info (bp/agent-session--repo-info (buffer-local-value 'default-directory buf))))
+      (let* ((info (bp/agent-session--repo-info (buffer-local-value 'default-directory buf)))
+             ;; Parentage, in priority order: what a previous event already
+             ;; recorded; the marker a fresh `b'-branch left on the buffer; or,
+             ;; the first time we see this session, an auto-detected fork parent
+             ;; (a manual `claude … --fork-session' shares the parent's history).
+             (branched-from (or (and existing (plist-get existing :branched-from))
+                                (buffer-local-value 'bp/agent-session--branched-from buf)
+                                (and (not existing)
+                                     (equal agent-type "claude")
+                                     transcript-path
+                                     (bp/agent-sessions--detect-parent
+                                      agent-session-id transcript-path session-id)))))
         (puthash session-id
                  (list :buffer buf
                        :agent-type agent-type
                        :agent-session-id agent-session-id
+                       :transcript-path transcript-path
                        :status status
                        :last-event event-name
                        :updated-at (current-time)
                        :repo (plist-get info :repo)
                        :repo-root (plist-get info :repo-root)
                        :worktree (plist-get info :worktree)
-                       :worktree-path (plist-get info :worktree-path))
-                 bp/agent-sessions)))
+                       :worktree-path (plist-get info :worktree-path)
+                       :branched-from branched-from)
+                 bp/agent-sessions)
+        ;; Notify only on the transition *into* an attention state, so a
+        ;; session that stays waiting isn't re-announced on every later event.
+        (when (and bp/agent-session-notify-on-attention
+                   (bp/agent-sessions--attention-p status)
+                   (not (bp/agent-sessions--attention-p
+                         (and existing (plist-get existing :status)))))
+          (bp/agent-session--notify-attention buf agent-type info status))))
     (bp/agent-sessions--refresh-if-visible))
   nil)
 
+(defvar-local bp/agent-sessions--repo-info-cache nil
+  "Cons of (DIRECTORY . REPO-INFO-PLIST) cached per terminal buffer.
+Computing repo info shells out to git, so cache it per buffer and only
+recompute when the buffer's `default-directory' changes (e.g. after a `cd').")
+
+(defun bp/agent-sessions--buffer-repo-info (buf)
+  "Return `bp/agent-session--repo-info' for BUF, cached on its directory."
+  (with-current-buffer buf
+    (let ((dir default-directory))
+      (if (and bp/agent-sessions--repo-info-cache
+               (equal (car bp/agent-sessions--repo-info-cache) dir))
+          (cdr bp/agent-sessions--repo-info-cache)
+        (cdr (setq bp/agent-sessions--repo-info-cache
+                   (cons dir (bp/agent-session--repo-info dir))))))))
+
+(defun bp/agent-sessions--buffer-terminal-type (buf)
+  "Return a symbol naming BUF's terminal backend (`vterm', `eat', or `term')."
+  (pcase (buffer-local-value 'major-mode buf)
+    ('vterm-mode 'vterm)
+    ('eat-mode 'eat)
+    (_ 'term)))
+
+(defun bp/agent-sessions--terminal-session (buf)
+  "Synthesize a session plist for a plain terminal BUF with no agent session.
+These fill in for vterm/eat buffers that have not (yet) fired an agent hook,
+so idle terminals still appear in the dashboard tree."
+  (let ((info (bp/agent-sessions--buffer-repo-info buf)))
+    (list :buffer buf
+          :agent-type (bp/agent-sessions--buffer-terminal-type buf)
+          :status 'idle
+          :last-event nil
+          :updated-at nil
+          :repo (plist-get info :repo)
+          :repo-root (plist-get info :repo-root)
+          :worktree (plist-get info :worktree)
+          :worktree-path (plist-get info :worktree-path))))
+
+(defun bp/agent-sessions--session-for-id (id)
+  "Return the session plist for ID.
+Prefers a real agent session (`bp/agent-sessions'); falls back to a
+synthesized terminal session for a plain terminal buffer that has no
+agent hook yet, or nil if no live buffer is registered for ID."
+  (or (gethash id bp/agent-sessions)
+      (let ((buf (gethash id bp/agent-session-id->buffer)))
+        (and (buffer-live-p buf)
+             (bp/agent-sessions--terminal-session buf)))))
+
+(defun bp/agent-sessions--session-title (session)
+  "The title for SESSION's buffer: the user override if any, else the OSC title."
+  (let ((buf (plist-get session :buffer)))
+    (and (buffer-live-p buf)
+         (or (buffer-local-value 'bp/agent-session-title-override buf)
+             (buffer-local-value 'bp/agent-session-title buf)))))
+
+(defun bp/agent-sessions--session-short-label (session)
+  "A concise human label for SESSION: its terminal title, else worktree, else id."
+  (or (bp/agent-sessions--session-title session)
+      (plist-get session :worktree)
+      (plist-get session :agent-session-id)
+      "?"))
+
+(defun bp/agent-sessions--session-label (session)
+  "A disambiguating label for SESSION: `<worktree> [<agent>] <title>'.
+Used when prompting the user to pick a session."
+  (format "%s [%s] %s"
+          (or (plist-get session :worktree) "?")
+          (plist-get session :agent-type)
+          (or (bp/agent-sessions--session-title session)
+              (plist-get session :agent-session-id)
+              "")))
+
+(defcustom bp/agent-session-auto-detect-branches t
+  "When non-nil, auto-detect that a Claude session was forked from another.
+A fork (`claude --resume … --fork-session', or Claude's own fork feature)
+copies the parent's transcript verbatim, so the child's message uuids include
+the parent's, sharing the same root uuid.  On the child's first hook we scan
+tracked sessions and record the best-matching parent as `:branched-from', the
+same field the `b' command and `bp/agent-sessions-mark-parent' set by hand."
+  :type 'boolean)
+
+(defvar bp/agent-sessions--uuid-cache (make-hash-table :test 'equal)
+  "Transcript PATH -> (MTIME ROOT-UUID . UUID-HASHSET).
+Caches the message uuids of a JSONL transcript, keyed on file mtime so a
+grown transcript is re-read but an unchanged one is not.")
+
+(defun bp/agent-sessions--transcript-uuids (path)
+  "Return (ROOT-UUID . SET) of message uuids in the JSONL transcript at PATH.
+ROOT-UUID is the first message uuid (the conversation root, shared by every
+fork of a lineage); SET is a hash-set of all message uuids.  Cached by mtime.
+Returns nil when PATH is unreadable or has no message uuids."
+  (when (and path (file-readable-p path))
+    (let* ((mtime (file-attribute-modification-time (file-attributes path)))
+           (cached (gethash path bp/agent-sessions--uuid-cache)))
+      (if (and cached (equal (car cached) mtime))
+          (cdr cached)
+        (let ((set (make-hash-table :test 'equal))
+              (root nil))
+          (with-temp-buffer
+            (insert-file-contents path)
+            (goto-char (point-min))
+            (while (re-search-forward
+                    "\"uuid\"[[:space:]]*:[[:space:]]*\"\\([0-9a-fA-F-]+\\)\"" nil t)
+              (let ((u (match-string 1)))
+                (unless root (setq root u))
+                (puthash u t set))))
+          (if (zerop (hash-table-count set))
+              (progn (puthash path (cons mtime nil) bp/agent-sessions--uuid-cache) nil)
+            (cdr (puthash path (cons mtime (cons root set))
+                          bp/agent-sessions--uuid-cache))))))))
+
+(defun bp/agent-sessions--detect-parent (child-sid child-transcript self-id)
+  "Return (PARENT-SID . LABEL) if CHILD-TRANSCRIPT looks like a fork, else nil.
+CHILD-SID is the child's own agent session id and SELF-ID its EMACS session id
+\(both used to avoid matching the child against itself).  A fork copies its
+parent's messages verbatim, so among tracked Claude sessions sharing the
+child's root uuid, the parent is the one whose uuids are (almost) fully
+contained in the child's; the largest such match is the immediate parent."
+  (when bp/agent-session-auto-detect-branches
+    (let ((child (bp/agent-sessions--transcript-uuids child-transcript)))
+      (when (and child (cdr child) (> (hash-table-count (cdr child)) 1))
+        (let ((child-root (car child))
+              (child-set (cdr child))
+              (best nil) (best-overlap 0))
+          (maphash
+           (lambda (id session)
+             (let ((p-path (plist-get session :transcript-path))
+                   (p-sid (plist-get session :agent-session-id)))
+               (when (and p-path
+                          (equal (plist-get session :agent-type) "claude")
+                          (not (equal id self-id))
+                          (not (and child-sid p-sid (equal p-sid child-sid)))
+                          (not (equal p-path child-transcript)))
+                 (let ((p (bp/agent-sessions--transcript-uuids p-path)))
+                   (when (and p (cdr p) (equal (car p) child-root))
+                     (let ((p-set (cdr p)) (p-size 0) (overlap 0))
+                       (maphash (lambda (u _)
+                                  (cl-incf p-size)
+                                  (when (gethash u child-set) (cl-incf overlap)))
+                                p-set)
+                       ;; Parent must be (nearly) wholly contained in the child
+                       ;; and smaller than it; pick the most-contained match.
+                       (when (and (> p-size 0)
+                                  (>= overlap 2)
+                                  (< p-size (hash-table-count child-set))
+                                  (>= (/ (float overlap) p-size) 0.85)
+                                  (> overlap best-overlap))
+                         (setq best session best-overlap overlap))))))))
+           bp/agent-sessions)
+          (when best
+            (cons (plist-get best :agent-session-id)
+                  (bp/agent-sessions--session-short-label best))))))))
+
 (defun bp/agent-sessions--live-entries ()
-  "Return (:id ID :session PLIST :title TITLE) for each session with a live buffer.
-Opportunistically drops registry entries whose buffer has been killed,
-since `kill-buffer-hook' cleanup can be missed (e.g. buffer killed without
-running local hooks)."
+  "Return (:id ID :session PLIST :title TITLE) for each live terminal buffer.
+Includes both real agent sessions (those a hook event has fired for) and
+plain vterm/eat buffers with no agent session yet, so idle terminals still
+show up in the dashboard.  Opportunistically drops registry entries whose
+buffer has been killed, since `kill-buffer-hook' cleanup can be missed (e.g.
+buffer killed without running local hooks)."
   (let (entries)
+    ;; Real agent sessions: a hook event has fired for these.
     (maphash
      (lambda (id session)
        (let ((buf (plist-get session :buffer)))
          (if (buffer-live-p buf)
              (push (list :id id :session session
-                         :title (buffer-local-value 'bp/agent-session-title buf))
+                         :title (or (buffer-local-value 'bp/agent-session-title-override buf)
+                                    (buffer-local-value 'bp/agent-session-title buf)))
                    entries)
            (remhash id bp/agent-sessions)
            (remhash id bp/agent-session-id->buffer))))
      bp/agent-sessions)
+    ;; Plain terminal buffers with no agent session yet.
+    (maphash
+     (lambda (id buf)
+       (cond ((not (buffer-live-p buf))
+              (remhash id bp/agent-session-id->buffer))
+             ((not (gethash id bp/agent-sessions))
+              (push (list :id id
+                          :session (bp/agent-sessions--terminal-session buf)
+                          :title (or (buffer-local-value 'bp/agent-session-title-override buf)
+                                    (buffer-local-value 'bp/agent-session-title buf)))
+                    entries))))
+     bp/agent-session-id->buffer)
     (nreverse entries)))
 
 (defface bp/agent-session-needs-attention
@@ -290,7 +523,12 @@ running local hooks)."
     ('error 'bp/agent-session-error)
     (_ 'default)))
 
-(defun bp/agent-sessions--insert-session (entry)
+(defun bp/agent-sessions--insert-session (entry &optional depth suppress-parent-note)
+  "Insert a session row for ENTRY.
+DEPTH indents the row (children of a branched-from parent are rendered one
+level deeper).  When SUPPRESS-PARENT-NOTE is non-nil the `↳ from …' suffix is
+omitted — used when the row is already nested under its parent, where the
+indentation conveys the relationship."
   (let* ((id (plist-get entry :id))
          (session (plist-get entry :session))
          (status (plist-get session :status))
@@ -299,16 +537,72 @@ running local hooks)."
                    ('needs-attention "● ")
                    ('error "✖ ")
                    (_ "  ")))
-         (title (or (plist-get entry :title) "")))
+         (title (or (plist-get entry :title) ""))
+         (last-event (plist-get session :last-event))
+         (branched-from (plist-get session :branched-from))
+         (indent (make-string (* 2 (or depth 0)) ?\s)))
     (magit-insert-section (bp/agent-session-row id)
       (insert (propertize
-               (concat "    " marker
-                       (format "%-7s %-16s %s (%s)\n"
+               (concat "    " indent marker
+                       (format "%-7s %-16s %s%s%s\n"
                                (plist-get session :agent-type)
                                status
                                title
-                               (plist-get session :last-event)))
+                               (if last-event (format " (%s)" last-event) "")
+                               (if (and branched-from (not suppress-parent-note))
+                                   (format "  ↳ from %s" (cdr branched-from))
+                                 "")))
                'font-lock-face face)))))
+
+(defun bp/agent-sessions--insert-entries (entries)
+  "Insert ENTRIES, nesting any branched session under its parent when present.
+A session whose `:branched-from' parent id matches another entry in ENTRIES is
+rendered indented directly beneath that parent (one extra level per hop);
+entries whose parent isn't in this list render at the top level.
+
+The parent/child graph is built and walked by unique entry `:id' (never by
+the shared agent session id) and a session is never made its own parent, so
+duplicate session ids and reference cycles cannot cause infinite recursion; a
+visited set and a final safety-net pass guarantee each entry renders exactly
+once."
+  (let ((by-sid (make-hash-table :test 'equal))    ; agent-session-id -> entries
+        (children (make-hash-table :test 'equal))  ; parent entry :id -> child entries
+        (parent-of (make-hash-table :test 'equal)) ; entry :id -> t when it has a parent
+        (roots nil))
+    ;; Index sid -> list of entries (a session id can appear in more than one
+    ;; terminal — notably a just-forked child briefly shares its parent's id
+    ;; until the fork mints a new one).
+    (dolist (e entries)
+      (let ((sid (plist-get (plist-get e :session) :agent-session-id)))
+        (when sid (push e (gethash sid by-sid)))))
+    (maphash (lambda (sid es) (puthash sid (nreverse es) by-sid)) by-sid)
+    ;; Resolve each entry's parent from its recorded parent session id.  Match a
+    ;; *different* entry carrying that id: a fork can transiently share its
+    ;; parent's session id, so `sid = psid' is fine as long as it's another
+    ;; terminal.  The visited set below is what actually prevents cycles.
+    (dolist (e entries)
+      (let* ((psid (car (plist-get (plist-get e :session) :branched-from)))
+             (parent (and psid
+                          (seq-find (lambda (c) (not (eq c e)))
+                                    (gethash psid by-sid)))))
+        (when parent
+          (puthash (plist-get e :id) t parent-of)
+          (push e (gethash (plist-get parent :id) children)))))
+    (dolist (e entries)
+      (unless (gethash (plist-get e :id) parent-of)
+        (push e roots)))
+    (setq roots (nreverse roots))
+    (let ((visited (make-hash-table :test 'equal)))
+      (cl-labels ((emit (e depth nested)
+                    (unless (gethash (plist-get e :id) visited)
+                      (puthash (plist-get e :id) t visited)
+                      (bp/agent-sessions--insert-session e depth nested)
+                      (dolist (c (reverse (gethash (plist-get e :id) children)))
+                        (emit c (1+ depth) t)))))
+        (dolist (r roots) (emit r 0 nil))
+        ;; Safety net: any entry not reached from a root (e.g. a mutual cycle)
+        ;; still renders, at top level.
+        (dolist (e entries) (emit e 0 nil))))))
 
 (defun bp/agent-sessions--worktrees-for (root session-groups)
   "Return the ordered worktree plists to render for a repo.
@@ -420,7 +714,7 @@ most-recently-active first."
                            (list :label (plist-get wt :label)
                                  :path (plist-get wt :path)))
       (magit-insert-heading (format "  %s" (plist-get wt :label)))
-      (mapc #'bp/agent-sessions--insert-session entries))))
+      (bp/agent-sessions--insert-entries entries))))
 
 (defun bp/agent-sessions--insert-repo (repo)
   (magit-insert-section (bp/agent-session-repo
@@ -472,7 +766,7 @@ invalidates the worktree cache."
 (defun bp/agent-sessions--session-at-point ()
   (let ((section (magit-current-section)))
     (and section (eq (oref section type) 'bp/agent-session-row)
-         (gethash (oref section value) bp/agent-sessions))))
+         (bp/agent-sessions--session-for-id (oref section value)))))
 
 (defun bp/agent-sessions-jump ()
   "Act on the thing at point.
@@ -482,7 +776,7 @@ run `project-switch-project' in that directory."
   (let ((section (magit-current-section)))
     (pcase (and section (oref section type))
       ('bp/agent-session-row
-       (let* ((session (gethash (oref section value) bp/agent-sessions))
+       (let* ((session (bp/agent-sessions--session-for-id (oref section value)))
               (buf (and session (plist-get session :buffer))))
          (if (buffer-live-p buf)
              (pop-to-buffer buf)
@@ -512,6 +806,99 @@ run `project-switch-project' in that directory."
     (when (buffer-live-p buf)
       (kill-buffer buf))
     (bp/agent-sessions--refresh)))
+
+(defun bp/agent-sessions-branch ()
+  "Branch (fork) the agent session at point into a new session.
+Opens a new terminal in the same worktree and forks the conversation, so the
+new session shares its parent's history but gets its own session id
+\(`claude --fork-session' / `codex fork').  The new session is tagged as
+branched from the one at point, shown as `↳ from …' in the dashboard."
+  (interactive)
+  (let* ((session (bp/agent-sessions--session-at-point))
+         (agent (and session (plist-get session :agent-type)))
+         (sid (and session (plist-get session :agent-session-id)))
+         (path (and session
+                    (or (plist-get session :worktree-path)
+                        (let ((buf (plist-get session :buffer)))
+                          (and (buffer-live-p buf)
+                               (buffer-local-value 'default-directory buf)))))))
+    (cond
+     ((null session) (message "No session at point."))
+     ((null sid) (message "Session at point has no resumable session id yet."))
+     ((null path) (message "Session at point has no worktree to branch in."))
+     (t (bp/agent-session--spawn
+         path agent sid bp/agent-session-branch-commands
+         (cons sid (bp/agent-sessions--session-short-label session)))))))
+
+(defun bp/agent-sessions-mark-parent ()
+  "Record that the session at point was branched from another session.
+Prompts for the parent among the live sessions.  Use this to track a fork you
+made outside the `b' command (e.g. running `claude --resume … --fork-session'
+or `codex fork' by hand)."
+  (interactive)
+  (let* ((section (magit-current-section))
+         (id (and section (eq (oref section type) 'bp/agent-session-row)
+                  (oref section value)))
+         (session (and id (bp/agent-sessions--session-for-id id))))
+    (if (null session)
+        (message "Point is not on a session row.")
+      (let* ((self-sid (plist-get session :agent-session-id))
+             (cands
+              (delq nil
+                    (mapcar (lambda (e)
+                              (let ((es (plist-get e :session)))
+                                ;; Exclude the target itself and any terminal
+                                ;; running the *same* session (same conversation
+                                ;; can't be its own parent — that would cycle).
+                                (unless (or (equal (plist-get e :id) id)
+                                            (and self-sid
+                                                 (equal (plist-get es :agent-session-id)
+                                                        self-sid)))
+                                  (cons (bp/agent-sessions--session-label es) es))))
+                            (bp/agent-sessions--live-entries))))
+             (choice (and cands
+                          (completing-read "Branched from: "
+                                           (mapcar #'car cands) nil t)))
+             (parent (and choice (cdr (assoc choice cands)))))
+        (cond
+         ((null cands) (message "No other sessions to branch from."))
+         ((null parent) (message "No parent selected."))
+         (t
+          (let ((bf (cons (plist-get parent :agent-session-id)
+                          (bp/agent-sessions--session-short-label parent)))
+                (buf (plist-get session :buffer))
+                (real (gethash id bp/agent-sessions)))
+            ;; Set on the buffer so it survives future hook rebuilds, and on the
+            ;; live registry entry (if any) so it shows immediately.
+            (when (buffer-live-p buf)
+              (with-current-buffer buf
+                (setq-local bp/agent-session--branched-from bf)))
+            (when real
+              (puthash id (plist-put real :branched-from bf) bp/agent-sessions))
+            (bp/agent-sessions--refresh)
+            (message "Marked as branched from %s" (cdr bf)))))))))
+
+(defun bp/agent-sessions-edit-title ()
+  "Edit the title of the session at point.
+The chosen title is stored as a user override on the session's buffer, so it
+takes precedence over — and survives — the agent's own OSC title updates.
+Clearing it (entering an empty string) restores the agent's live title."
+  (interactive)
+  (let* ((session (bp/agent-sessions--session-at-point))
+         (buf (and session (plist-get session :buffer))))
+    (if (not (buffer-live-p buf))
+        (message "No session at point.")
+      (let* ((initial (with-current-buffer buf
+                        (or bp/agent-session-title-override
+                            bp/agent-session-title)))
+             (new (string-trim (read-string "Session title: " initial))))
+        (with-current-buffer buf
+          (setq-local bp/agent-session-title-override
+                      (unless (string-empty-p new) new)))
+        (bp/agent-sessions--refresh)
+        (message (if (string-empty-p new)
+                     "Title override cleared."
+                   (format "Title set to %s" new)))))))
 
 (defun bp/agent-sessions--context-at-point ()
   "Return (:path DIR :name NAME) for the worktree/repo enclosing point, or nil.
@@ -694,23 +1081,71 @@ as the editable default so it can be tweaked before confirming."
 The %s is replaced with the agent's own session id."
   :type '(alist :key-type symbol :value-type string))
 
-;;;###autoload
-(defun bp/agent-session-start (worktree-path agent-type session-id)
-  "Open a vterm in WORKTREE-PATH and resume AGENT-TYPE's SESSION-ID.
-AGENT-TYPE is a symbol such as `claude' or `codex'.  This is the target of
-the `elisp:' links produced by `org-store-link' on a session row."
+(defcustom bp/agent-session-branch-commands
+  '((claude . "claude --resume %s --fork-session")
+    (codex  . "codex fork %s"))
+  "Alist mapping AGENT-TYPE symbol to a shell command that branches a session.
+Branching forks the conversation into a new session that shares the parent's
+history but gets its own session id (`claude --fork-session' / `codex fork').
+The %s is replaced with the parent's own session id."
+  :type '(alist :key-type symbol :value-type string))
+
+(defun bp/agent-session--spawn (worktree-path agent-type session-id commands
+                                              &optional branched-from)
+  "Open a terminal in WORKTREE-PATH and run COMMANDS's template for AGENT-TYPE.
+COMMANDS is an alist like `bp/agent-session-resume-commands'; its template's
+%s is filled with SESSION-ID.  When BRANCHED-FROM is non-nil (a cons
+\(PARENT-SID . LABEL)), tag the new terminal so the session it starts records
+that it was branched from that parent.  Returns the new terminal buffer."
   (let* ((agent (if (symbolp agent-type) agent-type (intern agent-type)))
-         (template (alist-get agent bp/agent-session-resume-commands))
+         (template (alist-get agent commands))
          (default-directory (file-name-as-directory worktree-path)))
     (unless template
-      (error "No resume command configured for agent type `%s'" agent))
+      (error "No command configured for agent type `%s'" agent))
     (unless (file-directory-p default-directory)
       (error "Worktree no longer exists: %s" worktree-path))
     (let ((buf (bp/agent-sessions--create-terminal
                 default-directory
                 (plist-get (bp/agent-session--repo-info default-directory) :worktree))))
+      (when (and branched-from (buffer-live-p buf))
+        (with-current-buffer buf
+          (setq-local bp/agent-session--branched-from branched-from)))
       (bp/agent-sessions--terminal-send buf (format template session-id))
       buf)))
+
+;;;###autoload
+(defun bp/agent-session-start (worktree-path agent-type session-id)
+  "Open a vterm in WORKTREE-PATH and resume AGENT-TYPE's SESSION-ID.
+AGENT-TYPE is a symbol such as `claude' or `codex'.  This is the target of
+the `elisp:' links produced by `org-store-link' on a session row."
+  (bp/agent-session--spawn worktree-path agent-type session-id
+                           bp/agent-session-resume-commands))
+
+(defun bp/agent-sessions--buffer-for-agent-session (session-id)
+  "Return the live buffer running the agent session SESSION-ID, or nil.
+SESSION-ID is the agent's own session id (a UUID) as recorded in
+`bp/agent-sessions' under :agent-session-id."
+  (catch 'found
+    (maphash
+     (lambda (_id session)
+       (when (equal (plist-get session :agent-session-id) session-id)
+         (let ((buf (plist-get session :buffer)))
+           (when (buffer-live-p buf)
+             (throw 'found buf)))))
+     bp/agent-sessions)
+    nil))
+
+;;;###autoload
+(defun bp/agent-session-open (worktree-path agent-type session-id)
+  "Jump to the running AGENT-TYPE session SESSION-ID, or resume it if not open.
+If a live terminal is already running SESSION-ID (matched by the agent's own
+session id), switch to it; otherwise open a new terminal in WORKTREE-PATH and
+resume it via `bp/agent-session-start'.  This is the target of the
+`agent-session' `elisp:' links produced by `org-store-link'."
+  (let ((buf (bp/agent-sessions--buffer-for-agent-session session-id)))
+    (if (buffer-live-p buf)
+        (pop-to-buffer buf)
+      (bp/agent-session-start worktree-path agent-type session-id))))
 
 (defun bp/agent-sessions--store-link-for (session)
   "Store an `elisp:' resume link for SESSION via `org-link-store-props'.
@@ -722,14 +1157,29 @@ Return non-nil on success, nil when SESSION lacks the info to build a link."
                             (buffer-local-value 'default-directory buf)))))
            (agent (plist-get session :agent-type))
            (sid (plist-get session :agent-session-id))
-           (worktree (plist-get session :worktree)))
+           (worktree (plist-get session :worktree))
+           (title (let ((buf (plist-get session :buffer)))
+                    (and (buffer-live-p buf)
+                         (buffer-local-value 'bp/agent-session-title buf)))))
       (when (and path sid)
         (org-link-store-props
-         :type "elisp"
-         :link (format "elisp:(bp/agent-session-start %S '%s %S)"
-                       (file-name-as-directory path) agent sid)
-         :description (format "%s %s %s" (or worktree "?") agent sid))
+         :type "agent-session"
+         :link (format "agent-session:%s::%s::%s"
+                       agent sid (file-name-as-directory path))
+         :description (format "%s %s %s" (or worktree "?") agent
+                              (or title sid)))
         t))))
+
+(defun bp/agent-sessions--org-follow-link (link &optional _arg)
+  "Follow an `agent-session:' LINK, jumping to or resuming the session.
+LINK is AGENT::SESSION-ID::WORKTREE-PATH, as produced by the `:store'
+handler.  Using a dedicated link type (rather than an `elisp:' link) avoids
+the confirmation prompt Org shows before running arbitrary elisp."
+  (if (string-match "\\`\\([^:]+\\)::\\([^:]+\\)::\\(.*\\)\\'" link)
+      (bp/agent-session-open (match-string 3 link)
+                             (match-string 1 link)
+                             (match-string 2 link))
+    (error "Malformed agent-session link: %s" link)))
 
 (defun bp/agent-sessions--org-store-link (&optional _interactive)
   "Store an `elisp:' link that resumes a Claude/Codex session.
@@ -742,10 +1192,6 @@ buffer that has an active session (keyed by the buffer-local
           (bp/agent-sessions--session-at-point))
          (bp/agent-session-id
           (gethash bp/agent-session-id bp/agent-sessions)))))
-
-(with-eval-after-load 'ol
-  (org-link-set-parameters "agent-session"
-                           :store #'bp/agent-sessions--org-store-link))
 
 (defun bp/agent-sessions--sync-default-directory ()
   "Track the worktree/repo at point in `default-directory'.
@@ -765,6 +1211,9 @@ repo > worktree > session tree with foldable sections (TAB to fold/unfold)."
 (define-key bp/agent-sessions-mode-map (kbd "RET") #'bp/agent-sessions-jump)
 (define-key bp/agent-sessions-mode-map (kbd "v") #'bp/agent-sessions-display)
 (define-key bp/agent-sessions-mode-map (kbd "k") #'bp/agent-sessions-kill)
+(define-key bp/agent-sessions-mode-map (kbd "b") #'bp/agent-sessions-branch)
+(define-key bp/agent-sessions-mode-map (kbd "B") #'bp/agent-sessions-mark-parent)
+(define-key bp/agent-sessions-mode-map (kbd "e") #'bp/agent-sessions-edit-title)
 (define-key bp/agent-sessions-mode-map (kbd "g") #'bp/agent-sessions-refresh)
 (define-key bp/agent-sessions-mode-map (kbd "s") #'bp/agent-sessions-toggle-sort)
 (define-key bp/agent-sessions-mode-map (kbd "+") #'bp/agent-sessions-new-vterm)
@@ -773,9 +1222,225 @@ repo > worktree > session tree with foldable sections (TAB to fold/unfold)."
 (define-key bp/agent-sessions-mode-map (kbd "N") #'bp/agent-sessions-next-attention)
 (define-key bp/agent-sessions-mode-map (kbd "P") #'bp/agent-sessions-prev-attention)
 
-;; C-x p a: switch between / create agent sessions for the current project.
-(with-eval-after-load 'project
-  (define-key project-prefix-map (kbd "a") #'bp/agent-session-switch-or-new))
+;;; Wiring our hooks into Claude Code / Codex ------------------------------
+;;
+;; Both agents read a `{"hooks": {EVENT: [GROUP ...]}}' JSON config; each GROUP
+;; is `{"hooks": [{"type":"command","command":SCRIPT,...}], ["matcher":M]}'.  We
+;; own exactly the groups whose command runs one of our forwarder scripts (by
+;; filename), so we can add/remove them idempotently while leaving every other
+;; hook (orca's, the user's) untouched.
+
+(defcustom bp/agent-sessions-claude-settings-file
+  (expand-file-name "~/.claude/settings.json")
+  "Claude Code user settings file that `bp/agent-sessions-install' wires."
+  :type 'file)
+
+(defcustom bp/agent-sessions-codex-hooks-file
+  (expand-file-name "~/.codex/hooks.json")
+  "Codex hooks file that `bp/agent-sessions-install' wires."
+  :type 'file)
+
+(defcustom bp/agent-sessions-claude-hook-events
+  '("SessionStart" "UserPromptSubmit" "Stop" "StopFailure"
+    "SubagentStop" "TeammateIdle"
+    ("PreToolUse" . "*") ("PostToolUse" . "*") ("PermissionRequest" . "*"))
+  "Claude hook events to forward to the dashboard.
+Each item is either an event name, or (EVENT . MATCHER) for tool-scoped events."
+  :type '(repeat (choice string (cons string string))))
+
+(defcustom bp/agent-sessions-codex-hook-events
+  '("SessionStart" "UserPromptSubmit" "PreToolUse" "PostToolUse"
+    "PermissionRequest" "Stop")
+  "Codex hook events to forward to the dashboard."
+  :type '(repeat (choice string (cons string string))))
+
+(defconst bp/agent-sessions--claude-hook-script "agent-sessions-claude-hook.sh")
+(defconst bp/agent-sessions--codex-hook-script "agent-sessions-codex-hook.sh")
+
+(defun bp/agent-sessions--read-json (file)
+  "Parse FILE as JSON into hash-tables + lists, or an empty object if absent.
+Signals a `user-error' (rather than clobbering) if FILE holds invalid JSON."
+  (if (file-exists-p file)
+      (condition-case err
+          (with-temp-buffer
+            (insert-file-contents file)
+            (goto-char (point-min))
+            ;; Arrays as vectors (not lists): native `json-serialize' treats a
+            ;; Lisp list as an alist/plist object, so JSON arrays must round-trip
+            ;; as vectors to come back out as arrays.
+            (json-parse-buffer :object-type 'hash-table :array-type 'array
+                               :null-object :null :false-object :false))
+        (error (user-error "agent-sessions: %s is not valid JSON (%s); left untouched"
+                           file (error-message-string err))))
+    (make-hash-table :test 'equal)))
+
+(defun bp/agent-sessions--write-json (file obj)
+  "Write OBJ to FILE as pretty-printed JSON, backing up any existing FILE."
+  (make-directory (file-name-directory file) t)
+  (when (file-exists-p file)
+    (copy-file file (concat file ".bak") t))
+  (with-temp-file file
+    (insert (json-serialize obj :null-object :null :false-object :false))
+    (json-pretty-print-buffer)))
+
+(defun bp/agent-sessions--our-group-p (group script)
+  "Non-nil if hook GROUP runs our SCRIPT (matched by basename)."
+  (let ((cmds (and (hash-table-p group) (gethash "hooks" group))))
+    (and (vectorp cmds)
+         (seq-some (lambda (h)
+                     (let ((c (and (hash-table-p h) (gethash "command" h))))
+                       (and (stringp c) (string-match-p (regexp-quote script) c))))
+                   cmds))))
+
+(defun bp/agent-sessions--make-group (script matcher)
+  "Build a hook GROUP hash-table running SCRIPT, with optional MATCHER."
+  (let ((cmd (make-hash-table :test 'equal))
+        (grp (make-hash-table :test 'equal)))
+    (puthash "type" "command" cmd)
+    (puthash "command" script cmd)
+    (puthash "timeout" 10 cmd)
+    (when matcher (puthash "matcher" matcher grp))
+    (puthash "hooks" (vector cmd) grp)
+    grp))
+
+(defun bp/agent-sessions--strip-hooks (events-map script)
+  "Remove our SCRIPT groups from EVENTS-MAP, dropping events left empty.
+Returns t when anything was removed."
+  (let (changed drop)
+    (maphash
+     (lambda (event groups)
+       (let* ((orig (if (vectorp groups) (append groups nil) nil))
+              (kept (seq-remove (lambda (g) (bp/agent-sessions--our-group-p g script))
+                                orig)))
+         (unless (= (length kept) (length orig)) (setq changed t))
+         (if kept (puthash event (vconcat kept) events-map)
+           (push event drop))))
+     events-map)
+    (dolist (event drop) (remhash event events-map))
+    changed))
+
+(defun bp/agent-sessions--wire (file events script)
+  "Add SCRIPT hook groups for EVENTS into FILE's `hooks' map, idempotently.
+Strips any stale groups of ours first (so re-running after moving the package
+or editing the event list self-heals), then appends fresh ones."
+  (let* ((root (bp/agent-sessions--read-json file))
+         (hooks (let ((h (gethash "hooks" root)))
+                  (if (hash-table-p h) h (make-hash-table :test 'equal)))))
+    (bp/agent-sessions--strip-hooks hooks script)
+    (dolist (ev events)
+      (let* ((event (if (consp ev) (car ev) ev))
+             (matcher (and (consp ev) (cdr ev)))
+             (existing (gethash event hooks))
+             (base (if (vectorp existing) existing [])))
+        (puthash event
+                 (vconcat base (vector (bp/agent-sessions--make-group script matcher)))
+                 hooks)))
+    (puthash "hooks" hooks root)
+    (bp/agent-sessions--write-json file root)))
+
+(defun bp/agent-sessions--unwire (file script)
+  "Remove our SCRIPT hook groups from FILE, leaving other hooks intact.
+Returns t if FILE was changed."
+  (when (file-exists-p file)
+    (let* ((root (bp/agent-sessions--read-json file))
+           (hooks (gethash "hooks" root)))
+      (when (and (hash-table-p hooks)
+                 (bp/agent-sessions--strip-hooks hooks script))
+        (if (zerop (hash-table-count hooks))
+            (remhash "hooks" root)
+          (puthash "hooks" hooks root))
+        (bp/agent-sessions--write-json file root)
+        t))))
+
+;;;###autoload
+(defun bp/agent-sessions-install (&optional force)
+  "Wire this package's hooks into Claude Code and Codex.
+So a `claude'/`codex' run in any Emacs terminal reports to the dashboard,
+without depending on any external tool (e.g. orca).  Idempotent — re-run any
+time: after installing a second agent, moving this package, changing the hook
+event lists, or removing orca.  Only touches hook entries pointing at this
+package's own forwarder scripts; other hooks are left as-is.
+
+Wires Claude when `~/.claude' exists and Codex when `~/.codex' exists; with a
+prefix arg (FORCE) wires both regardless, creating the config as needed.  Also
+starts the Emacs server, which the hooks need to reach us."
+  (interactive "P")
+  (let ((claude-script (expand-file-name bp/agent-sessions--claude-hook-script
+                                         bp/agent-sessions--dir))
+        (codex-script (expand-file-name bp/agent-sessions--codex-hook-script
+                                        bp/agent-sessions--dir))
+        done)
+    (dolist (s (list claude-script codex-script))
+      (if (file-exists-p s)
+          (set-file-modes s #o755)
+        (error "agent-sessions: missing hook script %s" s)))
+    (when (or force (file-directory-p
+                     (file-name-directory bp/agent-sessions-claude-settings-file)))
+      (bp/agent-sessions--wire bp/agent-sessions-claude-settings-file
+                               bp/agent-sessions-claude-hook-events claude-script)
+      (push "Claude" done))
+    (when (or force (file-directory-p
+                     (file-name-directory bp/agent-sessions-codex-hooks-file)))
+      (bp/agent-sessions--wire bp/agent-sessions-codex-hooks-file
+                               bp/agent-sessions-codex-hook-events codex-script)
+      (push "Codex" done))
+    (unless (server-running-p) (server-start))
+    (if done
+        (message "agent-sessions: wired %s (server running)"
+                 (string-join (nreverse done) " + "))
+      (message "agent-sessions: neither ~/.claude nor ~/.codex found; use `C-u M-x bp/agent-sessions-install' to force"))))
+
+;;;###autoload
+(defun bp/agent-sessions-uninstall ()
+  "Remove this package's hooks from Claude Code and Codex config.
+Leaves every other hook (orca's, yours) intact, and leaves the forwarder
+scripts on disk.  Safe to run whether or not `bp/agent-sessions-install' ran."
+  (interactive)
+  (let ((changed (delq nil
+                       (list (and (bp/agent-sessions--unwire
+                                   bp/agent-sessions-claude-settings-file
+                                   bp/agent-sessions--claude-hook-script)
+                                  "Claude")
+                             (and (bp/agent-sessions--unwire
+                                   bp/agent-sessions-codex-hooks-file
+                                   bp/agent-sessions--codex-hook-script)
+                                  "Codex")))))
+    (message (if changed
+                 (format "agent-sessions: unhooked from %s" (string-join changed " + "))
+               "agent-sessions: nothing to remove"))))
+
+;;;###autoload
+(defun bp/agent-session-setup ()
+  "Install all side effects this package makes on systems outside itself.
+Namely: the vterm/eat advice (session-id injection + terminal-title capture),
+the focus hook that clears the needs-attention highlight, the `agent-session'
+Org link type, the `C-x p a' project binding, and starting the Emacs server
+\(hook scripts reach us via emacsclient).  Idempotent; call from init/config."
+  ;; vterm: inject EMACS_AGENT_SESSION_ID and capture the terminal title.
+  (with-eval-after-load 'vterm
+    (unless (advice-member-p #'bp/agent-sessions--vterm-advice 'vterm--internal)
+      (advice-add 'vterm--internal :around #'bp/agent-sessions--vterm-advice))
+    (unless (advice-member-p #'bp/agent-sessions--capture-title 'vterm--set-title)
+      (advice-add 'vterm--set-title :before #'bp/agent-sessions--capture-title)))
+  ;; eat: the same id injection and title capture.
+  (with-eval-after-load 'eat
+    (unless (advice-member-p #'bp/agent-sessions--eat-advice 'eat--1)
+      (advice-add 'eat--1 :around #'bp/agent-sessions--eat-advice))
+    (unless (advice-member-p #'bp/agent-sessions--eat-capture-title 'eat--t-set-title)
+      (advice-add 'eat--t-set-title :after #'bp/agent-sessions--eat-capture-title)))
+  ;; Clear a session's needs-attention highlight once the user focuses it.
+  (add-hook 'buffer-list-update-hook #'bp/agent-session--clear-attention-on-focus)
+  ;; `agent-session:' Org links that resume/jump to a session.
+  (with-eval-after-load 'ol
+    (org-link-set-parameters "agent-session"
+                             :follow #'bp/agent-sessions--org-follow-link
+                             :store #'bp/agent-sessions--org-store-link))
+  ;; C-x p a: switch between / create agent sessions for the current project.
+  (with-eval-after-load 'project
+    (define-key project-prefix-map (kbd "a") #'bp/agent-session-switch-or-new))
+  ;; Hook scripts forward events via emacsclient, so the server must be up.
+  (unless (server-running-p)
+    (server-start)))
 
 ;;;###autoload
 (defun bp/agent-sessions-list ()
