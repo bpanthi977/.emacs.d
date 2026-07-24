@@ -1,5 +1,5 @@
 (use-package agent-sessions
-  :load-path "modules"
+  :load-path "modules/agent-sessions"
   :bind (:map bp/global-prefix-map
 	      (("a" . bp/agent-sessions-list)))
   :defer nil
@@ -23,7 +23,12 @@
       (setopt eat-semi-char-non-bound-keys
               (cons [?\e ?m] eat-semi-char-non-bound-keys))))
 
-  ;; Hook scripts forward events via emacsclient, so the Emacs server must be
-  ;; running for the dashboard to receive them.
-  (unless (server-running-p)
-    (server-start)))
+  ;; Install the advice, hooks, Org link type, project binding, and server.
+  (bp/agent-session-setup)
+
+  ;; One-time (re-run any time) wiring of our hooks into Claude Code / Codex, so
+  ;; sessions report to the dashboard without depending on orca.  Run manually
+  ;; via `M-x bp/agent-sessions-install' (and `-uninstall' to remove them).
+  ;; It writes ~/.claude/settings.json and ~/.codex/hooks.json, so it is left
+  ;; explicit rather than run on every startup.
+  )

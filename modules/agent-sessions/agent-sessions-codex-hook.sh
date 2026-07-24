@@ -1,7 +1,8 @@
 #!/bin/sh
 # Forwards Codex hooks.json events to bp/agent-hook-notify via emacsclient.
 # Referenced from ~/.codex/hooks.json. Gated on EMACS_AGENT_SESSION_ID, which
-# modules/agent-sessions.el injects into every vterm buffer's shell env.
+# modules/agent-sessions/agent-sessions.el injects into every vterm buffer's
+# shell env.
 payload=$(cat)
 if [ -z "$payload" ]; then
   exit 0
