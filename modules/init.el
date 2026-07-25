@@ -1,3 +1,4 @@
+(load* "exec-path-from-shell.el")
 (load* "keymap.el")
 (load* "smartparens.el")
 (load* "company.el")
@@ -17,4 +18,4 @@
 (load* "outline-mode.el")
 (load* "eye-care.el")
 (load* "dired.el")
-(load* "agent-sessions.el")
+(load* "agent-session-config.el")

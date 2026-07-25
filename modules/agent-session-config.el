@@ -4,7 +4,7 @@
 	      (("a" . bp/agent-sessions-list)))
   :defer nil
   :config
-  (setf bp/agent-sessions-show-all-worktrees t)
+  (setf bp/agent-sessions-show-all-worktrees nil)
   (setf bp/agent-sessions-terminal 'eat)
   (add-to-list 'project-switch-commands '(bp/agent-session-switch-or-new "Agent Session"))
 

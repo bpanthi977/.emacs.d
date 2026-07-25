@@ -85,6 +85,17 @@ and must not clobber the needs-attention state those set.")
   "Return PATH canonicalized to a directory name for use as a hash-table key."
   (and path (file-name-as-directory (file-truename path))))
 
+(defun bp/agent-sessions--worktree-label (path branch)
+  "Return the display label for the worktree at PATH on BRANCH.
+Shows the worktree directory name and, when known, its branch as
+`<dir> (<branch>)' so sessions sharing a repo but on different worktrees are
+easy to tell apart.  Falls back to just the directory name when BRANCH is nil
+(detached HEAD)."
+  (let ((dir (file-name-nondirectory (directory-file-name path))))
+    (if branch
+        (format "%s (%s)" dir branch)
+      dir)))
+
 (defun bp/agent-session--repo-info (dir)
   "Return session repo/worktree info for the git repo containing DIR.
 The plist has :repo NAME, :repo-root ROOT (the main worktree's directory),
@@ -103,10 +114,7 @@ The plist has :repo NAME, :repo-root ROOT (the main worktree's directory),
              (repo-name (file-name-nondirectory (directory-file-name main-root)))
              (branch (ignore-errors (let ((default-directory toplevel))
                                        (magit-get-current-branch))))
-             (worktree-label (if (file-equal-p toplevel main-root)
-                                  (or branch "main")
-                                (or branch (file-name-nondirectory
-                                            (directory-file-name toplevel))))))
+             (worktree-label (bp/agent-sessions--worktree-label toplevel branch)))
         (list :repo repo-name
               :repo-root (file-name-as-directory main-root)
               :worktree worktree-label
@@ -124,10 +132,7 @@ Runs git; use `bp/agent-sessions--all-worktrees' for the cached version."
                (unless (nth 3 wt)
                  (let* ((path (car wt))
                         (branch (nth 2 wt))
-                        (label (if (file-equal-p path root)
-                                   (or branch "main")
-                                 (or branch (file-name-nondirectory
-                                             (directory-file-name path))))))
+                        (label (bp/agent-sessions--worktree-label path branch)))
                    (list :label label :path (file-name-as-directory path)))))
              (magit-list-worktrees))))))
 
@@ -749,12 +754,44 @@ most-recently-active first."
       (when wstart
         (set-window-start win (min wstart (point-max)) t)))))
 
+(defun bp/agent-sessions--reread-repo-info ()
+  "Re-read repo/branch info from disk for every live session buffer.
+The per-buffer `bp/agent-sessions--repo-info-cache' is keyed only on the
+buffer's directory, so it never notices a branch checkout in the same
+directory; and a real agent session's `:worktree' label is frozen at its first
+hook.  Both go stale when the branch changes.  Clear the per-buffer caches and
+refresh each registered session's repo/worktree fields so `g' reflects the
+current branch."
+  (dolist (buf (buffer-list))
+    (when (buffer-local-value 'bp/agent-sessions--repo-info-cache buf)
+      (with-current-buffer buf
+        (setq bp/agent-sessions--repo-info-cache nil))))
+  (maphash
+   (lambda (id session)
+     (let ((buf (plist-get session :buffer)))
+       (when (buffer-live-p buf)
+         (let ((info (bp/agent-sessions--buffer-repo-info buf)))
+           ;; Only overwrite when the buffer is still in a repo; a session that
+           ;; has cd'd out keeps its last-known labels rather than going blank.
+           (when (plist-get info :repo-root)
+             (puthash id
+                      (plist-put
+                       (plist-put
+                        (plist-put
+                         (plist-put session :repo (plist-get info :repo))
+                         :repo-root (plist-get info :repo-root))
+                        :worktree (plist-get info :worktree))
+                       :worktree-path (plist-get info :worktree-path))
+                      bp/agent-sessions))))))
+   bp/agent-sessions))
+
 (defun bp/agent-sessions-refresh ()
-  "Refresh the dashboard, re-reading git worktrees from disk.
+  "Refresh the dashboard, re-reading git worktrees and branches from disk.
 Unlike the internal re-render used by hooks and the sort toggle, this
-invalidates the worktree cache."
+invalidates the worktree cache and re-reads each session's repo/branch info."
   (interactive)
   (clrhash bp/agent-sessions--worktrees-cache)
+  (bp/agent-sessions--reread-repo-info)
   (bp/agent-sessions--refresh))
 
 (defun bp/agent-sessions--refresh-if-visible ()
