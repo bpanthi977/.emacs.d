@@ -1,4 +1,3 @@
-(load* "exec-path-from-shell.el")
 (load* "keymap.el")
 (load* "smartparens.el")
 (load* "company.el")

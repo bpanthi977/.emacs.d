@@ -31,6 +31,13 @@ Populated lazily: an entry only exists once a hook event has fired for it.")
 (defvar-local bp/agent-session-id nil
   "Unique id injected into this vterm buffer's shell environment, if any.")
 
+(defvar-local bp/agent-session--created-at nil
+  "When this terminal buffer was created; the dashboard's stable sort key.
+Lives on the buffer rather than in the session plist because the plist is
+rebuilt from scratch on every hook event, and because plain terminals that
+have never fired a hook need the same key.  See
+`bp/agent-sessions--sort-tree-stable'.")
+
 (defconst bp/agent-sessions-buffer-name "*Agent Sessions*")
 
 (defcustom bp/agent-sessions-terminal 'vterm
@@ -56,8 +63,10 @@ not on every hook event, so a session that stays waiting is announced once."
 
 (defvar bp/agent-sessions-sort-by-activity nil
   "When non-nil, sort repos, worktrees, and sessions by most recent activity.
-Otherwise the default order is used.  Toggle with `s'
-\(`bp/agent-sessions-toggle-sort').")
+Off by default because `:updated-at' changes on every hook event, so two
+sessions running at once continually swap places in the dashboard.  The
+default is the stable order of `bp/agent-sessions--sort-tree-stable'.
+Toggle with `s' \(`bp/agent-sessions-toggle-sort').")
 
 (defconst bp/agent-session-status-alist
   '((claude . ((Stop . needs-attention)
@@ -165,6 +174,7 @@ Populates the cache on first use; `bp/agent-sessions-refresh' clears it."
       (puthash id buf bp/agent-session-id->buffer)
       (with-current-buffer buf
         (setq-local bp/agent-session-id id)
+        (setq-local bp/agent-session--created-at (current-time))
         (add-hook 'kill-buffer-hook #'bp/agent-session--cleanup nil t))
       (bp/agent-sessions--refresh-if-visible))
     buf))
@@ -199,6 +209,7 @@ inherits when it spawns the shell) and registers the resulting buffer."
       (puthash id buf bp/agent-session-id->buffer)
       (with-current-buffer buf
         (setq-local bp/agent-session-id id)
+        (setq-local bp/agent-session--created-at (current-time))
         (add-hook 'kill-buffer-hook #'bp/agent-session--cleanup nil t))
       (bp/agent-sessions--refresh-if-visible))
     buf))
@@ -686,11 +697,78 @@ Items whose TIME-FN returns nil (no activity, e.g. empty worktrees) sort last."
          (plist-get repo :worktrees)))))
     repos)))
 
+(defconst bp/agent-sessions--status-rank
+  '((error . 0) (needs-attention . 1) (running . 2))
+  "Sort rank per status; anything unlisted (stopped, idle, nil) ranks last.
+Only these coarse buckets participate in ordering: a status change is a rare,
+meaningful event (a session started waiting on you), so a row moving between
+buckets carries information, whereas a row moving because a tool ran does not.")
+
+(defun bp/agent-sessions--entry-rank (entry)
+  (or (alist-get (plist-get (plist-get entry :session) :status)
+                 bp/agent-sessions--status-rank)
+      (length bp/agent-sessions--status-rank)))
+
+(defun bp/agent-sessions--entry-created (entry)
+  "ENTRY's buffer creation time, or nil for a buffer registered before the
+`bp/agent-session--created-at' stamp existed."
+  (let ((buf (plist-get (plist-get entry :session) :buffer)))
+    (and (buffer-live-p buf)
+         (buffer-local-value 'bp/agent-session--created-at buf))))
+
+(defun bp/agent-sessions--entry-buffer-name (entry)
+  (let ((buf (plist-get (plist-get entry :session) :buffer)))
+    (or (and (buffer-live-p buf) (buffer-name buf)) "")))
+
+(defun bp/agent-sessions--sort-entries (entries)
+  "Sort ENTRIES by attention bucket, then oldest-first, then buffer name.
+Every key is stable under ordinary activity: unlike `:updated-at', none of
+them changes when a session merely runs a tool, so two busy sessions keep
+their positions instead of trading places on each hook event.  The buffer name
+is the final tie-break so the order never depends on hash-table iteration
+order (e.g. for buffers with no creation stamp)."
+  (sort (copy-sequence entries)
+        (lambda (a b)
+          (let ((ra (bp/agent-sessions--entry-rank a))
+                (rb (bp/agent-sessions--entry-rank b)))
+            (if (/= ra rb)
+                (< ra rb)
+              (let ((ca (bp/agent-sessions--entry-created a))
+                    (cb (bp/agent-sessions--entry-created b)))
+                (cond ((and ca cb (not (time-equal-p ca cb))) (time-less-p ca cb))
+                      ;; Unstamped buffers sort after stamped ones.
+                      ((and ca (not cb)) t)
+                      ((and cb (not ca)) nil)
+                      (t (string< (bp/agent-sessions--entry-buffer-name a)
+                                  (bp/agent-sessions--entry-buffer-name b))))))))))
+
+(defun bp/agent-sessions--sort-tree-stable (repos)
+  "Order REPOS alphabetically, their worktrees alphabetically, rows by attention.
+The tree skeleton is deliberately *not* ordered by activity or attention: a
+fixed repo/worktree layout is what makes the dashboard navigable from memory.
+Urgency surfaces within a worktree instead, via `--sort-entries'."
+  (sort (mapcar
+         (lambda (repo)
+           (plist-put
+            repo :worktrees
+            (sort (mapcar
+                   (lambda (wt)
+                     (plist-put wt :entries
+                                (bp/agent-sessions--sort-entries
+                                 (plist-get wt :entries))))
+                   (plist-get repo :worktrees))
+                  (lambda (a b) (string< (or (plist-get a :label) "")
+                                         (or (plist-get b :label) ""))))))
+         repos)
+        (lambda (a b) (string< (or (plist-get a :name) "")
+                               (or (plist-get b :name) "")))))
+
 (defun bp/agent-sessions--build-tree (entries)
   "Group live ENTRIES into a list of repo plists for rendering.
 Each element is (:name NAME :root ROOT :worktrees (WORKTREE ...)).
 When `bp/agent-sessions-sort-by-activity' is set, every level is ordered
-most-recently-active first."
+most-recently-active first; otherwise the stable order of
+`bp/agent-sessions--sort-tree-stable' is used."
   (let ((repos
          (mapcar
           (lambda (rg)
@@ -711,7 +789,7 @@ most-recently-active first."
            entries))))
     (if bp/agent-sessions-sort-by-activity
         (bp/agent-sessions--sort-tree repos)
-      repos)))
+      (bp/agent-sessions--sort-tree-stable repos))))
 
 (defun bp/agent-sessions--insert-worktree (wt)
   (let ((entries (plist-get wt :entries)))
@@ -1076,7 +1154,9 @@ When PREDICATE is non-nil, only rows whose status satisfies it are considered."
   (bp/agent-sessions--goto-row 'prev nil))
 
 (defun bp/agent-sessions-toggle-sort ()
-  "Toggle the dashboard between activity order and default order."
+  "Toggle the dashboard between activity order and the stable order.
+Activity order reorders on every hook event, so concurrently busy sessions
+trade places constantly; the stable order is the default for that reason."
   (interactive)
   (setq bp/agent-sessions-sort-by-activity
         (not bp/agent-sessions-sort-by-activity))
@@ -1084,7 +1164,7 @@ When PREDICATE is non-nil, only rows whose status satisfies it are considered."
   (message "Sorting by %s"
            (if bp/agent-sessions-sort-by-activity
                "most recent activity"
-             "default order")))
+             "attention, then session age")))
 
 (defun bp/agent-sessions--attention-p (status)
   (memq status '(needs-attention error)))
