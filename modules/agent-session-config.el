@@ -21,7 +21,23 @@
   (with-eval-after-load 'eat
     (unless (member [?\e ?m] eat-semi-char-non-bound-keys)
       (setopt eat-semi-char-non-bound-keys
-              (cons [?\e ?m] eat-semi-char-non-bound-keys))))
+              (cons [?\e ?m] eat-semi-char-non-bound-keys)))
+
+    ;; Whole-frame flicker while a Codex TUI is on screen.  Codex asks for a
+    ;; blinking cursor (DECSCUSR), which puts eat into `eat--cursor-blink-mode';
+    ;; its blink timer calls `redraw-frame' on every tick (see the "REVIEW: This
+    ;; is expensive, and some causes flickering" comment in `eat.el'), so the
+    ;; entire frame repaints twice a second.  It outlives Codex because the
+    ;; buffer stays in blink mode until something resets the cursor style.
+    ;; Blinking frequency nil in these three (the only blinking cursor types)
+    ;; means eat never enables that mode; `blink-cursor-mode' already blinks the
+    ;; cursor of the selected window without redrawing anything else.
+    (setopt eat-very-visible-cursor-type
+            (list (car eat-very-visible-cursor-type) nil nil)
+            eat-very-visible-vertical-bar-cursor-type
+            (list (car eat-very-visible-vertical-bar-cursor-type) nil nil)
+            eat-very-visible-horizontal-bar-cursor-type
+            (list (car eat-very-visible-horizontal-bar-cursor-type) nil nil)))
 
   ;; Install the advice, hooks, Org link type, project binding, and server.
   (bp/agent-session-setup)
