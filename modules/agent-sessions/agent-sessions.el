@@ -1220,10 +1220,46 @@ invalidates the worktree cache and re-reads each session's repo/branch info."
     (and section (eq (oref section type) 'bp/agent-session-row)
          (bp/agent-sessions--session-for-id (oref section value)))))
 
+(defun bp/agent-sessions--switch-project-read-command ()
+  "Read one key from the `project-switch-commands' menu and return its command.
+Returns `ignore' for anything unrecognised, so the menu closes instead of
+re-prompting.  Built from project.el's own pieces (`project-prefix-map',
+`project-switch-commands', `project--menu-prompt') so a user's customisation
+of the dispatch menu still applies; the deprecated (KEY COMMAND LABEL) row
+format is normalised the same way `project--switch-project-command' does."
+  (let* ((menu (mapcar (lambda (row) (if (characterp (car row)) (reverse row) row))
+                       project-switch-commands))
+         (map (let ((temp (make-sparse-keymap)))
+                (set-keymap-parent temp project-prefix-map)
+                (dolist (row menu temp)
+                  (when-let ((cmd (nth 0 row))
+                             (keychar (nth 2 row)))
+                    (define-key temp (vector keychar) cmd)))))
+         (choice (let ((overriding-local-map map))
+                   (read-key-sequence (concat "Choose: " (project--menu-prompt)))))
+         (command (lookup-key map choice)))
+    (message nil)
+    (if (and (commandp command)
+             (or project-switch-use-entire-map (assq command menu)))
+        command
+      #'ignore)))
+
+(defun bp/agent-sessions--switch-project (dir)
+  "`project-switch-project' in DIR, but dismissed by any unrecognised key.
+`project--switch-project-command' loops until it reads a key it knows, so the
+dispatch menu behaves like a mode you have to escape from.  Here RET on a
+heading is a glance at what's available, so a stray key should just close the
+menu rather than trap you in it.  The override is scoped to this call — the
+looping behaviour everywhere else in Emacs is left alone."
+  (cl-letf (((symbol-function 'project--switch-project-command)
+             #'bp/agent-sessions--switch-project-read-command))
+    (project-switch-project dir)))
+
 (defun bp/agent-sessions-jump ()
   "Act on the thing at point.
 On a session row, pop to its vterm buffer.  On a worktree or repo heading,
-run `project-switch-project' in that directory."
+open project.el's dispatch menu in that directory (see
+`bp/agent-sessions--switch-project')."
   (interactive)
   (let ((section (magit-current-section)))
     (pcase (and section (oref section type))
@@ -1237,7 +1273,7 @@ run `project-switch-project' in that directory."
        (let* ((value (oref section value))
               (dir (or (plist-get value :path) (plist-get value :root))))
          (if (and dir (file-directory-p dir))
-             (project-switch-project dir)
+             (bp/agent-sessions--switch-project dir)
            (message "No worktree directory at point."))))
       (_ (message "Nothing to do here.")))))
 
