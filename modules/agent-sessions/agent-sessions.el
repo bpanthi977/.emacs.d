@@ -194,6 +194,14 @@ branched/forked from.  Set on a freshly branched terminal (by the `b' command
 or `bp/agent-sessions-mark-parent') so its agent session records the parentage
 once its first hook fires, and preserved across subsequent hook events.")
 
+(defvar-local bp/agent-session--marked-unread nil
+  "When non-nil, the user marked this session as needing attention (`u').
+Kept on the buffer rather than in `bp/agent-sessions' so it works for a plain
+terminal that has no registry entry yet, and so a later hook event's status
+computation (which honours the *previous* status) can't be skewed by it.  The
+flag only overrides the status at display time, and is cleared the same way a
+real needs-attention is: by looking at the session.")
+
 (defun bp/agent-sessions--capture-title (title)
   (setq-local bp/agent-session-title title))
 
@@ -234,9 +242,17 @@ spuriously."
   (let* ((buf (window-buffer (selected-window)))
          (id (and (buffer-live-p buf) (buffer-local-value 'bp/agent-session-id buf))))
     (when id
-      (let ((session (gethash id bp/agent-sessions)))
+      (let ((session (gethash id bp/agent-sessions))
+            (changed nil))
+        ;; A user-set unread mark clears the same way, and for the same reason:
+        ;; the user has now looked at the session.
+        (when (buffer-local-value 'bp/agent-session--marked-unread buf)
+          (with-current-buffer buf (setq-local bp/agent-session--marked-unread nil))
+          (setq changed t))
         (when (and session (eq (plist-get session :status) 'needs-attention))
           (puthash id (plist-put session :status 'stopped) bp/agent-sessions)
+          (setq changed t))
+        (when changed
           (bp/agent-sessions--refresh-if-visible))))))
 
 (defun bp/agent-session--desktop-notify (title body)
@@ -489,6 +505,17 @@ contained in the child's; the largest such match is the immediate parent."
             (cons (plist-get best :agent-session-id)
                   (bp/agent-sessions--session-short-label best))))))))
 
+(defun bp/agent-sessions--unread-status (session buf)
+  "SESSION with its status forced to `needs-attention' if BUF is marked unread.
+Returns a *copy* — the registry plist must not be mutated, or the mark would
+leak into the status a later hook event inherits.  An `error' status outranks
+the mark and is left alone."
+  (if (and (buffer-live-p buf)
+           (buffer-local-value 'bp/agent-session--marked-unread buf)
+           (not (memq (plist-get session :status) '(needs-attention error))))
+      (plist-put (copy-sequence session) :status 'needs-attention)
+    session))
+
 (defun bp/agent-sessions--live-entries ()
   "Return (:id ID :session PLIST :title TITLE) for each live terminal buffer.
 Includes both real agent sessions (those a hook event has fired for) and
@@ -502,7 +529,8 @@ buffer killed without running local hooks)."
      (lambda (id session)
        (let ((buf (plist-get session :buffer)))
          (if (buffer-live-p buf)
-             (push (list :id id :session session
+             (push (list :id id
+                         :session (bp/agent-sessions--unread-status session buf)
                          :title (or (buffer-local-value 'bp/agent-session-title-override buf)
                                     (buffer-local-value 'bp/agent-session-title buf)))
                    entries)
@@ -516,7 +544,8 @@ buffer killed without running local hooks)."
               (remhash id bp/agent-session-id->buffer))
              ((not (gethash id bp/agent-sessions))
               (push (list :id id
-                          :session (bp/agent-sessions--terminal-session buf)
+                          :session (bp/agent-sessions--unread-status
+                                    (bp/agent-sessions--terminal-session buf) buf)
                           :title (or (buffer-local-value 'bp/agent-session-title-override buf)
                                     (buffer-local-value 'bp/agent-session-title buf)))
                     entries))))
@@ -1230,6 +1259,22 @@ run `project-switch-project' in that directory."
       (kill-buffer buf))
     (bp/agent-sessions--refresh)))
 
+(defun bp/agent-sessions-mark-unread (&optional unmark)
+  "Mark the session at point as unread — i.e. needing attention.
+Gives the row the same highlight, `●' marker, sort priority and `N'/`P'
+reachability a hook-reported needs-attention has, for sessions you want to
+come back to yourself.  With a prefix argument (UNMARK), clear the mark.
+The mark also clears on its own once you focus the session's buffer."
+  (interactive "P")
+  (let* ((session (bp/agent-sessions--session-at-point))
+         (buf (and session (plist-get session :buffer))))
+    (if (not (buffer-live-p buf))
+        (message "No session at point.")
+      (with-current-buffer buf
+        (setq-local bp/agent-session--marked-unread (not unmark)))
+      (bp/agent-sessions--refresh)
+      (message (if unmark "Unread mark cleared." "Marked as needing attention.")))))
+
 (defun bp/agent-sessions-branch ()
   "Branch (fork) the agent session at point into a new session.
 Opens a new terminal in the same worktree and forks the conversation, so the
@@ -1780,6 +1825,7 @@ repo > worktree > session tree with foldable sections (TAB to fold/unfold)."
 (define-key bp/agent-sessions-mode-map (kbd "b") #'bp/agent-sessions-branch)
 (define-key bp/agent-sessions-mode-map (kbd "B") #'bp/agent-sessions-mark-parent)
 (define-key bp/agent-sessions-mode-map (kbd "t") #'bp/agent-sessions-edit-title)
+(define-key bp/agent-sessions-mode-map (kbd "u") #'bp/agent-sessions-mark-unread)
 (define-key bp/agent-sessions-mode-map (kbd "e") #'bp/agent-sessions-edit-note)
 (define-key bp/agent-sessions-mode-map (kbd "g") #'bp/agent-sessions-refresh)
 (define-key bp/agent-sessions-mode-map (kbd "s") #'bp/agent-sessions-toggle-sort)
