@@ -1287,13 +1287,60 @@ open project.el's dispatch menu in that directory (see
         (display-buffer buf '(nil (inhibit-same-window . t)))
       (message "No session at point."))))
 
+(defun bp/agent-sessions--row-locations ()
+  "Return (POSITION . ID) for each session row, in buffer order."
+  (let (rows last-start)
+    (save-excursion
+      (goto-char (point-min))
+      (while (not (eobp))
+        (let ((section (magit-current-section)))
+          (when (and section
+                     (eq (oref section type) 'bp/agent-session-row)
+                     (/= (oref section start) (or last-start -1)))
+            (setq last-start (oref section start))
+            (push (cons last-start (oref section value)) rows)))
+        (forward-line 1)))
+    (nreverse rows)))
+
+(defun bp/agent-sessions--nearby-session-id ()
+  "Return the id of a session row next to the row at point.
+Prefer the following row; when point is on the final row, return the previous
+one.  Return nil when point is not on a session row or no other row exists."
+  (let ((section (magit-current-section)))
+    (when (and section (eq (oref section type) 'bp/agent-session-row))
+      (let* ((start (oref section start))
+             (rows (bp/agent-sessions--row-locations))
+             (next (seq-find (lambda (row) (> (car row) start)) rows))
+             (previous (seq-find (lambda (row) (< (car row) start))
+                                 (reverse rows))))
+        (cdr (or next previous))))))
+
+(defun bp/agent-sessions--goto-session-id (id)
+  "Move point to the dashboard row for session ID and return non-nil.
+Return nil without moving point when ID is no longer displayed."
+  (let ((row (seq-find (lambda (candidate) (equal (cdr candidate) id))
+                       (bp/agent-sessions--row-locations))))
+    (when row
+      (goto-char (car row))
+      t)))
+
 (defun bp/agent-sessions-kill ()
+  "Kill the session at point and move to a neighboring session row."
   (interactive)
   (let* ((session (bp/agent-sessions--session-at-point))
-         (buf (and session (plist-get session :buffer))))
-    (when (buffer-live-p buf)
-      (kill-buffer buf))
-    (bp/agent-sessions--refresh)))
+         (buf (and session (plist-get session :buffer)))
+         (nearby-id (and (buffer-live-p buf)
+                         (bp/agent-sessions--nearby-session-id))))
+    (if (not (buffer-live-p buf))
+        (message "No session at point.")
+      (when (kill-buffer buf)
+        ;; The terminal's kill-buffer hook refreshes the dashboard once, but
+        ;; the deleted section cannot be restored and that refresh lands at
+        ;; point-min.  Re-render defensively (for terminals without the hook),
+        ;; then select the adjacent surviving row by its stable session id.
+        (bp/agent-sessions--refresh)
+        (when nearby-id
+          (bp/agent-sessions--goto-session-id nearby-id))))))
 
 (defun bp/agent-sessions-mark-unread (&optional unmark)
   "Mark the session at point as unread — i.e. needing attention.
