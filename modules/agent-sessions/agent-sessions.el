@@ -1325,6 +1325,14 @@ repo > worktree > session tree with foldable sections (TAB to fold/unfold)."
   (add-hook 'post-command-hook
             #'bp/agent-sessions--sync-default-directory nil t))
 
+;; `define-derived-mode' sets the parent keymap only when the map has none, and
+;; the map itself is a `defvar' that survives reloading this file.  An Emacs
+;; that loaded a version of this mode deriving from something else therefore
+;; keeps that old parent forever — which cost us TAB: `tabulated-list-mode-map'
+;; inherits `button-buffer-map', whose `forward-button' shadowed
+;; `magit-section-toggle' ("No button").  Re-point it on every load.
+(set-keymap-parent bp/agent-sessions-mode-map magit-section-mode-map)
+
 (define-key bp/agent-sessions-mode-map (kbd "RET") #'bp/agent-sessions-jump)
 (define-key bp/agent-sessions-mode-map (kbd "v") #'bp/agent-sessions-display)
 (define-key bp/agent-sessions-mode-map (kbd "k") #'bp/agent-sessions-kill)
