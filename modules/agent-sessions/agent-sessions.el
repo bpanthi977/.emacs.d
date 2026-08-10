@@ -184,7 +184,7 @@ Populates the cache on first use; `bp/agent-sessions-refresh' clears it."
 Agents typically set this to something like the current task/session summary.")
 
 (defvar-local bp/agent-session-title-override nil
-  "A user-chosen title for this session, set via the dashboard's `e' command.
+  "A user-chosen title for this session, set via the dashboard's `t' command.
 When non-nil it takes precedence over `bp/agent-session-title' everywhere the
 session is labelled, so the agent's OSC title updates don't clobber it.")
 
@@ -558,17 +558,24 @@ indentation conveys the relationship."
          (branched-from (plist-get session :branched-from))
          (indent (make-string (* 2 (or depth 0)) ?\s)))
     (magit-insert-section (bp/agent-session-row id)
-      (insert (propertize
-               (concat "    " indent marker
-                       (format "%-7s %-16s %s%s%s\n"
-                               (plist-get session :agent-type)
-                               status
-                               title
-                               (if last-event (format " (%s)" last-event) "")
-                               (if (and branched-from (not suppress-parent-note))
-                                   (format "  ↳ from %s" (cdr branched-from))
-                                 "")))
-               'font-lock-face face)))))
+      ;; A heading rather than a plain insert so the row's note becomes its
+      ;; collapsible body; with no note the body is empty and magit shows no
+      ;; fold indicator.
+      (magit-insert-heading
+        (propertize
+         (concat "    " indent marker
+                 (format "%-7s %-16s %s%s%s\n"
+                         (plist-get session :agent-type)
+                         status
+                         title
+                         (if last-event (format " (%s)" last-event) "")
+                         (if (and branched-from (not suppress-parent-note))
+                             (format "  ↳ from %s" (cdr branched-from))
+                           "")))
+         'font-lock-face face))
+      (bp/agent-sessions--insert-note
+       (bp/agent-sessions--session-note-keys session)
+       (concat "    " indent "    ")))))
 
 (defun bp/agent-sessions--insert-entries (entries)
   "Insert ENTRIES, nesting any branched session under its parent when present.
@@ -891,6 +898,168 @@ rest keep the automatic order after them."
          (lambda (a b) (string< (or (plist-get a :name) "")
                                 (or (plist-get b :name) ""))))))
 
+;;; Notes -------------------------------------------------------------------
+;;
+;; `e' attaches a free-form, multi-line note to the repo, worktree, or session
+;; at point; it renders under that thing's heading.  Persisted for the same
+;; reason as the manual order: it is something the user wrote, not session
+;; state, so it has to outlive both the session and Emacs.
+
+(defcustom bp/agent-sessions-notes-file
+  (expand-file-name "agent-sessions-notes.el" user-emacs-directory)
+  "File remembering the notes attached with `e' (`bp/agent-sessions-edit-note').
+Holds an alist of (KEY . NOTE); see `bp/agent-sessions--notes'."
+  :type 'file)
+
+(defvar bp/agent-sessions--notes nil
+  "Hash table KEY -> note string, or nil before the notes file is first read.
+A KEY is (\"repo\" REPO-KEY), (\"worktree\" WORKTREE-KEY) or (\"session\" ID),
+reusing the stable identities of the manual order.  The type tag is not
+decoration: a repo's *main* worktree has the same canonical path as the repo
+itself, so an untagged key would make those two share one note.
+
+For a session, ID is the agent's own session id when it has one — that
+survives renaming the terminal buffer — and the buffer name otherwise, which is
+all a plain terminal has to be identified by.  See
+`bp/agent-sessions--session-note-keys'.")
+
+(defun bp/agent-sessions--notes-table ()
+  "Return the notes table, loading `bp/agent-sessions-notes-file' once."
+  (or bp/agent-sessions--notes
+      (setq bp/agent-sessions--notes
+            (bp/agent-sessions--read-key-alist bp/agent-sessions-notes-file))))
+
+(defun bp/agent-sessions--repo-note-key (repo)
+  "Note key for REPO, a plist with :root/:name (a repo section's value)."
+  (list "repo" (bp/agent-sessions--repo-key repo)))
+
+(defun bp/agent-sessions--worktree-note-key (wt)
+  "Note key for worktree WT, a plist with :path/:label."
+  (list "worktree" (bp/agent-sessions--worktree-key wt)))
+
+(defun bp/agent-sessions--session-note-keys (session)
+  "Note keys to try for SESSION, most durable identity first.
+An agent session is keyed by the agent's own session id, so renaming its
+terminal buffer keeps the note; a plain terminal has no such id and falls back
+to its buffer name.  Both keys are consulted when reading, so a note written on
+a bare terminal is still found once `claude'/`codex' starts in it and the
+session gains an id — at which point `bp/agent-sessions--note-set' moves it to
+the id key."
+  (let ((sid (plist-get session :agent-session-id))
+        (name (bp/agent-sessions--session-buffer-name session)))
+    (delq nil (list (and sid (list "session" sid))
+                    (and (not (string-empty-p name)) (list "session" name))))))
+
+(defun bp/agent-sessions--note-find (keys)
+  "Return (KEY . NOTE) for the first of KEYS carrying a note, or nil."
+  (let ((table (bp/agent-sessions--notes-table)))
+    (seq-some (lambda (key)
+                (let ((note (gethash key table)))
+                  (and (stringp note) (not (string-empty-p note))
+                       (cons key note))))
+              keys)))
+
+(defun bp/agent-sessions--note-set (keys note)
+  "Store NOTE under the first of KEYS and save; an empty NOTE removes it.
+Notes under the remaining (less durable) KEYS are dropped, so a session that
+gains an agent session id ends up with its note under that id alone rather than
+one note per identity it has had."
+  (let ((table (bp/agent-sessions--notes-table)))
+    (dolist (key (cdr keys)) (remhash key table))
+    (if (and note (not (string-empty-p note)))
+        (puthash (car keys) note table)
+      (remhash (car keys) table))
+    (bp/agent-sessions--write-key-alist
+     bp/agent-sessions-notes-file
+     "Notes attached in the agent-sessions dashboard (e)."
+     table)))
+
+(defface bp/agent-session-note
+  '((t :inherit font-lock-comment-face))
+  "Face for a note attached to a repo, worktree, or session row.")
+
+(defun bp/agent-sessions--insert-note (keys indent)
+  "Insert the note for KEYS, if any, as a section indented by INDENT.
+The note's first line is the section heading and the rest its body, so TAB
+collapses a long note to one line and expands it again.  Fold state survives
+the dashboard's re-render because magit caches it per section identity, and a
+note's identity is its key — not its position or text."
+  (when-let ((found (bp/agent-sessions--note-find keys)))
+    (let ((lines (split-string (cdr found) "\n")))
+      (magit-insert-section (bp/agent-session-note (car found))
+        (magit-insert-heading
+          (propertize (concat indent "· " (car lines))
+                      'font-lock-face 'bp/agent-session-note))
+        (dolist (line (cdr lines))
+          (insert (propertize (concat indent "  " line "\n")
+                              'font-lock-face 'bp/agent-session-note)))))))
+
+(defun bp/agent-sessions--note-target-at-point ()
+  "Return (KEYS . LABEL) for the note-bearing thing at point, or nil.
+Point may be on a repo heading, a worktree heading or a session row — or inside
+a note already rendered under one of those, which resolves to its parent so `e'
+re-edits the note point is sitting in."
+  (let ((section (magit-current-section)))
+    (when (and section (eq (oref section type) 'bp/agent-session-note))
+      (setq section (oref section parent)))
+    (pcase (and section (oref section type))
+      ('bp/agent-session-repo
+       (let ((value (oref section value)))
+         (cons (list (bp/agent-sessions--repo-note-key value))
+               (or (plist-get value :name) "repo"))))
+      ('bp/agent-session-worktree
+       (let ((value (oref section value)))
+         (cons (list (bp/agent-sessions--worktree-note-key value))
+               (or (plist-get value :label) "worktree"))))
+      ('bp/agent-session-row
+       (when-let* ((session (bp/agent-sessions--session-for-id
+                             (oref section value)))
+                   ;; No id and no buffer name means nothing durable to hang a
+                   ;; note on (a registry entry whose buffer is already gone).
+                   (keys (bp/agent-sessions--session-note-keys session)))
+         (cons keys (bp/agent-sessions--session-short-label session)))))))
+
+(defun bp/agent-sessions-note-newline ()
+  "Insert a line break into the note being read in the minibuffer."
+  (interactive)
+  (insert "\n"))
+
+(defvar bp/agent-sessions-note-minibuffer-map
+  (let ((map (make-sparse-keymap)))
+    (set-keymap-parent map minibuffer-local-map)
+    (define-key map (kbd "C-j") #'bp/agent-sessions-note-newline)
+    map)
+  "Keymap used while reading a note with `bp/agent-sessions-edit-note'.
+Notes are multi-line, but `minibuffer-local-map' binds \\`C-j' to
+`exit-minibuffer' just like \\`RET', so it has to be rebound here; \\`RET'
+still accepts the note.")
+
+(defun bp/agent-sessions-edit-note (&optional remove)
+  "Attach or edit a note on the repo, worktree, or session at point.
+The note is free-form text shown under that thing's heading, foldable with TAB,
+and persisted in `bp/agent-sessions-notes-file'.  Insert a line break with
+\\<bp/agent-sessions-note-minibuffer-map>\\[bp/agent-sessions-note-newline] and
+accept with \\[exit-minibuffer]; an empty note removes it.  With a prefix
+argument (REMOVE), delete the note without prompting — emptying a many-line
+note by hand is tedious, since \\[kill-line] only kills the line point is on."
+  (interactive "P")
+  (pcase (bp/agent-sessions--note-target-at-point)
+    (`(,keys . ,label)
+     (let* ((existing (cdr (bp/agent-sessions--note-find keys)))
+            (note (if remove
+                      ""
+                    (string-trim
+                     (read-from-minibuffer
+                      (format "Note for %s (C-j for newline): " label)
+                      existing bp/agent-sessions-note-minibuffer-map)))))
+       (bp/agent-sessions--note-set keys note)
+       (bp/agent-sessions--refresh)
+       (message (if (string-empty-p note)
+                    "Note cleared for %s."
+                  "Note saved for %s.")
+                label)))
+    (_ (message "Point is not on a repo, worktree, or session."))))
+
 (defun bp/agent-sessions--build-tree (entries)
   "Group live ENTRIES into a list of repo plists for rendering.
 Each element is (:name NAME :root ROOT :worktrees (WORKTREE ...)).
@@ -925,6 +1094,8 @@ most-recently-active first; otherwise the stable order of
                            (list :label (plist-get wt :label)
                                  :path (plist-get wt :path)))
       (magit-insert-heading (format "  %s" (plist-get wt :label)))
+      (bp/agent-sessions--insert-note
+       (list (bp/agent-sessions--worktree-note-key wt)) "    ")
       (bp/agent-sessions--insert-entries entries))))
 
 (defun bp/agent-sessions--insert-repo (repo)
@@ -932,6 +1103,8 @@ most-recently-active first; otherwise the stable order of
                          (list :name (plist-get repo :name)
                                :root (plist-get repo :root)))
     (magit-insert-heading (propertize (plist-get repo :name) 'face 'bold))
+    (bp/agent-sessions--insert-note
+     (list (bp/agent-sessions--repo-note-key repo)) "  ")
     (dolist (wt (plist-get repo :worktrees))
       (bp/agent-sessions--insert-worktree wt))
     (insert "\n")))
@@ -953,6 +1126,13 @@ most-recently-active first; otherwise the stable order of
             (insert "No active sessions.\n")
           (dolist (repo repos)
             (bp/agent-sessions--insert-repo repo)))))
+    ;; Freshly inserted sections carry the visibility magit cached for them
+    ;; (e.g. a note folded with TAB) in their `hidden' slot, but nothing has
+    ;; applied it to the new text yet; this pass does, exactly as
+    ;; `magit-refresh-buffer' does after its own inserters run.  Rebind the
+    ;; cache off so re-showing doesn't record the state it is restoring.
+    (let ((magit-section-cache-visibility nil))
+      (magit-section-show magit-root-section))
     (let ((target (and ident (magit-get-section ident))))
       (goto-char (if target (oref target start) (point-min))))
     (when win
@@ -1599,7 +1779,8 @@ repo > worktree > session tree with foldable sections (TAB to fold/unfold)."
 (define-key bp/agent-sessions-mode-map (kbd "k") #'bp/agent-sessions-kill)
 (define-key bp/agent-sessions-mode-map (kbd "b") #'bp/agent-sessions-branch)
 (define-key bp/agent-sessions-mode-map (kbd "B") #'bp/agent-sessions-mark-parent)
-(define-key bp/agent-sessions-mode-map (kbd "e") #'bp/agent-sessions-edit-title)
+(define-key bp/agent-sessions-mode-map (kbd "t") #'bp/agent-sessions-edit-title)
+(define-key bp/agent-sessions-mode-map (kbd "e") #'bp/agent-sessions-edit-note)
 (define-key bp/agent-sessions-mode-map (kbd "g") #'bp/agent-sessions-refresh)
 (define-key bp/agent-sessions-mode-map (kbd "s") #'bp/agent-sessions-toggle-sort)
 (define-key bp/agent-sessions-mode-map (kbd "+") #'bp/agent-sessions-new-vterm)
