@@ -716,9 +716,12 @@ buckets carries information, whereas a row moving because a tool ran does not.")
     (and (buffer-live-p buf)
          (buffer-local-value 'bp/agent-session--created-at buf))))
 
-(defun bp/agent-sessions--entry-buffer-name (entry)
-  (let ((buf (plist-get (plist-get entry :session) :buffer)))
+(defun bp/agent-sessions--session-buffer-name (session)
+  (let ((buf (plist-get session :buffer)))
     (or (and (buffer-live-p buf) (buffer-name buf)) "")))
+
+(defun bp/agent-sessions--entry-buffer-name (entry)
+  (bp/agent-sessions--session-buffer-name (plist-get entry :session)))
 
 (defun bp/agent-sessions--sort-entries (entries)
   "Sort ENTRIES by attention bucket, then oldest-first, then buffer name.
@@ -742,26 +745,151 @@ order (e.g. for buffers with no creation stamp)."
                       (t (string< (bp/agent-sessions--entry-buffer-name a)
                                   (bp/agent-sessions--entry-buffer-name b))))))))))
 
+;;; Persisted user intent ---------------------------------------------------
+;;
+;; Everything else in this file is rebuilt from live buffers, but the manual
+;; order (below) and the notes (further down) record decisions the *user* made,
+;; not observed session state, so they are written to disk (see CLAUDE.md).
+;; Both are stored the same way: a file holding an alist of (KEY . VALUE) where
+;; KEY is a list, read into a hash table on first use.
+
+(defun bp/agent-sessions--read-key-alist (file)
+  "Read FILE's alist of (KEY . VALUE) into a fresh hash table.
+KEY must be a list (both callers use type-tagged, path-bearing keys).  A
+missing, unreadable, or malformed FILE is not an error — it yields an empty
+table, i.e. \"the user hasn't recorded anything\"."
+  (let ((table (make-hash-table :test 'equal)))
+    (when (file-readable-p file)
+      (dolist (cell (ignore-errors
+                      (with-temp-buffer
+                        (insert-file-contents file)
+                        (read (current-buffer)))))
+        (when (and (consp cell) (consp (car cell)))
+          (puthash (car cell) (cdr cell) table))))
+    table))
+
+(defun bp/agent-sessions--write-key-alist (file comment table)
+  "Write TABLE's non-nil entries to FILE as an alist, headed by COMMENT.
+Keys are sorted so the file has a stable, diffable layout."
+  (let (alist)
+    (maphash (lambda (k v) (when v (push (cons k v) alist))) table)
+    (with-temp-file file
+      (insert ";; -*- lisp-data -*-\n;; " comment "\n")
+      (pp (sort alist (lambda (a b) (string< (format "%S" (car a))
+                                             (format "%S" (car b)))))
+          (current-buffer)))))
+
+;;; Manual order ------------------------------------------------------------
+;;
+;; `M-n' / `M-p' nudge the thing at point within its group, overriding the
+;; automatic order of `--sort-tree-stable' for that group only.
+
+(defcustom bp/agent-sessions-order-file
+  (expand-file-name "agent-sessions-order.el" user-emacs-directory)
+  "File remembering the manual dashboard order set with `M-n' / `M-p'.
+Holds an alist of (SCOPE . KEYS); see `bp/agent-sessions--order-table'."
+  :type 'file)
+
+(defvar bp/agent-sessions--order nil
+  "Hash table SCOPE -> ordered list of item keys, or nil before first load.
+One scope per group that can be reordered: the repo list, one per repo's
+worktrees, one per worktree's sessions.  A scope is a list — (\"worktrees\"
+REPO-KEY) and friends — rather than a joined string, so no separator character
+can ever appear inside a path component and blur two scopes together.
+
+Item keys are stable identities rather than display labels, which change with
+a branch checkout: a canonical repo root, a canonical worktree path, and — for
+a session — its buffer name, the only session-level identity that can outlive
+a restart.  See `bp/agent-sessions--order-file'.")
+
+(defconst bp/agent-sessions--repos-scope '("repos"))
+
+(defun bp/agent-sessions--worktrees-scope (repo-key)
+  (list "worktrees" repo-key))
+
+(defun bp/agent-sessions--sessions-scope (repo-key worktree-key)
+  (list "sessions" repo-key worktree-key))
+
+(defun bp/agent-sessions--repo-key (repo)
+  "Manual-order key for REPO: its canonical root, else its display name."
+  (or (bp/agent-sessions--canonical-path (plist-get repo :root))
+      (plist-get repo :name)
+      "?"))
+
+(defun bp/agent-sessions--worktree-key (wt)
+  "Manual-order key for worktree WT: its canonical path, else its label.
+Only ever compared within one repo's scope, so the label fallback can't
+collide with a like-named worktree of another repo."
+  (or (bp/agent-sessions--canonical-path (plist-get wt :path))
+      (plist-get wt :label)
+      "?"))
+
+(defun bp/agent-sessions--order-table ()
+  "Return the manual-order table, loading `bp/agent-sessions-order-file' once.
+A missing or unreadable file is not an error — it just means no manual order."
+  (or bp/agent-sessions--order
+      (setq bp/agent-sessions--order
+            (bp/agent-sessions--read-key-alist bp/agent-sessions-order-file))))
+
+(defun bp/agent-sessions--order-save ()
+  "Write the manual-order table to `bp/agent-sessions-order-file'."
+  (bp/agent-sessions--write-key-alist
+   bp/agent-sessions-order-file
+   "Manual order for the agent-sessions dashboard (M-n / M-p)."
+   (bp/agent-sessions--order-table)))
+
+(defun bp/agent-sessions--apply-manual-order (scope key-fn items)
+  "Return ITEMS reordered to match the manual order recorded for SCOPE.
+KEY-FN maps an item to its manual-order key.  Items with no recorded key keep
+their incoming (automatic) order and follow the ones that have, so a session
+or worktree that appears after a reorder lands at the end of its group rather
+than displacing anything the user placed deliberately."
+  (let ((order (gethash scope (bp/agent-sessions--order-table))))
+    (if (null order)
+        items
+      (let (ranked rest)
+        (dolist (item items)
+          (let ((pos (seq-position order (funcall key-fn item))))
+            (if pos (push (cons pos item) ranked) (push item rest))))
+        (append (mapcar #'cdr (sort (nreverse ranked)
+                                    (lambda (a b) (< (car a) (car b)))))
+                (nreverse rest))))))
+
 (defun bp/agent-sessions--sort-tree-stable (repos)
-  "Order REPOS alphabetically, their worktrees alphabetically, rows by attention.
-The tree skeleton is deliberately *not* ordered by activity or attention: a
-fixed repo/worktree layout is what makes the dashboard navigable from memory.
-Urgency surfaces within a worktree instead, via `--sort-entries'."
-  (sort (mapcar
-         (lambda (repo)
-           (plist-put
-            repo :worktrees
-            (sort (mapcar
-                   (lambda (wt)
-                     (plist-put wt :entries
-                                (bp/agent-sessions--sort-entries
-                                 (plist-get wt :entries))))
-                   (plist-get repo :worktrees))
-                  (lambda (a b) (string< (or (plist-get a :label) "")
-                                         (or (plist-get b :label) ""))))))
-         repos)
-        (lambda (a b) (string< (or (plist-get a :name) "")
-                               (or (plist-get b :name) "")))))
+  "Order REPOS alphabetically, their worktrees alphabetically, rows by attention,
+then apply any manual order (`M-n' / `M-p') on top at each level.
+The automatic tree skeleton is deliberately *not* ordered by activity or
+attention: a fixed repo/worktree layout is what makes the dashboard navigable
+from memory.  Urgency surfaces within a worktree instead, via `--sort-entries'.
+A manually placed group overrides that for the items the user positioned; the
+rest keep the automatic order after them."
+  (bp/agent-sessions--apply-manual-order
+   bp/agent-sessions--repos-scope
+   #'bp/agent-sessions--repo-key
+   (sort (mapcar
+          (lambda (repo)
+            (let ((rkey (bp/agent-sessions--repo-key repo)))
+              (plist-put
+               repo :worktrees
+               (bp/agent-sessions--apply-manual-order
+                (bp/agent-sessions--worktrees-scope rkey)
+                #'bp/agent-sessions--worktree-key
+                (sort (mapcar
+                       (lambda (wt)
+                         (plist-put
+                          wt :entries
+                          (bp/agent-sessions--apply-manual-order
+                           (bp/agent-sessions--sessions-scope
+                            rkey (bp/agent-sessions--worktree-key wt))
+                           #'bp/agent-sessions--entry-buffer-name
+                           (bp/agent-sessions--sort-entries
+                            (plist-get wt :entries)))))
+                       (plist-get repo :worktrees))
+                      (lambda (a b) (string< (or (plist-get a :label) "")
+                                             (or (plist-get b :label) ""))))))))
+          repos)
+         (lambda (a b) (string< (or (plist-get a :name) "")
+                                (or (plist-get b :name) ""))))))
 
 (defun bp/agent-sessions--build-tree (entries)
   "Group live ENTRIES into a list of repo plists for rendering.
@@ -1179,6 +1307,139 @@ trade places constantly; the stable order is the default for that reason."
   (interactive)
   (bp/agent-sessions--goto-row 'prev #'bp/agent-sessions--attention-p))
 
+(defun bp/agent-sessions--enclosing-section (type)
+  "Return the innermost section of TYPE at or above point, or nil."
+  (let ((section (magit-current-section)))
+    (while (and section (not (eq (oref section type) type)))
+      (setq section (oref section parent)))
+    section))
+
+(defun bp/agent-sessions--group-at-point ()
+  "Return (SCOPE KEYS KEY) for the reorderable thing at point, or nil.
+SCOPE is its manual-order scope, KEYS the manual-order keys of every sibling
+in its group in current display order, and KEY its own key.  The group is
+re-derived from the live tree rather than scraped from the buffer, so the keys
+are exactly what the next render will order."
+  (let* ((section (magit-current-section))
+         (repos (bp/agent-sessions--build-tree (bp/agent-sessions--live-entries)))
+         (repo-sec (bp/agent-sessions--enclosing-section 'bp/agent-session-repo))
+         (rkey (and repo-sec (bp/agent-sessions--repo-key (oref repo-sec value))))
+         (repo (and rkey (seq-find (lambda (r)
+                                     (equal rkey (bp/agent-sessions--repo-key r)))
+                                   repos))))
+    (pcase (and section (oref section type))
+      ('bp/agent-session-repo
+       (list bp/agent-sessions--repos-scope
+             (mapcar #'bp/agent-sessions--repo-key repos)
+             rkey))
+      ('bp/agent-session-worktree
+       (when repo
+         (list (bp/agent-sessions--worktrees-scope rkey)
+               (mapcar #'bp/agent-sessions--worktree-key
+                       (plist-get repo :worktrees))
+               (bp/agent-sessions--worktree-key (oref section value)))))
+      ('bp/agent-session-row
+       (let* ((wt-sec (bp/agent-sessions--enclosing-section
+                       'bp/agent-session-worktree))
+              (wkey (and wt-sec repo
+                         (bp/agent-sessions--worktree-key (oref wt-sec value))))
+              (wt (and wkey
+                       (seq-find (lambda (w)
+                                   (equal wkey
+                                          (bp/agent-sessions--worktree-key w)))
+                                 (plist-get repo :worktrees))))
+              (session (bp/agent-sessions--session-for-id (oref section value))))
+         (when (and wt session)
+           (list (bp/agent-sessions--sessions-scope rkey wkey)
+                 (mapcar #'bp/agent-sessions--entry-buffer-name
+                         (plist-get wt :entries))
+                 (bp/agent-sessions--session-buffer-name session))))))))
+
+(defun bp/agent-sessions--merge-order (saved visible)
+  "Splice the VISIBLE key order into SAVED, keeping absent keys in place.
+Each slot in SAVED held by a currently visible key is refilled from VISIBLE in
+order, and visible keys SAVED doesn't know about are appended.  Rewriting a
+group therefore never discards the remembered slot of a repo, worktree, or
+session that simply isn't on screen right now (all its terminals closed, say)."
+  (let ((queue visible)
+        (vis (let ((h (make-hash-table :test 'equal)))
+               (dolist (k visible) (puthash k t h))
+               h))
+        result)
+    (dolist (k saved)
+      (if (gethash k vis)
+          (when queue (push (pop queue) result))
+        (push k result)))
+    (append (nreverse result) queue)))
+
+(defun bp/agent-sessions--persist-move (scope keys key delta)
+  "Record KEY shifted by DELTA among KEYS within SCOPE, and save.
+Returns non-nil when the order changed; messages and returns nil when KEY is
+already at the end it is being moved towards."
+  (let* ((pos (seq-position keys key))
+         (new (and pos (+ pos delta))))
+    (cond
+     ((null pos) (message "Nothing to reorder at point.") nil)
+     ((or (< new 0) (>= new (length keys)))
+      (message "Already %s in its group." (if (< delta 0) "first" "last"))
+      nil)
+     (t
+      (let ((swapped (copy-sequence keys))
+            (table (bp/agent-sessions--order-table)))
+        (setf (nth pos swapped) (nth new keys)
+              (nth new swapped) key)
+        (puthash scope
+                 (bp/agent-sessions--merge-order (gethash scope table) swapped)
+                 table)
+        (bp/agent-sessions--order-save)
+        t)))))
+
+(defun bp/agent-sessions--move (delta)
+  "Move the repo, worktree, or session row at point by DELTA within its group."
+  (if bp/agent-sessions-sort-by-activity
+      (message "Manual order is ignored while sorting by activity (press `s').")
+    (pcase (bp/agent-sessions--group-at-point)
+      (`(,scope ,keys ,key)
+       (when (bp/agent-sessions--persist-move scope keys key delta)
+         (bp/agent-sessions--refresh)))
+      (_ (message "Nothing to reorder at point.")))))
+
+(defun bp/agent-sessions-move-down ()
+  "Move the repo, worktree, or session at point one place down its group.
+Only the enclosing group is affected: a session moves among the sessions of
+its worktree, a worktree among its repo's worktrees, a repo among the repos.
+The chosen order is written to `bp/agent-sessions-order-file', so it survives
+both the session and Emacs itself; a session is remembered by its buffer name,
+so renaming one forgets its place.  Unavailable while sorting by activity
+\(`s'), which reorders by recency on every event.  `C-c C-o' clears it again."
+  (interactive)
+  (bp/agent-sessions--move 1))
+
+(defun bp/agent-sessions-move-up ()
+  "Move the repo, worktree, or session at point one place up its group.
+See `bp/agent-sessions-move-down'."
+  (interactive)
+  (bp/agent-sessions--move -1))
+
+(defun bp/agent-sessions-clear-manual-order ()
+  "Forget the manual order (`M-n' / `M-p') and return to the automatic one.
+With point inside a repo, worktree, or on a session row, clears just that
+item's group; with a prefix argument, clears every group."
+  (interactive)
+  (let ((table (bp/agent-sessions--order-table)))
+    (if current-prefix-arg
+        (progn (clrhash table)
+               (bp/agent-sessions--order-save)
+               (bp/agent-sessions--refresh)
+               (message "Manual order cleared everywhere."))
+      (pcase (bp/agent-sessions--group-at-point)
+        (`(,scope ,_ ,_)
+         (remhash scope table)
+         (bp/agent-sessions--order-save)
+         (bp/agent-sessions--refresh)
+         (message "Manual order cleared for this group."))
+        (_ (message "Point is not in a reorderable group."))))))
+
 ;;;###autoload
 (defun bp/agent-session-rename-to-title ()
   "Rename the current vterm buffer to its agent session title.
@@ -1346,6 +1607,9 @@ repo > worktree > session tree with foldable sections (TAB to fold/unfold)."
 (define-key bp/agent-sessions-mode-map (kbd "p") #'bp/agent-sessions-prev)
 (define-key bp/agent-sessions-mode-map (kbd "N") #'bp/agent-sessions-next-attention)
 (define-key bp/agent-sessions-mode-map (kbd "P") #'bp/agent-sessions-prev-attention)
+(define-key bp/agent-sessions-mode-map (kbd "M-n") #'bp/agent-sessions-move-down)
+(define-key bp/agent-sessions-mode-map (kbd "M-p") #'bp/agent-sessions-move-up)
+(define-key bp/agent-sessions-mode-map (kbd "C-c C-o") #'bp/agent-sessions-clear-manual-order)
 
 ;;; Wiring our hooks into Claude Code / Codex ------------------------------
 ;;
