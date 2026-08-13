@@ -24,3 +24,6 @@
 /.dap-breakpoints
 /*.sqlite
 /ielm-history.eld
+/agent-sessions.db
+/agent-sessions.db-shm
+/agent-sessions.db-wal

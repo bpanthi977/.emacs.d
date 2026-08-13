@@ -10,6 +10,10 @@
 (require 'seq)
 (require 'json)
 (require 'server)
+;; Not autoloaded: `with-sqlite-transaction' is a macro in sqlite.el, so
+;; without this the persistent store's writes fail at *call* time, long after
+;; the file has loaded cleanly.
+(require 'sqlite)
 (require 'magit)
 (require 'magit-section)
 (require 'project)
@@ -162,6 +166,7 @@ Populates the cache on first use; `bp/agent-sessions-refresh' clears it."
 
 (defun bp/agent-session--cleanup ()
   (when bp/agent-session-id
+    (bp/agent-sessions--log-close-buffer)
     (remhash bp/agent-session-id bp/agent-session-id->buffer)
     (remhash bp/agent-session-id bp/agent-sessions)
     (bp/agent-sessions--refresh-if-visible)))
@@ -176,6 +181,7 @@ Populates the cache on first use; `bp/agent-sessions-refresh' clears it."
         (setq-local bp/agent-session-id id)
         (setq-local bp/agent-session--created-at (current-time))
         (add-hook 'kill-buffer-hook #'bp/agent-session--cleanup nil t))
+      (bp/agent-sessions--log-open buf)
       (bp/agent-sessions--refresh-if-visible))
     buf))
 
@@ -219,6 +225,7 @@ inherits when it spawns the shell) and registers the resulting buffer."
         (setq-local bp/agent-session-id id)
         (setq-local bp/agent-session--created-at (current-time))
         (add-hook 'kill-buffer-hook #'bp/agent-session--cleanup nil t))
+      (bp/agent-sessions--log-open buf)
       (bp/agent-sessions--refresh-if-visible))
     buf))
 
@@ -343,6 +350,14 @@ the body names the agent type, state, and its terminal title (task summary)."
                        :worktree-path (plist-get info :worktree-path)
                        :branched-from branched-from)
                  bp/agent-sessions)
+        ;; Keep the restore log in step.  `SessionEnd' is the agent telling us
+        ;; it is going away while its terminal stays; every other event just
+        ;; describes a session that is still running.  Note this deliberately
+        ;; does not appear in `bp/agent-session-status-alist': ending is not a
+        ;; status a straggler event should be able to undo.
+        (if (equal event-name "SessionEnd")
+            (bp/agent-sessions--log-end buf)
+          (bp/agent-sessions--log-update buf agent-type agent-session-id))
         ;; Notify only on the transition *into* an attention state, so a
         ;; session that stays waiting isn't re-announced on every later event.
         (when (and bp/agent-session-notify-on-attention
@@ -375,13 +390,70 @@ recompute when the buffer's `default-directory' changes (e.g. after a `cd').")
     ('eat-mode 'eat)
     (_ 'term)))
 
+(defvar-local bp/agent-sessions--foreground-cache nil
+  "Cache for `bp/agent-sessions--foreground-command': (TPGID . NAME).")
+
+(defun bp/agent-sessions--foreground-command (buf)
+  "Name of the command running in the foreground of BUF's terminal, or nil.
+Nil means BUF's own shell is in the foreground — nothing is running — so the
+caller should fall back to naming the terminal backend.
+
+Reads the pty's foreground process *group* (`tpgid') straight out of Emacs's
+native process table: two `process-attributes' calls, no subprocess and no
+walk of the process list.  When a command is in the foreground the kernel
+points `tpgid' at that job's leader; when it exits, `tpgid' returns to the
+shell's own `pgrp', so a row tracks start and finish with no bookkeeping and
+nothing to keep in sync.
+
+The name comes from `args', not `comm': Claude's executable lives in a
+version-numbered directory, so its `comm' reads \"2.1.231\".  Platforms whose
+`process-attributes' omits `tpgid' just get nil, and rows read as before.
+
+The foreground group is re-read on every call, and only the *name* is cached,
+reused while that group is unchanged.  That test is exact rather than a
+heuristic — the same foreground group is the same job, so its name cannot have
+changed — which is why there is no time-based reuse here.  A timed cache was
+tried and removed: reading the group for 12 terminals costs ~3.6ms against a
+~22ms refresh, and skipping that check bought back only those 3.6ms in
+exchange for a label that could be up to a third of a second out of date.  For
+a display whose whole purpose is showing what is running now, that is the
+wrong side of the trade; `g' already costs ~1.4s, so this is not the expensive
+thing on the path.  What the cache does save is real: reading a *command line*
+is the costly half, and a job that sits there never pays it twice."
+  (with-current-buffer buf
+    (let* ((proc (get-buffer-process buf))
+           (attrs (and proc (process-live-p proc)
+                       (ignore-errors (process-attributes (process-id proc)))))
+           (tpgid (cdr (assq 'tpgid attrs)))
+           (pgrp (cdr (assq 'pgrp attrs)))
+           ;; Non-nil only when some job other than the shell holds the
+           ;; terminal, i.e. a command is actually running.
+           (fg (and (integerp tpgid) (> tpgid 0) (not (eql tpgid pgrp)) tpgid))
+           (cache bp/agent-sessions--foreground-cache))
+      (cond
+       ((null fg)
+        (setq-local bp/agent-sessions--foreground-cache nil)
+        nil)
+       ((and cache (eql fg (car cache)))
+        (cdr cache))
+       (t
+        (let* ((args (cdr (assq 'args (ignore-errors (process-attributes fg)))))
+               (name (and (stringp args) (not (string-empty-p args))
+                          (file-name-nondirectory
+                           (car (split-string args nil t))))))
+          (setq-local bp/agent-sessions--foreground-cache (cons fg name))
+          name))))))
+
 (defun bp/agent-sessions--terminal-session (buf)
   "Synthesize a session plist for a plain terminal BUF with no agent session.
 These fill in for vterm/eat buffers that have not (yet) fired an agent hook,
 so idle terminals still appear in the dashboard tree."
   (let ((info (bp/agent-sessions--buffer-repo-info buf)))
     (list :buffer buf
-          :agent-type (bp/agent-sessions--buffer-terminal-type buf)
+          ;; Whatever is running right now, agent or not; the backend name only
+          ;; when the terminal is sitting at its shell prompt.
+          :agent-type (or (bp/agent-sessions--foreground-command buf)
+                          (bp/agent-sessions--buffer-terminal-type buf))
           :status 'idle
           :last-event nil
           :updated-at nil
@@ -568,6 +640,14 @@ buffer killed without running local hooks)."
     ('error 'bp/agent-session-error)
     (_ 'default)))
 
+(defvar-local bp/agent-sessions--row-status nil
+  "Alist of (LINE-POS . STATUS) for the rows as last rendered, in buffer order.
+Filled by the render path and consumed by `N'/`P'.  It exists because the
+status a row *shows* is not the one in the registry — `bp/agent-sessions--
+unread-status' overlays the `u' mark onto a copy at display time — so a
+navigation command that re-derives status from the registry silently skips
+every manually marked row.  Record what was drawn; don't derive it twice.")
+
 (defun bp/agent-sessions--insert-session (entry &optional depth suppress-parent-note)
   "Insert a session row for ENTRY.
 DEPTH indents the row (children of a branched-from parent are rendered one
@@ -586,6 +666,8 @@ indentation conveys the relationship."
          (last-event (plist-get session :last-event))
          (branched-from (plist-get session :branched-from))
          (indent (make-string (* 2 (or depth 0)) ?\s)))
+    ;; Record what this row *shows*, for `N'/`P' (see the variable's docstring).
+    (push (cons (line-beginning-position) status) bp/agent-sessions--row-status)
     (magit-insert-section (bp/agent-session-row id)
       ;; A heading rather than a plain insert so the row's note becomes its
       ;; collapsible body; with no note the body is empty and magit shows no
@@ -786,45 +868,286 @@ order (e.g. for buffers with no creation stamp)."
 ;; Everything else in this file is rebuilt from live buffers, but the manual
 ;; order (below) and the notes (further down) record decisions the *user* made,
 ;; not observed session state, so they are written to disk (see CLAUDE.md).
-;; Both are stored the same way: a file holding an alist of (KEY . VALUE) where
-;; KEY is a list, read into a hash table on first use.
+;; All three live in one SQLite file: the notes, the manual order, and the
+;; session log that `R' and `bp/agent-sessions-restore-previous' read.  The log
+;; is what forced a database — it is append-heavy, queried by recency, and
+;; grows without bound, so the old rewrite-the-whole-file-per-change approach
+;; was never going to fit it.  Notes and order moved in alongside so there is
+;; exactly one persistent thing to back up, inspect, or delete.
+;;
+;; Both of those are still cached in a hash table and read from it: the render
+;; path must never touch the database.  The database is read once on first use
+;; and written only when something actually changes.
 
-(defun bp/agent-sessions--read-key-alist (file)
-  "Read FILE's alist of (KEY . VALUE) into a fresh hash table.
-KEY must be a list (both callers use type-tagged, path-bearing keys).  A
-missing, unreadable, or malformed FILE is not an error — it yields an empty
-table, i.e. \"the user hasn't recorded anything\"."
-  (let ((table (make-hash-table :test 'equal)))
-    (when (file-readable-p file)
-      (dolist (cell (ignore-errors
-                      (with-temp-buffer
-                        (insert-file-contents file)
-                        (read (current-buffer)))))
-        (when (and (consp cell) (consp (car cell)))
-          (puthash (car cell) (cdr cell) table))))
-    table))
+(defcustom bp/agent-sessions-db-file
+  (expand-file-name "agent-sessions.db" user-emacs-directory)
+  "SQLite file holding the notes, the manual order, and the session log."
+  :type 'file)
 
-(defun bp/agent-sessions--write-key-alist (file comment table)
-  "Write TABLE's non-nil entries to FILE as an alist, headed by COMMENT.
-Keys are sorted so the file has a stable, diffable layout."
-  (let (alist)
-    (maphash (lambda (k v) (when v (push (cons k v) alist))) table)
-    (with-temp-file file
-      (insert ";; -*- lisp-data -*-\n;; " comment "\n")
-      (pp (sort alist (lambda (a b) (string< (format "%S" (car a))
-                                             (format "%S" (car b)))))
-          (current-buffer)))))
+(defconst bp/agent-sessions--schema-version 1)
+
+(defvar bp/agent-sessions--db nil
+  "Open SQLite handle, or nil before the database is first used.")
+
+(defvar bp/agent-sessions--heartbeat-timer nil
+  "Timer stamping `meta.last_seen'; see `bp/agent-sessions--db-heartbeat'.")
+
+(defconst bp/agent-sessions--db-schema
+  '("CREATE TABLE IF NOT EXISTS meta (
+       key   TEXT PRIMARY KEY,
+       value TEXT NOT NULL)"
+
+    ;; One row per agent session — not per terminal.  A terminal you run
+    ;; `claude' in twice produces two rows, so either can be restored.
+    "CREATE TABLE IF NOT EXISTS sessions (
+       id           INTEGER PRIMARY KEY,
+       emacs_sid    TEXT    NOT NULL,
+       agent_type   TEXT,
+       agent_sid    TEXT,
+       worktree     TEXT    NOT NULL,
+       repo         TEXT,
+       label        TEXT,
+       title        TEXT,
+       opened_at    INTEGER NOT NULL,
+       closed_at    INTEGER,
+       close_reason TEXT)"
+    "CREATE INDEX IF NOT EXISTS sessions_recent ON sessions (closed_at DESC)"
+    "CREATE INDEX IF NOT EXISTS sessions_open
+       ON sessions (emacs_sid) WHERE closed_at IS NULL"
+    "CREATE INDEX IF NOT EXISTS sessions_agent ON sessions (agent_sid)"
+
+    "CREATE TABLE IF NOT EXISTS notes (
+       kind       TEXT NOT NULL,
+       key        TEXT NOT NULL,
+       note       TEXT NOT NULL,
+       updated_at INTEGER NOT NULL,
+       PRIMARY KEY (kind, key))"
+
+    ;; The scope columns default to '' rather than NULL on purpose: SQLite
+    ;; treats NULLs as distinct from each other in a primary key, so a NULL
+    ;; scope would make every write insert a duplicate instead of replacing.
+    "CREATE TABLE IF NOT EXISTS order_entries (
+       kind           TEXT    NOT NULL,
+       scope_repo     TEXT    NOT NULL DEFAULT '',
+       scope_worktree TEXT    NOT NULL DEFAULT '',
+       member         TEXT    NOT NULL,
+       position       INTEGER NOT NULL,
+       PRIMARY KEY (kind, scope_repo, scope_worktree, member))"
+    "CREATE INDEX IF NOT EXISTS order_group
+       ON order_entries (kind, scope_repo, scope_worktree, position)")
+  "Statements that bring an empty or existing database up to date.
+All are `IF NOT EXISTS', so running them on every open is the whole migration
+story for as long as the schema only ever grows.  `bp/agent-sessions--schema-version'
+is recorded in `meta' so a future change that *rewrites* data can tell how old
+a file is.")
+
+(defun bp/agent-sessions--now () (truncate (float-time)))
+
+(defun bp/agent-sessions--db ()
+  "Return the open database handle, creating the file on first use.
+Opening also reaps (see `bp/agent-sessions--db-reap'), which is why every
+caller goes through here rather than touching `bp/agent-sessions--db'."
+  (if (sqlitep bp/agent-sessions--db)
+      bp/agent-sessions--db
+    (let ((db (sqlite-open bp/agent-sessions-db-file)))
+      ;; WAL so a second Emacs reading the file can't block this one; the
+      ;; timeout so that if one does write, we wait rather than signalling.
+      (sqlite-execute db "PRAGMA journal_mode=WAL")
+      (sqlite-execute db "PRAGMA busy_timeout=3000")
+      (with-sqlite-transaction db
+        (dolist (stmt bp/agent-sessions--db-schema)
+          (sqlite-execute db stmt))
+        (sqlite-execute db "INSERT OR IGNORE INTO meta VALUES ('schema_version', ?)"
+                        (list (number-to-string bp/agent-sessions--schema-version))))
+      (setq bp/agent-sessions--db db)
+      (bp/agent-sessions--db-reap db)
+      db)))
+
+(defun bp/agent-sessions--meta-get (db key)
+  (caar (sqlite-select db "SELECT value FROM meta WHERE key = ?" (list key))))
+
+(defun bp/agent-sessions--meta-set (db key value)
+  (sqlite-execute db "INSERT INTO meta VALUES (?, ?)
+                      ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+                  (list key (format "%s" value))))
+
+(defun bp/agent-sessions--db-reap (db)
+  "Close session rows that a previous Emacs left open by dying.
+This is the whole crash-detection scheme, and it works because there is only
+ever one Emacs: a freshly started one has no sessions of its own yet, so any
+row still marked open must belong to an Emacs that never ran its
+`kill-emacs-hook'.  The heartbeat in `meta' dates the death; without one we
+fall back to when the session opened."
+  (let ((seen (bp/agent-sessions--meta-get db "last_seen")))
+    (sqlite-execute db
+                    "UPDATE sessions
+                        SET closed_at = COALESCE(?, opened_at),
+                            close_reason = 'crash'
+                      WHERE closed_at IS NULL"
+                    (list (and seen (string-to-number seen))))))
+
+(defun bp/agent-sessions--db-heartbeat ()
+  "Record that Emacs was alive just now, so a crash can be dated.
+Deliberately a no-op until the database has been opened for some other
+reason — an Emacs with no agent sessions has nothing to date."
+  (when (sqlitep bp/agent-sessions--db)
+    (bp/agent-sessions--meta-set bp/agent-sessions--db
+                                 "last_seen" (bp/agent-sessions--now))))
+
+;;; Session log -------------------------------------------------------------
+;;
+;; A history of every agent session that has run, so one can be brought back
+;; after it is gone: `R' for one you ended yourself, and
+;; `bp/agent-sessions-restore-previous' for the lot that went down with Emacs.
+;;
+;; This is the one thing here that records *observed session state* rather than
+;; something the user chose, which the ephemerality rule in CLAUDE.md otherwise
+;; forbids.  It earns the exception by never feeding the dashboard: rows still
+;; come only from live buffers, so nothing here can make a dead session look
+;; alive.  It is a record of what happened, including the dying.
+;;
+;; How a session's ending is classified, and why it can be:
+;;
+;;   killed      `kill-buffer-hook' fired — `k' in the dashboard, `C-x k' on
+;;               the terminal, or the shell exiting under it.
+;;   agent-exit  the agent reported `SessionEnd' but the terminal lives on.
+;;   superseded  a different agent session id appeared in the same terminal,
+;;               so the previous one had ended without us hearing.
+;;   emacs-exit  `kill-emacs-hook' fired: Emacs quit with this still running.
+;;   crash       no hook fired at all; found still-open at the next startup.
+;;
+;; The first three mean "you ended it" and are what `R' offers; the last two
+;; mean "it was taken from you" and are what restore-previous offers.  Emacs
+;; runs `kill-emacs-hook' but *not* `kill-buffer-hook' when it exits, and that
+;; asymmetry is the only reason the two can be told apart at all.
+
+(defvar-local bp/agent-session--log-row nil
+  "Row id in the `sessions' table for this terminal's current agent session.
+On the buffer rather than looked up, because a terminal can run several agent
+sessions in turn and each gets its own row.")
+
+(defvar-local bp/agent-session--log-state nil
+  "Last (AGENT-SID AGENT-TYPE TITLE) written for `bp/agent-session--log-row'.
+Compared before every write so a busy session touches the database once per
+agent session instead of once per hook event.  The dashboard re-renders on
+every event; the database must stay off that path.")
+
+(defvar-local bp/agent-session--log-ended-sid nil
+  "Agent session id this terminal has already logged the end of.
+Hook events have no delivery-order guarantee, so an informational event can
+land after `SessionEnd'.  Without this, such a straggler would open a fresh
+row and resurrect a session that has already finished.")
+
+(defun bp/agent-sessions--log-open (buf)
+  "Insert a session-log row for BUF and remember its id on the buffer."
+  (with-current-buffer buf
+    (let* ((info (bp/agent-sessions--buffer-repo-info buf))
+           (db (bp/agent-sessions--db)))
+      (sqlite-execute
+       db "INSERT INTO sessions (emacs_sid, worktree, repo, label, opened_at)
+           VALUES (?, ?, ?, ?, ?)"
+       (list bp/agent-session-id
+             (or (plist-get info :worktree-path)
+                 (bp/agent-sessions--canonical-path default-directory))
+             (plist-get info :repo-root)
+             (plist-get info :worktree)
+             (bp/agent-sessions--now)))
+      (setq-local bp/agent-session--log-state nil)
+      (setq-local bp/agent-session--log-row
+                  (caar (sqlite-select db "SELECT last_insert_rowid()"))))))
+
+(defun bp/agent-sessions--log-close-row (row reason)
+  "Close session-log ROW with REASON, if it is still open."
+  (sqlite-execute (bp/agent-sessions--db)
+                  "UPDATE sessions SET closed_at = ?, close_reason = ?
+                    WHERE id = ? AND closed_at IS NULL"
+                  (list (bp/agent-sessions--now) reason row)))
+
+(defun bp/agent-sessions--log-supersede (row)
+  "Retire ROW, whose terminal has started a *different* agent session.
+Usually that means the previous agent exited without us hearing, and the row
+is closed.  The exception is the fork transient: at `SessionStart' a
+`--fork-session' child reports its parent's id before minting its own, so ROW
+may be a copy of a session still open in another terminal.  Such a row is an
+artifact of the fork rather than a session that ever ran here, so it is
+deleted instead of being offered by `R' as a resumable duplicate.
+
+Note this reads the *log*, never the fork-detection state — see CLAUDE.md on
+why a `sid == parent-sid' test must not go anywhere near that logic."
+  (let ((db (bp/agent-sessions--db)))
+    (if (sqlite-select db
+                       "SELECT 1 FROM sessions a
+                         WHERE a.id = ?
+                           AND EXISTS (SELECT 1 FROM sessions b
+                                        WHERE b.agent_sid = a.agent_sid
+                                          AND b.id <> a.id
+                                          AND b.closed_at IS NULL)"
+                       (list row))
+        (sqlite-execute db "DELETE FROM sessions WHERE id = ?" (list row))
+      (bp/agent-sessions--log-close-row row "superseded"))))
+
+(defun bp/agent-sessions--log-update (buf agent-type agent-sid)
+  "Bring BUF's session-log row in line with the hook event just processed."
+  (with-current-buffer buf
+    (let* ((title (or bp/agent-session-title-override bp/agent-session-title))
+           (state (list agent-sid agent-type title)))
+      (unless (or (equal state bp/agent-session--log-state)
+                  (and agent-sid
+                       (equal agent-sid bp/agent-session--log-ended-sid)))
+        (let ((prev-sid (car bp/agent-session--log-state)))
+          (when (and bp/agent-session--log-row prev-sid agent-sid
+                     (not (equal prev-sid agent-sid)))
+            (bp/agent-sessions--log-supersede bp/agent-session--log-row)
+            (setq-local bp/agent-session--log-row nil))
+          (unless bp/agent-session--log-row
+            (bp/agent-sessions--log-open buf))
+          (sqlite-execute (bp/agent-sessions--db)
+                          "UPDATE sessions
+                              SET agent_type = ?, agent_sid = ?, title = ?
+                            WHERE id = ?"
+                          (list agent-type agent-sid title
+                                bp/agent-session--log-row))
+          (setq-local bp/agent-session--log-state state))))))
+
+(defun bp/agent-sessions--log-end (buf)
+  "Close BUF's current log row: its agent reported that it is exiting.
+The terminal itself lives on, and running an agent in it again opens a fresh
+row rather than reviving this one."
+  (with-current-buffer buf
+    (when bp/agent-session--log-row
+      (bp/agent-sessions--log-close-row bp/agent-session--log-row "agent-exit")
+      (setq-local bp/agent-session--log-ended-sid
+                  (car bp/agent-session--log-state))
+      (setq-local bp/agent-session--log-row nil)
+      (setq-local bp/agent-session--log-state nil))))
+
+(defun bp/agent-sessions--log-close-buffer ()
+  "Close the log rows of the terminal being killed, from `kill-buffer-hook'.
+Covers both `k' in the dashboard (which is a plain `kill-buffer') and `C-x k'
+on the terminal.  Does nothing when the database was never opened, which means
+this Emacs logged no sessions and so has none to close."
+  (when (and bp/agent-session-id (sqlitep bp/agent-sessions--db))
+    (sqlite-execute bp/agent-sessions--db
+                    "UPDATE sessions SET closed_at = ?, close_reason = 'killed'
+                      WHERE emacs_sid = ? AND closed_at IS NULL"
+                    (list (bp/agent-sessions--now) bp/agent-session-id))))
+
+(defun bp/agent-sessions--log-close-all ()
+  "Mark every still-open session as ended by Emacs exiting.
+Runs from `kill-emacs-hook'.  Also stamps the heartbeat, so that if this Emacs
+is *killed* mid-exit the reap still has a recent time to date the crash from."
+  (when (sqlitep bp/agent-sessions--db)
+    (bp/agent-sessions--db-heartbeat)
+    (sqlite-execute bp/agent-sessions--db
+                    "UPDATE sessions
+                        SET closed_at = ?, close_reason = 'emacs-exit'
+                      WHERE closed_at IS NULL"
+                    (list (bp/agent-sessions--now)))))
 
 ;;; Manual order ------------------------------------------------------------
 ;;
 ;; `M-n' / `M-p' nudge the thing at point within its group, overriding the
 ;; automatic order of `--sort-tree-stable' for that group only.
-
-(defcustom bp/agent-sessions-order-file
-  (expand-file-name "agent-sessions-order.el" user-emacs-directory)
-  "File remembering the manual dashboard order set with `M-n' / `M-p'.
-Holds an alist of (SCOPE . KEYS); see `bp/agent-sessions--order-table'."
-  :type 'file)
 
 (defvar bp/agent-sessions--order nil
   "Hash table SCOPE -> ordered list of item keys, or nil before first load.
@@ -836,7 +1159,7 @@ can ever appear inside a path component and blur two scopes together.
 Item keys are stable identities rather than display labels, which change with
 a branch checkout: a canonical repo root, a canonical worktree path, and — for
 a session — its buffer name, the only session-level identity that can outlive
-a restart.  See `bp/agent-sessions--order-file'.")
+a restart.  Backed by the `order_entries' table.")
 
 (defconst bp/agent-sessions--repos-scope '("repos"))
 
@@ -860,19 +1183,73 @@ collide with a like-named worktree of another repo."
       (plist-get wt :label)
       "?"))
 
+(defun bp/agent-sessions--order-scope-row (scope)
+  "Return (KIND SCOPE-REPO SCOPE-WORKTREE) for SCOPE, for use as query values.
+Absent scope components become the empty string, never NULL — see the
+`order_entries' schema for why."
+  (list (car scope) (or (nth 1 scope) "") (or (nth 2 scope) "")))
+
 (defun bp/agent-sessions--order-table ()
-  "Return the manual-order table, loading `bp/agent-sessions-order-file' once.
-A missing or unreadable file is not an error — it just means no manual order."
+  "Return the manual-order table, loading it from the database once.
+An empty table just means the user hasn't reordered anything."
   (or bp/agent-sessions--order
       (setq bp/agent-sessions--order
-            (bp/agent-sessions--read-key-alist bp/agent-sessions-order-file))))
+            (let ((table (make-hash-table :test 'equal)))
+              (pcase-dolist (`(,kind ,repo ,wt ,member)
+                             (sqlite-select
+                              (bp/agent-sessions--db)
+                              "SELECT kind, scope_repo, scope_worktree, member
+                                 FROM order_entries ORDER BY position"))
+                (let ((scope (cond ((string-empty-p repo) (list kind))
+                                   ((string-empty-p wt) (list kind repo))
+                                   (t (list kind repo wt)))))
+                  (puthash scope
+                           (append (gethash scope table) (list member))
+                           table)))
+              table))))
 
-(defun bp/agent-sessions--order-save ()
-  "Write the manual-order table to `bp/agent-sessions-order-file'."
-  (bp/agent-sessions--write-key-alist
-   bp/agent-sessions-order-file
-   "Manual order for the agent-sessions dashboard (M-n / M-p)."
-   (bp/agent-sessions--order-table)))
+(defun bp/agent-sessions--order-write-group (scope old new)
+  "Persist NEW as SCOPE's member order, writing only the rows that moved.
+`M-n' / `M-p' transpose one item with its neighbour, and
+`bp/agent-sessions--merge-order' turns that into a NEW list differing from OLD
+in exactly two slots — so this normally issues exactly two UPDATEs no matter
+how large the group is, and touches no other group at all.
+
+A member NEW has but OLD doesn't is one being placed for the first time (it
+had been keeping the automatic order), and is inserted at its new slot; one
+OLD has but NEW doesn't is gone and is deleted."
+  (let ((row (bp/agent-sessions--order-scope-row scope))
+        (db (bp/agent-sessions--db))
+        (i 0))
+    (with-sqlite-transaction db
+      (dolist (member new)
+        (unless (eql (seq-position old member) i)
+          (sqlite-execute
+           db "INSERT INTO order_entries
+                 (kind, scope_repo, scope_worktree, member, position)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(kind, scope_repo, scope_worktree, member)
+               DO UPDATE SET position = excluded.position"
+           (append row (list member i))))
+        (setq i (1+ i)))
+      (dolist (member old)
+        (unless (member member new)
+          (sqlite-execute
+           db "DELETE FROM order_entries
+                WHERE kind = ? AND scope_repo = ? AND scope_worktree = ?
+                  AND member = ?"
+           (append row (list member))))))))
+
+(defun bp/agent-sessions--order-delete-group (scope)
+  "Forget SCOPE's manual order entirely."
+  (sqlite-execute (bp/agent-sessions--db)
+                  "DELETE FROM order_entries
+                    WHERE kind = ? AND scope_repo = ? AND scope_worktree = ?"
+                  (bp/agent-sessions--order-scope-row scope)))
+
+(defun bp/agent-sessions--order-delete-all ()
+  "Forget every group's manual order."
+  (sqlite-execute (bp/agent-sessions--db) "DELETE FROM order_entries"))
 
 (defun bp/agent-sessions--apply-manual-order (scope key-fn items)
   "Return ITEMS reordered to match the manual order recorded for SCOPE.
@@ -934,14 +1311,8 @@ rest keep the automatic order after them."
 ;; reason as the manual order: it is something the user wrote, not session
 ;; state, so it has to outlive both the session and Emacs.
 
-(defcustom bp/agent-sessions-notes-file
-  (expand-file-name "agent-sessions-notes.el" user-emacs-directory)
-  "File remembering the notes attached with `e' (`bp/agent-sessions-edit-note').
-Holds an alist of (KEY . NOTE); see `bp/agent-sessions--notes'."
-  :type 'file)
-
 (defvar bp/agent-sessions--notes nil
-  "Hash table KEY -> note string, or nil before the notes file is first read.
+  "Hash table KEY -> note string, or nil before the notes are first read.
 A KEY is (\"repo\" REPO-KEY), (\"worktree\" WORKTREE-KEY) or (\"session\" ID),
 reusing the stable identities of the manual order.  The type tag is not
 decoration: a repo's *main* worktree has the same canonical path as the repo
@@ -953,10 +1324,15 @@ all a plain terminal has to be identified by.  See
 `bp/agent-sessions--session-note-keys'.")
 
 (defun bp/agent-sessions--notes-table ()
-  "Return the notes table, loading `bp/agent-sessions-notes-file' once."
+  "Return the notes table, loading it from the database once."
   (or bp/agent-sessions--notes
       (setq bp/agent-sessions--notes
-            (bp/agent-sessions--read-key-alist bp/agent-sessions-notes-file))))
+            (let ((table (make-hash-table :test 'equal)))
+              (pcase-dolist (`(,kind ,key ,note)
+                             (sqlite-select (bp/agent-sessions--db)
+                                            "SELECT kind, key, note FROM notes"))
+                (puthash (list kind key) note table))
+              table))))
 
 (defun bp/agent-sessions--repo-note-key (repo)
   "Note key for REPO, a plist with :root/:name (a repo section's value)."
@@ -993,15 +1369,24 @@ the id key."
 Notes under the remaining (less durable) KEYS are dropped, so a session that
 gains an agent session id ends up with its note under that id alone rather than
 one note per identity it has had."
-  (let ((table (bp/agent-sessions--notes-table)))
-    (dolist (key (cdr keys)) (remhash key table))
-    (if (and note (not (string-empty-p note)))
-        (puthash (car keys) note table)
-      (remhash (car keys) table))
-    (bp/agent-sessions--write-key-alist
-     bp/agent-sessions-notes-file
-     "Notes attached in the agent-sessions dashboard (e)."
-     table)))
+  (let ((table (bp/agent-sessions--notes-table))
+        (db (bp/agent-sessions--db)))
+    (with-sqlite-transaction db
+      (dolist (key (cdr keys))
+        (remhash key table)
+        (sqlite-execute db "DELETE FROM notes WHERE kind = ? AND key = ?" key))
+      (if (and note (not (string-empty-p note)))
+          (progn
+            (puthash (car keys) note table)
+            (sqlite-execute db "INSERT INTO notes VALUES (?, ?, ?, ?)
+                                ON CONFLICT(kind, key) DO UPDATE
+                                  SET note = excluded.note,
+                                      updated_at = excluded.updated_at"
+                            (append (car keys)
+                                    (list note (bp/agent-sessions--now)))))
+        (remhash (car keys) table)
+        (sqlite-execute db "DELETE FROM notes WHERE kind = ? AND key = ?"
+                        (car keys))))))
 
 (defface bp/agent-session-note
   '((t :inherit font-lock-comment-face))
@@ -1066,7 +1451,7 @@ still accepts the note.")
 (defun bp/agent-sessions-edit-note (&optional remove)
   "Attach or edit a note on the repo, worktree, or session at point.
 The note is free-form text shown under that thing's heading, foldable with TAB,
-and persisted in `bp/agent-sessions-notes-file'.  Insert a line break with
+and persisted in `bp/agent-sessions-db-file'.  Insert a line break with
 \\<bp/agent-sessions-note-minibuffer-map>\\[bp/agent-sessions-note-newline] and
 accept with \\[exit-minibuffer]; an empty note removes it.  With a prefix
 argument (REMOVE), delete the note without prompting — emptying a many-line
@@ -1149,12 +1534,14 @@ most-recently-active first; otherwise the stable order of
          (win (get-buffer-window (current-buffer)))
          (wstart (and win (window-start win))))
     (erase-buffer)
+    (setq bp/agent-sessions--row-status nil)
     (magit-insert-section (bp/agent-sessions-root)
       (let ((repos (bp/agent-sessions--build-tree (bp/agent-sessions--live-entries))))
         (if (null repos)
             (insert "No active sessions.\n")
           (dolist (repo repos)
             (bp/agent-sessions--insert-repo repo)))))
+    (setq bp/agent-sessions--row-status (nreverse bp/agent-sessions--row-status))
     ;; Freshly inserted sections carry the visibility magit cached for them
     ;; (e.g. a note folded with TAB) in their `hidden' slot, but nothing has
     ;; applied it to the new text yet; this pass does, exactly as
@@ -1549,19 +1936,10 @@ creating one."
        root (plist-get (bp/agent-session--repo-info root) :worktree)))))
 
 (defun bp/agent-sessions--rows ()
-  "Return (LINE-POS . STATUS) for each session row, in buffer order."
-  (let (rows)
-    (save-excursion
-      (goto-char (point-min))
-      (while (not (eobp))
-        (let ((sec (magit-current-section)))
-          (when (and sec (eq (oref sec type) 'bp/agent-session-row))
-            (let ((session (gethash (oref sec value) bp/agent-sessions)))
-              (push (cons (line-beginning-position)
-                          (and session (plist-get session :status)))
-                    rows))))
-        (forward-line 1)))
-    (nreverse rows)))
+  "Return (LINE-POS . STATUS) for each session row, in buffer order.
+This is what the last render drew (`bp/agent-sessions--row-status'), never a
+fresh lookup: only the render path knows the displayed status."
+  bp/agent-sessions--row-status)
 
 (defun bp/agent-sessions--goto-row (direction predicate)
   "Move point to the next/previous session row (DIRECTION is `next' or `prev').
@@ -1685,21 +2063,24 @@ session that simply isn't on screen right now (all its terminals closed, say)."
 Returns non-nil when the order changed; messages and returns nil when KEY is
 already at the end it is being moved towards."
   (let* ((pos (seq-position keys key))
-         (new (and pos (+ pos delta))))
+         (dest (and pos (+ pos delta))))
     (cond
      ((null pos) (message "Nothing to reorder at point.") nil)
-     ((or (< new 0) (>= new (length keys)))
+     ((or (< dest 0) (>= dest (length keys)))
       (message "Already %s in its group." (if (< delta 0) "first" "last"))
       nil)
      (t
-      (let ((swapped (copy-sequence keys))
-            (table (bp/agent-sessions--order-table)))
-        (setf (nth pos swapped) (nth new keys)
-              (nth new swapped) key)
-        (puthash scope
-                 (bp/agent-sessions--merge-order (gethash scope table) swapped)
-                 table)
-        (bp/agent-sessions--order-save)
+      (let* ((swapped (copy-sequence keys))
+             (table (bp/agent-sessions--order-table))
+             (old (gethash scope table))
+             new)
+        (setf (nth pos swapped) (nth dest keys)
+              (nth dest swapped) key)
+        (setq new (bp/agent-sessions--merge-order old swapped))
+        (puthash scope new table)
+        ;; Hand both lists over so only the rows that actually moved are
+        ;; written — for a transposition that is two of them.
+        (bp/agent-sessions--order-write-group scope old new)
         t)))))
 
 (defun bp/agent-sessions--move (delta)
@@ -1716,7 +2097,7 @@ already at the end it is being moved towards."
   "Move the repo, worktree, or session at point one place down its group.
 Only the enclosing group is affected: a session moves among the sessions of
 its worktree, a worktree among its repo's worktrees, a repo among the repos.
-The chosen order is written to `bp/agent-sessions-order-file', so it survives
+The chosen order is written to `bp/agent-sessions-db-file', so it survives
 both the session and Emacs itself; a session is remembered by its buffer name,
 so renaming one forgets its place.  Unavailable while sorting by activity
 \(`s'), which reorders by recency on every event.  `C-c C-o' clears it again."
@@ -1737,13 +2118,13 @@ item's group; with a prefix argument, clears every group."
   (let ((table (bp/agent-sessions--order-table)))
     (if current-prefix-arg
         (progn (clrhash table)
-               (bp/agent-sessions--order-save)
+               (bp/agent-sessions--order-delete-all)
                (bp/agent-sessions--refresh)
                (message "Manual order cleared everywhere."))
       (pcase (bp/agent-sessions--group-at-point)
         (`(,scope ,_ ,_)
          (remhash scope table)
-         (bp/agent-sessions--order-save)
+         (bp/agent-sessions--order-delete-group scope)
          (bp/agent-sessions--refresh)
          (message "Manual order cleared for this group."))
         (_ (message "Point is not in a reorderable group."))))))
@@ -1833,6 +2214,144 @@ resume it via `bp/agent-session-start'.  This is the target of the
         (pop-to-buffer buf)
       (bp/agent-session-start worktree-path agent-type session-id))))
 
+;;; Restoring sessions from the log -----------------------------------------
+
+(defun bp/agent-sessions--log-rows (where &optional args)
+  "Return session-log rows matching WHERE as plists, newest ending first.
+Deduplicated by agent session id, keeping each id's most recent row: the fork
+transient can leave a second row carrying a parent's id, and one entry per
+resumable session is what the caller wants either way.  Rows with no agent
+session id are skipped — a bare terminal has nothing to resume, and `+' opens
+one anyway."
+  (mapcar
+   (lambda (r)
+     (pcase-let ((`(,sid ,type ,worktree ,label ,title ,closed ,reason) r))
+       (list :agent-sid sid :agent-type type :worktree worktree
+             :label label :title title :closed-at closed :reason reason)))
+   (sqlite-select
+    (bp/agent-sessions--db)
+    (concat "SELECT agent_sid, agent_type, worktree, label, title,
+                    MAX(closed_at) AS closed_at, close_reason
+               FROM sessions
+              WHERE agent_sid IS NOT NULL AND agent_type IS NOT NULL AND "
+            where
+            " GROUP BY agent_sid ORDER BY closed_at DESC")
+    args)))
+
+(defun bp/agent-sessions--log-describe (row)
+  "A one-line label for session-log ROW, for completion or confirmation."
+  (format "%-28s %-7s %s"
+          (or (plist-get row :label) "?")
+          (or (plist-get row :agent-type) "?")
+          (or (plist-get row :title)
+              (substring (or (plist-get row :agent-sid) "?") 0 8))))
+
+(defun bp/agent-sessions--log-annotate (row)
+  "The trailing annotation for session-log ROW: when it ended, and how."
+  (let ((at (plist-get row :closed-at)))
+    (format "  %s, %s"
+            (if at
+                (format-time-string "%b %e %H:%M" (seconds-to-time at))
+              "?")
+            (pcase (plist-get row :reason)
+              ("killed" "you closed it")
+              ("agent-exit" "agent exited")
+              ("superseded" "replaced in its terminal")
+              ("emacs-exit" "Emacs quit")
+              ("crash" "Emacs died")
+              (other (or other "?"))))))
+
+(defun bp/agent-sessions--restore-row (row)
+  "Resume the session described by ROW, or jump to it if it is already open."
+  (let ((wt (plist-get row :worktree))
+        (sid (plist-get row :agent-sid))
+        (type (intern (plist-get row :agent-type))))
+    (cond
+     ((bp/agent-sessions--buffer-for-agent-session sid)
+      (pop-to-buffer (bp/agent-sessions--buffer-for-agent-session sid))
+      (message "That session is already open."))
+     ((not (file-directory-p wt))
+      (message "Worktree is gone: %s" wt))
+     (t (bp/agent-session-start wt type sid)))))
+
+;;;###autoload
+(defun bp/agent-sessions-restore ()
+  "Resume a session that has ended, picked from the log.
+Lists every session the log knows the end of, most recently ended first,
+annotated with when and how it ended.  A session whose terminal is somehow
+still open is switched to rather than resumed twice, and one whose worktree
+has since been deleted says so instead of failing in a shell."
+  (interactive)
+  (let ((rows (bp/agent-sessions--log-rows "closed_at IS NOT NULL")))
+    (if (null rows)
+        (message "No ended sessions in the log yet.")
+      (let* ((table (mapcar (lambda (r)
+                              (cons (bp/agent-sessions--log-describe r) r))
+                            rows))
+             (completion-extra-properties
+              (list :annotation-function
+                    (lambda (k)
+                      (bp/agent-sessions--log-annotate (cdr (assoc k table))))))
+             (choice (completing-read "Restore session: " table nil t)))
+        (when-let ((row (cdr (assoc choice table))))
+          (bp/agent-sessions--restore-row row))))))
+
+;;;###autoload
+(defun bp/agent-sessions-restore-previous ()
+  "Reopen the sessions that were running when Emacs last stopped.
+Covers both an Emacs that crashed and one that was quit while sessions were
+still going — from here those are the same thing, and each closes its batch of
+rows with a single timestamp, which is how the last batch is identified.
+
+Deliberately not bound to a key: it is a recovery command, wanted rarely and
+never by accident.  Sessions already open are skipped, as are worktrees that
+no longer exist, and what is left is shown for confirmation before anything
+is spawned."
+  (interactive)
+  (let* ((rows (bp/agent-sessions--log-rows
+                "close_reason IN ('crash', 'emacs-exit')
+                 AND closed_at = (SELECT MAX(closed_at) FROM sessions
+                                   WHERE close_reason IN ('crash', 'emacs-exit'))"))
+         (live (seq-filter (lambda (r)
+                             (bp/agent-sessions--buffer-for-agent-session
+                              (plist-get r :agent-sid)))
+                           rows))
+         (gone (seq-filter (lambda (r)
+                             (not (file-directory-p (plist-get r :worktree))))
+                           rows))
+         (todo (seq-difference rows (append live gone))))
+    (cond
+     ((null rows) (message "No sessions were lost — nothing to restore."))
+     ((null todo)
+      (message "Nothing to restore: %d already open, %d worktree(s) gone."
+               (length live) (length gone)))
+     (t
+      (with-output-to-temp-buffer "*Agent Sessions Restore*"
+        (princ (format "Sessions from the last Emacs (%s):\n\n"
+                       (bp/agent-sessions--log-annotate (car todo))))
+        (dolist (r todo)
+          (princ (concat "  " (bp/agent-sessions--log-describe r) "\n")))
+        (when live
+          (princ (format "\nAlready open, will be skipped: %d\n" (length live))))
+        (dolist (r gone)
+          (princ (format "\nWorktree gone, cannot restore: %s\n"
+                         (plist-get r :worktree)))))
+      (when (yes-or-no-p (format "Restore %d session(s)? " (length todo)))
+        ;; Staggered: each spawns a terminal and types into it, and firing them
+        ;; all in one go leaves the shells racing their own startup.
+        (let ((n 0))
+          (dolist (row todo)
+            (run-at-time (* n 1.0) nil
+                         (lambda (r)
+                           (condition-case err
+                               (save-window-excursion
+                                 (bp/agent-sessions--restore-row r))
+                             (error (message "agent-sessions: %s"
+                                             (error-message-string err)))))
+                         row)
+            (setq n (1+ n))))
+        (message "Restoring %d session(s)…" (length todo)))))))
+
 (defun bp/agent-sessions--store-link-for (session)
   "Store an `elisp:' resume link for SESSION via `org-link-store-props'.
 Return non-nil on success, nil when SESSION lacks the info to build a link."
@@ -1910,6 +2429,7 @@ repo > worktree > session tree with foldable sections (TAB to fold/unfold)."
 (define-key bp/agent-sessions-mode-map (kbd "t") #'bp/agent-sessions-edit-title)
 (define-key bp/agent-sessions-mode-map (kbd "u") #'bp/agent-sessions-mark-unread)
 (define-key bp/agent-sessions-mode-map (kbd "e") #'bp/agent-sessions-edit-note)
+(define-key bp/agent-sessions-mode-map (kbd "R") #'bp/agent-sessions-restore)
 (define-key bp/agent-sessions-mode-map (kbd "g") #'bp/agent-sessions-refresh)
 (define-key bp/agent-sessions-mode-map (kbd "s") #'bp/agent-sessions-toggle-sort)
 (define-key bp/agent-sessions-mode-map (kbd "+") #'bp/agent-sessions-new-vterm)
@@ -1940,11 +2460,15 @@ repo > worktree > session tree with foldable sections (TAB to fold/unfold)."
   :type 'file)
 
 (defcustom bp/agent-sessions-claude-hook-events
-  '("SessionStart" "UserPromptSubmit" "Stop" "StopFailure"
+  '("SessionStart" "SessionEnd" "UserPromptSubmit" "Stop" "StopFailure"
     "SubagentStop" "TeammateIdle"
     ("PreToolUse" . "*") ("PostToolUse" . "*") ("PermissionRequest" . "*"))
   "Claude hook events to forward to the dashboard.
-Each item is either an event name, or (EVENT . MATCHER) for tool-scoped events."
+Each item is either an event name, or (EVENT . MATCHER) for tool-scoped events.
+`SessionEnd' earns its place by closing the session's log row the moment the
+agent exits, so `R' can offer it back while its terminal is still sitting
+there at a shell prompt.  Codex has no equivalent event; there the end is
+noticed when the terminal dies or another session starts in it."
   :type '(repeat (choice string (cons string string))))
 
 (defcustom bp/agent-sessions-codex-hook-events
@@ -2129,6 +2653,17 @@ Org link type, the `C-x p a' project binding, and starting the Emacs server
       (advice-add 'eat--t-set-title :after #'bp/agent-sessions--eat-capture-title)))
   ;; Clear a session's needs-attention highlight once the user focuses it.
   (add-hook 'buffer-list-update-hook #'bp/agent-session--clear-attention-on-focus)
+  ;; Record that sessions still running at exit were *not* closed by the user.
+  ;; This is the half of the close-detection scheme that runs when Emacs goes
+  ;; away in an orderly fashion; `kill-buffer-hook' covers the other half, and
+  ;; the fact that Emacs runs one but not the other is what distinguishes them.
+  (add-hook 'kill-emacs-hook #'bp/agent-sessions--log-close-all)
+  ;; A periodic heartbeat so a session lost to a *crash* can still be dated:
+  ;; nothing runs at that point, so the last time we know Emacs was alive is
+  ;; the best available answer.
+  (unless bp/agent-sessions--heartbeat-timer
+    (setq bp/agent-sessions--heartbeat-timer
+          (run-with-timer 60 60 #'bp/agent-sessions--db-heartbeat)))
   ;; `agent-session:' Org links that resume/jump to a session.
   (with-eval-after-load 'ol
     (org-link-set-parameters "agent-session"

@@ -1,0 +1,304 @@
+# agent-sessions — design notes
+
+A dashboard for Claude Code / Codex sessions running in terminal buffers. The
+code says *what* it does; this file records *why*, so the intent survives edits.
+
+## Orientation (just enough to navigate)
+
+- `agent-sessions.el` — everything; `agent-sessions-codex-hook.sh` — Codex event
+  forwarder. The Claude forwarder lives outside the repo
+  (`~/.orca/agent-hooks/claude-hook.sh`, wired via `~/.claude/settings.json`).
+- Wiring/config is in `../agent-session-config.el`.
+
+## Why it's built this way
+
+**Zero-friction tracking beats an explicit launcher.** Rather than a wrapper
+command you must remember to use, every terminal buffer gets a unique id
+injected into its shell env, so *any* `claude`/`codex` you type in *any*
+eat/vterm is tracked automatically. The cost is that we advise the terminal
+packages' internals — accepted deliberately in exchange for never having to
+think about launching sessions specially.
+
+**The per-buffer id is the identity, not the agent's own session id.** Sessions
+sharing a worktree must still resolve to the right buffer, and the agent's own
+UUID isn't known until a hook fires (and isn't in every payload). So the stable
+key is the injected `EMACS_AGENT_SESSION_ID`; the agent's UUID is tracked
+separately, only for resume/branch/links.
+
+**The dashboard is ephemeral; the record of what happened is not.** Rows are
+rebuilt from live buffers on every render and nothing on disk feeds them —
+that is what stops a dead session ever being displayed as alive, which was the
+original point of the rule. What *is* persisted lives in one SQLite file
+(`bp/agent-sessions-db-file`), and the bar for adding to it is that it must be
+either something the user chose, or something they cannot reconstruct once it
+is gone:
+
+- **notes** (`e`) and **manual order** (`M-n`/`M-p`) — things the user wrote or
+  arranged by hand; evaporating on restart would make them useless.
+- **the session log** — observed session state, which the rule above would
+  otherwise forbid. It earns its place because a session id is the one thing
+  you cannot get back after a crash, and because it records endings as
+  faithfully as beginnings. A log that knows a session died isn't lying about
+  it; it is the only way `R` and `bp/agent-sessions-restore-previous` can offer
+  it back. What would break the rule is letting it populate rows.
+
+One store, not three files, because the log forced the issue: it is
+append-heavy, queried by recency, and unbounded, so the old rewrite-the-file
+approach didn't fit it — and once a database existed, a second and third
+persistence format was pure cost. Notes and order are still read through their
+hash tables; **the render path must never query the database.** Load once,
+write on change.
+
+Two consequences of persisting things keyed by identity: a note keyed on a
+session id outlives the session that had it (nothing prunes it — a stale row
+is invisible and cheap, and guessing that a session is gone *for good* is
+exactly the kind of lying the ephemerality rule exists to avoid), and note
+keys are type-tagged (`("repo" …)` vs `("worktree" …)`) because a repo's main
+worktree has the same canonical path as the repo itself and would otherwise
+share its note. The order table carries the same tag as `kind`, and its scope
+columns default to `''` rather than `NULL` — SQLite treats `NULL`s as distinct
+under a primary key, so a `NULL` scope would silently turn every upsert into a
+duplicate insert.
+
+**How a session ended is inferred from which hook fired, not from a flag.**
+Emacs runs `kill-emacs-hook` on exit but does *not* run `kill-buffer-hook` for
+live buffers at that point (verified, not assumed). That asymmetry is the whole
+scheme, and it is why `k` needs no special case: it is a plain `kill-buffer`,
+so it and `C-x k` land in the same place.
+
+| ending | what fired | means |
+|---|---|---|
+| `killed` | `kill-buffer-hook` | you closed it |
+| `agent-exit` | `SessionEnd` | agent quit, terminal lives on |
+| `superseded` | a new agent id in the same terminal | previous one ended unheard |
+| `emacs-exit` | `kill-emacs-hook` | Emacs quit with it running |
+| `crash` | nothing — found open at the next startup | Emacs died |
+
+`R` offers the first three ("you ended it"), restore-previous the last two
+("it was taken from you"). **Crash detection assumes a single Emacs**: a
+starting Emacs has no sessions yet, so any row still open must belong to a dead
+one. A second Emacs would reap the first's live rows — they would read as
+restorable while still running. Nothing corrupts, and that was the accepted
+price for dropping an instances table; if that assumption ever stops holding,
+that is the thing to revisit. Because a crash runs no code, close *times* come
+from a periodic heartbeat in `meta` — the last moment Emacs is known to have
+been alive.
+
+**A reorder writes two rows, not the group.** `M-n`/`M-p` are adjacent
+transpositions, and `--merge-order` turns one into a list differing from the
+saved one in exactly two slots, so `--order-write-group` diffs old against new
+and upserts only what moved. Positions stay contiguous forever without
+renumbering, because a transposition preserves the *set* of positions and only
+exchanges which member holds which. Note what this depends on: if a
+"move to top" or drag-to-position operation is ever added, arbitrary placement
+between two neighbours is where gap or fractional positions start to earn their
+keep — `position` can become `REAL` without touching the read path.
+
+**Hooks are unordered and untrusted for sequencing.** Hook invocations are
+independent async processes with no delivery-order guarantee, so an
+informational event can land *after* a `Stop`. The status map therefore only
+promotes known events and leaves everything else untouched — status must never
+be clobbered back to "running" by a straggler. This is the single most
+important invariant when editing the status logic.
+
+**Notifications fire on the transition into attention, once.** A session that
+sits waiting must not re-announce on every subsequent event. If you add states,
+preserve "edge-triggered, not level-triggered."
+
+**The manual unread mark (`u`) rides on the buffer, not on the status.** It
+makes a row *look* like needs-attention (face, marker, sort bucket, `N`/`P`)
+without ever being written into the registry, for three reasons: a plain
+terminal that no hook has fired for has no registry entry to write to; hook
+status computation falls back to the *previous* status for informational
+events, so a written-in `needs-attention` would outlive the thing the user
+wanted to be reminded of; and inventing a registry entry for a bare terminal
+would suppress fork auto-detection, which is guarded on the session being new.
+So the flag is buffer-local and applied at display time on a *copy* of the
+plist — never mutate the registry entry from the render path. It clears the
+same way a real one does, by focusing the session, and is deliberately not
+persisted: it's session state, which by the rule above evaporates on restart.
+
+**A row with no registry entry names whatever is running, from the kernel.**
+Hooks can't be relied on to say what a terminal is running, because Codex
+creates its session *lazily*: its `SessionStart` fires on the first prompt
+submission, in the same instant as `UserPromptSubmit`, not when the process
+starts (measured, not assumed — a fresh Codex TUI sat drawn at its prompt for
+~90s emitting nothing, and wrote no rollout file either, so watching
+`~/.codex/sessions` is the same dead end). Claude fires `SessionStart` on
+`--resume`, so before this, a batch of restored sessions left every Codex row
+reading `eat` while the Claude rows read `claude`.
+
+`bp/agent-sessions--foreground-command` instead asks the pty for its
+*foreground process group* (`tpgid` from `process-attributes`) and names that
+job. Why this shape:
+
+- **It generalises past the two agents.** Any command shows its own name, and
+  the label returns to the backend when it exits, with no state to keep in
+  sync. A python REPL reads `Python`; `sleep 40` reads `sleep`.
+- **It is self-correcting, which a launch-time tag is not.** The first attempt
+  here stamped the agent onto the buffer at spawn; a terminal where Codex had
+  since been replaced by Claude kept the stale label, and no amount of care in
+  the spawn path fixes that class of bug.
+- **`args`, never `comm`.** Claude's executable lives in a version-numbered
+  directory, so its `comm` reads `2.1.231`.
+- **No subprocess.** `process-attributes` is a kernel read, not a `ps` fork —
+  which is what makes this affordable at all.
+- **Cached exactly, never on a timer.** Uncached this took a warm hook-tick
+  refresh from 23ms to 41ms — nearly double, exactly the hot-path cost the git
+  note below exists to prevent. Reading the *command line* is the expensive
+  half, so the name is cached and reused while `tpgid` is unchanged: an exact
+  test, not a heuristic, since the same foreground group is the same job. That
+  alone brings it to ~+3ms. A 0.3s time-based layer on top was tried and
+  **removed**: it saved only the remaining ~3.6ms of group reads (12 terminals
+  × one kernel read; `--live-entries` runs once per render, so there is no
+  duplicate work to collapse) and paid for it with a label up to a third of a
+  second stale. For a display whose purpose is showing what is running now,
+  that is the wrong trade — and `g` already costs ~1.4s, so this was never the
+  expensive thing on the path. If this ever does need to be cheaper, cut the
+  number of rows or the refresh rate, not the freshness.
+
+`:status` stays `idle` for these rows rather than being promoted to `running`:
+knowing a process holds the terminal says nothing about whether the agent is
+working or waiting, and inventing that is the kind of lying the rules here
+exist to prevent. Registry rows are untouched — a hook that has reported
+carries its agent type *and* real status, which the process table cannot give
+once the process is gone.
+
+The corollary, learned the hard way: **a row's status is whatever was
+rendered, so nothing may re-derive it from the registry.** `N`/`P` did exactly
+that (`gethash` on `bp/agent-sessions`) and so navigated past every row `u` had
+marked, while the face, marker and sort bucket — all fed by `--live-entries`,
+which applies the overlay — agreed the row needed attention. The render now
+records `(line-pos . status)` into `bp/agent-sessions--row-status` as it draws,
+and navigation reads that. Any future consumer of "what state is this row in"
+belongs on that list, not on a second lookup.
+
+**Row order must not depend on anything that changes while a session runs.**
+The dashboard re-renders on *every* hook event, so ordering by `:updated-at`
+made two concurrently busy sessions swap places several times a second — the
+row you were aiming at moved out from under point. The default order therefore
+uses only keys that are stable under activity: a coarse attention bucket
+(error → needs-attention → running → rest), then buffer creation time, then
+buffer name as a deterministic final tie-break (hash iteration order must never
+leak into the layout). A row *does* move when its status changes — that's a
+rare, meaningful event, unlike a tool call. Repos and worktrees are plain
+alphabetical: a fixed skeleton is what makes the tree navigable from memory, so
+urgency is expressed only *within* a worktree. Recency sort survives behind `s`
+for when you want it; don't make it the default again.
+
+**Manual order overrides the automatic one per group, and only per group.**
+`M-n`/`M-p` move the repo / worktree / row at point within its own siblings and
+persist that group's key list. Design points worth keeping: items with no
+recorded key keep the automatic order and sort *after* the placed ones, so a new
+session never displaces a slot the user chose; rewriting a group splices the
+visible keys back into the saved list instead of replacing it, so a repo or
+worktree whose terminals are all closed doesn't lose its remembered slot; and
+keys are stable identities (canonical paths, buffer name for a row) rather than
+display labels, which change on a branch checkout. Reordering acts on the flat
+per-worktree list that `--insert-entries` then nests, so moving a *fork* row
+past a sibling of its parent's group may not visibly move it — the nesting wins.
+Manual order is disabled while `s` (recency) is active; those two orderings
+would fight, and recency should stay a temporary lens.
+
+**A stray key closes the dispatch menu instead of trapping you in it.** `RET`
+on a repo/worktree heading opens project.el's switch menu, whose own
+`project--switch-project-command` loops until it reads a key it recognises —
+fine when you deliberately invoked `project-switch-project`, wrong here, where
+`RET` is a glance at what's available and every *other* dashboard key is a
+one-shot action. `bp/agent-sessions--switch-project` therefore swaps in a
+one-shot reader (returning `ignore` for unknown input) via `cl-letf`, scoped to
+that single call so the looping behaviour survives everywhere else. Build the
+keymap and prompt from project.el's own `project-switch-commands` /
+`project-prefix-map` / `project--menu-prompt` rather than a private list, so a
+user's customised menu keeps working.
+
+**A note follows the most durable identity its subject has.** Repos and
+worktrees are keyed by canonical path, as above, but a *session* prefers the
+agent's own session id and falls back to the buffer name only for a plain
+terminal that has no id yet — otherwise renaming a terminal (which the `t`
+title flow encourages) would silently orphan its note. Both keys are read, and
+writing collapses them to the preferred one, so a note typed into a bare
+terminal survives `claude` starting inside it.
+
+**Re-rendering has to re-apply fold state itself.** Notes render as their own
+magit subsection (first line as heading, rest as body) so `TAB` collapses a
+long one. Magit caches visibility per section identity and revives it into the
+new sections' `hidden` slots, but nothing applies it to the freshly inserted
+*text* — `magit-refresh-buffer` does that with a `magit-section-show` pass over
+the root, and since this dashboard erases and rebuilds by hand it must do the
+same. Without that pass a folded note silently springs open on the next hook
+event.
+
+**Re-rendering is on the hot path, so git is cached aggressively.**
+`magit-list-worktrees` and repo-info each spawn git subprocesses; doing that per
+refresh made trivial actions (sorting, a hook tick) slow. Hence the worktree /
+repo-info / transcript-uuid caches. The tension is freshness vs. speed: the
+internal refresh trusts the caches; only `g` re-reads git from disk. Keep new
+per-refresh work off the git path.
+
+## Fork/branch tracking — the one place with no ground truth
+
+There is **no hook event or transcript field that names a fork's parent** (this
+was verified, not assumed — Claude's `SessionStart` `source` has no "fork", and
+the child transcript carries no parent id). Three consequences shaped the
+design:
+
+- **We infer parentage from evidence, not authority.** A fork copies the
+  parent's transcript verbatim, so the child's message uuids contain (nearly)
+  all of the parent's and share the same root. Auto-detection is a *heuristic*
+  built on that fact — good enough to be worth doing automatically, but with
+  honest failure modes (misses a fork if you keep working in the parent before
+  the child's first hook; Claude-only). It's a convenience, not a source of
+  truth.
+- **Manual `B` is the escape hatch, not a fallback afterthought.** Because
+  detection is heuristic, there must always be a way to state the relationship
+  by hand (Codex forks, closed parents, mis-detections).
+- **A fork briefly *is* its parent.** At `SessionStart`, `--fork-session`
+  reports the resumed (parent) id before minting its own, so a fresh child's
+  session id transiently equals its parent's. This is why nesting resolves a
+  parent to a *different entry* carrying the id, and why cycle-safety comes from
+  a visited set — **not** from a `sid == parent-sid` rejection. That check looks
+  like a reasonable simplification and would silently break fork nesting; don't
+  add it back.
+
+  The transient also reaches the session log, which briefly records the parent's
+  id against the child's terminal. `--log-supersede` cleans that up by asking
+  the *log* whether the same id is open on another row — if so the row is an
+  artifact of the fork and is deleted rather than offered by `R` as a resumable
+  duplicate. Note where that test lives: in the log, on log rows. It is exactly
+  the `sid == parent-sid` reasoning the bullet above forbids, and it is only
+  safe because it never touches parentage detection. Keep it that side of the
+  line.
+
+## Wiring is self-owned and additive, never authoritative
+
+`bp/agent-sessions-install` / `-uninstall` manage the hook entries in
+`~/.claude/settings.json` and `~/.codex/hooks.json`. The design constraints,
+which are the whole point of these commands existing:
+
+- **Own our forwarders, depend on nothing external.** The package ships its own
+  `agent-sessions-{claude,codex}-hook.sh` and points the configs at them, so it
+  works with orca absent/removed. (The machine this was written on happened to
+  be wired through orca's script; that's incidental, not required.)
+- **Only ever touch our own entries.** Add/remove is keyed by the forwarder
+  *filename* in the command string, so any other hook (orca's, the user's) is
+  invisible to us. Install and uninstall are therefore both safe to run blind,
+  and both idempotent. Install self-heals stale entries (moved package, edited
+  event list) by stripping ours and re-adding. This is why several hooks can
+  coexist forwarding the same events — double-forwarding is harmless (status is
+  edge-triggered), and not-clobbering-others matters more than deduping.
+- **Round-trip the config losslessly.** Parse/emit uses the *native* JSON with
+  arrays as **vectors** — a Lisp list would be re-serialized as an alist/plist
+  object and corrupt the file. Everything not ours (permissions, model, …) must
+  survive untouched; verify round-trips by equality against the original, not by
+  eyeballing. A `.bak` is written before each change.
+
+Setup does **not** auto-run install — it writes user config files, so it stays
+an explicit `M-x`. Point users there rather than editing the JSON by hand.
+
+## Editing
+
+Reload into the running server after any change (definitions don't hot-swap):
+`emacsclient -e '(load-file ".../agent-sessions/agent-sessions.el")'`. A
+`-L modules` batch byte-compile mis-resolves `(require 'magit)` against the
+sibling `modules/magit.el` config file, so trust the live load for validation.
