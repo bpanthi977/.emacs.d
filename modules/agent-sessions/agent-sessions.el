@@ -1949,12 +1949,26 @@ most-recently-active first; otherwise the stable order of
 (defun bp/agent-sessions--refresh ()
   (interactive)
   (let* ((inhibit-read-only t)
-         (section (magit-current-section))
+         (win (get-buffer-window (current-buffer)))
+         (saved-point (if win (window-point win) (point)))
+         (section (save-excursion
+                    (goto-char saved-point)
+                    (magit-current-section)))
          ;; Remember the section at point by its stable identity, not by
          ;; absolute position: erase-buffer + rebuild (and sorting) shift and
          ;; reorder everything, so a char offset is meaningless.
          (ident (and section (magit-section-ident section)))
-         (win (get-buffer-window (current-buffer)))
+         ;; Keep point's position within that section as well.  Restoring only
+         ;; IDENT puts point at the section's first column on every hook-driven
+         ;; refresh, undoing ordinary horizontal motion such as `C-f'/`C-b'.
+         (line-offset
+          (and section
+               (save-excursion
+                 (goto-char saved-point)
+                 (count-lines (oref section start) (line-beginning-position)))))
+         (column (save-excursion
+                   (goto-char saved-point)
+                   (current-column)))
          (wstart (and win (window-start win))))
     (erase-buffer)
     (setq bp/agent-sessions--row-status nil)
@@ -1973,7 +1987,18 @@ most-recently-active first; otherwise the stable order of
     (let ((magit-section-cache-visibility nil))
       (magit-section-show magit-root-section))
     (let ((target (and ident (magit-get-section ident))))
-      (goto-char (if target (oref target start) (point-min))))
+      (if (not target)
+          (goto-char (point-min))
+        (let ((start (oref target start))
+              (end (oref target end)))
+          (goto-char start)
+          (forward-line line-offset)
+          ;; The section may have become shorter during the refresh.  In that
+          ;; case use its last line instead of wandering into the next section.
+          (when (>= (point) end)
+            (goto-char (max start (1- end)))
+            (beginning-of-line))
+          (move-to-column column))))
     (when win
       (set-window-point win (point))
       (when wstart
