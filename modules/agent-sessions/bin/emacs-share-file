@@ -1,0 +1,67 @@
+#!/bin/sh
+# Hand a file to the human, through the Emacs agent-sessions dashboard.
+#
+#   emacs-share-file FILE [DESCRIPTION]
+#
+# The file appears under this agent's row in `M-x bp/agent-sessions-list',
+# highlighted until the user opens it.  Sharing the same file again clears the
+# highlight state, i.e. says "I changed this, look again" rather than adding a
+# second entry.
+#
+# Gated on EMACS_AGENT_SESSION_ID, which agent-sessions.el injects into every
+# session terminal's shell environment (along with this script's directory on
+# PATH).  Outside such a terminal there is no dashboard to share into, so this
+# fails loudly rather than pretending to have done something.
+
+if [ $# -lt 1 ] || [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
+  echo "Usage: emacs-share-file FILE [DESCRIPTION]" >&2
+  exit 2
+fi
+
+file=$1
+label=${2:-}
+
+if [ ! -e "$file" ]; then
+  echo "emacs-share-file: no such file: $file" >&2
+  exit 1
+fi
+
+# Absolutize without depending on realpath/readlink -f, which differ across
+# platforms.  Emacs is told an absolute path because the dashboard outlives
+# whatever directory the agent happened to be standing in.
+dir=$(dirname -- "$file")
+base=$(basename -- "$file")
+absdir=$(cd -- "$dir" 2>/dev/null && pwd -P) || {
+  echo "emacs-share-file: cannot resolve directory of: $file" >&2
+  exit 1
+}
+case "$absdir" in
+  */) abs="$absdir$base" ;;
+  *)  abs="$absdir/$base" ;;
+esac
+
+if [ -z "$EMACS_AGENT_SESSION_ID" ]; then
+  echo "emacs-share-file: not inside an Emacs agent session terminal" >&2
+  exit 1
+fi
+
+if ! command -v emacsclient >/dev/null 2>&1; then
+  echo "emacs-share-file: emacsclient not found" >&2
+  exit 1
+fi
+
+# Everything interpolated below lands inside an elisp string literal.
+esc() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
+
+reply=$(emacsclient -e "(bp/agent-sessions-share-file \"$(esc "$EMACS_AGENT_SESSION_ID")\" \"$(esc "$abs")\" \"$(esc "$label")\")" 2>&1) || {
+  echo "emacs-share-file: could not reach Emacs: $reply" >&2
+  exit 1
+}
+
+# emacsclient prints the elisp value, so a returned string arrives quoted.
+reply=$(printf '%s' "$reply" | sed -e 's/^"//' -e 's/"$//' -e 's/\\"/"/g' -e 's/\\\\/\\/g')
+
+case "$reply" in
+  Shared*) echo "$reply" ;;
+  *) echo "emacs-share-file: $reply" >&2; exit 1 ;;
+esac

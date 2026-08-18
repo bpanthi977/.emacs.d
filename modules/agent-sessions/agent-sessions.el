@@ -23,6 +23,22 @@
                            (locate-library "agent-sessions") default-directory))
   "Directory this package lives in; its hook forwarder scripts sit beside it.")
 
+(defconst bp/agent-sessions--bin-dir
+  (expand-file-name "bin" bp/agent-sessions--dir)
+  "Directory of the commands an agent may run from inside a session terminal.
+Placed on the PATH of every session terminal, so `emacs-share-file' is simply
+there — nothing for the user to install and nothing for the agent to locate.")
+
+(defun bp/agent-sessions--terminal-environment (id)
+  "Environment entries to inject into a session terminal identified by ID.
+The PATH entry is built from the PATH the terminal was going to inherit anyway
+\(`process-environment' is what the subprocess gets), so this is strictly
+additive.  Assembling one from anywhere else could silently *shrink* the
+shell's PATH, which is the failure mode worth designing away here."
+  (list (format "EMACS_AGENT_SESSION_ID=%s" id)
+        (format "PATH=%s%s%s" bp/agent-sessions--bin-dir path-separator
+                (or (getenv "PATH") ""))))
+
 (defvar bp/agent-session-id->buffer (make-hash-table :test 'equal)
   "Session id -> vterm buffer, populated for every vterm buffer at creation.")
 
@@ -173,7 +189,8 @@ Populates the cache on first use; `bp/agent-sessions-refresh' clears it."
 
 (defun bp/agent-sessions--vterm-advice (orig-fun pop-to-buf-fun &optional arg)
   (let* ((id (format "%d-%d" (emacs-pid) (cl-incf bp/agent-session-counter)))
-         (vterm-environment (cons (format "EMACS_AGENT_SESSION_ID=%s" id) vterm-environment))
+         (vterm-environment (append (bp/agent-sessions--terminal-environment id)
+                                    vterm-environment))
          (buf (funcall orig-fun pop-to-buf-fun arg)))
     (when (buffer-live-p buf)
       (puthash id buf bp/agent-session-id->buffer)
@@ -213,11 +230,13 @@ real needs-attention is: by looking at the session.")
 
 (defun bp/agent-sessions--eat-advice (orig-fun program arg display-fn)
   "Give eat sessions the same id injection/registration as vterm.
-Injects EMACS_AGENT_SESSION_ID via `process-environment' (which `eat-exec'
-inherits when it spawns the shell) and registers the resulting buffer."
+Injects EMACS_AGENT_SESSION_ID and the shared-file command's directory via
+`process-environment' (which `eat-exec' inherits when it spawns the shell) and
+registers the resulting buffer."
   (let* ((id (format "%d-%d" (emacs-pid) (cl-incf bp/agent-session-counter)))
          (process-environment
-          (cons (format "EMACS_AGENT_SESSION_ID=%s" id) process-environment))
+          (append (bp/agent-sessions--terminal-environment id)
+                  process-environment))
          (buf (funcall orig-fun program arg display-fn)))
     (when (buffer-live-p buf)
       (puthash id buf bp/agent-session-id->buffer)
@@ -1764,14 +1783,24 @@ shared with two sessions should stop nagging from both once it has been read."
      (bp/agent-sessions--shared-files-table))
     changed))
 
+(defun bp/agent-sessions--revert-shared-file-buffer (path)
+  "Refresh an unmodified buffer already visiting PATH from disk.
+Do not create a buffer for PATH, and never replace unsaved buffer changes."
+  (when-let ((buffer (find-buffer-visiting path)))
+    (with-current-buffer buffer
+      (unless (buffer-modified-p)
+        (revert-buffer t t)))))
+
 ;;;###autoload
 (defun bp/agent-sessions-share-file (session-id path &optional label)
   "Attach PATH to the agent session running in terminal SESSION-ID.
 The entry point `bin/emacs-share-file' calls over emacsclient, so SESSION-ID is
 the terminal's EMACS_AGENT_SESSION_ID — the id the shell has — and resolving it
 to whatever session is running there happens here, the same split the hook path
-makes.  Returns a string for the caller to print: emacsclient is the agent's
-only channel back, so a failure has to be reported in the value, not signalled."
+makes.  If an unmodified buffer already visits PATH, refresh it from disk;
+modified buffers are left alone so sharing can never discard unsaved work.
+Returns a string for the caller to print: emacsclient is the agent's only
+channel back, so a failure has to be reported in the value, not signalled."
   (let ((session (bp/agent-sessions--session-for-id session-id)))
     (cond
      ((null session)
@@ -1779,6 +1808,7 @@ only channel back, so a failure has to be reported in the value, not signalled."
      ((not (file-exists-p path))
       (format "No such file: %s" path))
      (t
+      (bp/agent-sessions--revert-shared-file-buffer path)
       (bp/agent-sessions--share-file session path label)
       (bp/agent-sessions--refresh-if-visible)
       (format "Shared %s" (abbreviate-file-name (expand-file-name path)))))))
