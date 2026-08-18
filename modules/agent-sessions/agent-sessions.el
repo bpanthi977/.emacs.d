@@ -247,10 +247,10 @@ briefly makes its buffer current while inserting output even when it isn't
 the buffer the user is actually looking at, which would clear the flag
 spuriously."
   (let* ((buf (window-buffer (selected-window)))
-         (id (and (buffer-live-p buf) (buffer-local-value 'bp/agent-session-id buf))))
+         (id (and (buffer-live-p buf) (buffer-local-value 'bp/agent-session-id buf)))
+         (changed nil))
     (when id
-      (let ((session (gethash id bp/agent-sessions))
-            (changed nil))
+      (let ((session (gethash id bp/agent-sessions)))
         ;; A user-set unread mark clears the same way, and for the same reason:
         ;; the user has now looked at the session.
         (when (buffer-local-value 'bp/agent-session--marked-unread buf)
@@ -258,9 +258,24 @@ spuriously."
           (setq changed t))
         (when (and session (eq (plist-get session :status) 'needs-attention))
           (puthash id (plist-put session :status 'stopped) bp/agent-sessions)
-          (setq changed t))
-        (when changed
-          (bp/agent-sessions--refresh-if-visible))))))
+          (setq changed t))))
+    ;; A shared file stops nagging once it has been read, however it was
+    ;; opened — `RET' in the dashboard is the common way, but a file the agent
+    ;; also mentioned by path and you jumped to yourself has still been read.
+    ;; Gated on the database being open, which it is whenever a terminal has
+    ;; ever been created, so an Emacs with no sessions pays nothing for this
+    ;; on a hook that runs at every buffer switch.
+    (when (and (buffer-live-p buf) (sqlitep bp/agent-sessions--db))
+      (let ((truename (buffer-local-value 'buffer-file-truename buf)))
+        (when (and truename
+                   (bp/agent-sessions--shared-path-p truename)
+                   (bp/agent-sessions--set-visited
+                    (lambda (f) (equal (file-truename (plist-get f :path))
+                                       truename))
+                    t))
+          (setq changed t))))
+    (when changed
+      (bp/agent-sessions--refresh-if-visible))))
 
 (defun bp/agent-session--desktop-notify (title body)
   "Show a desktop notification with TITLE and BODY.
@@ -1453,6 +1468,10 @@ re-edits the note point is sitting in."
        (let ((value (oref section value)))
          (cons (list (bp/agent-sessions--worktree-note-key value))
                (or (plist-get value :label) "worktree"))))
+      ('bp/agent-session-file
+       (let ((path (oref section value)))
+         (cons (list (bp/agent-sessions--file-note-key path))
+               (file-name-nondirectory (directory-file-name path)))))
       ('bp/agent-session-row
        (when-let* ((session (bp/agent-sessions--session-for-id
                              (oref section value)))
@@ -1764,6 +1783,37 @@ only channel back, so a failure has to be reported in the value, not signalled."
       (bp/agent-sessions--refresh-if-visible)
       (format "Shared %s" (abbreviate-file-name (expand-file-name path)))))))
 
+(defun bp/agent-sessions--file-at-point ()
+  "Return (SESSION PATH FILE) for the shared-file row at point, or nil.
+Point may be on the row itself or inside a note rendered under it, which
+resolves to the file the note is about — the same courtesy
+`bp/agent-sessions--note-target-at-point' extends."
+  (let ((section (magit-current-section)))
+    (when (and section (eq (oref section type) 'bp/agent-session-note))
+      (setq section (oref section parent)))
+    (when (and section (eq (oref section type) 'bp/agent-session-file))
+      (let* ((path (oref section value))
+             (row (bp/agent-sessions--enclosing-section 'bp/agent-session-row))
+             (session (and row (bp/agent-sessions--session-for-id
+                                (oref row value)))))
+        (when session
+          (list session path
+                (seq-find (lambda (f) (equal (plist-get f :path) path))
+                          (bp/agent-sessions--session-files session))))))))
+
+(defun bp/agent-sessions--open-file-at-point (display-fn)
+  "Open the shared file at point with DISPLAY-FN, clearing its highlight.
+The refresh happens before DISPLAY-FN runs so the dashboard's point
+restoration is not competing with whatever DISPLAY-FN does to the windows."
+  (pcase (bp/agent-sessions--file-at-point)
+    (`(,_session ,path ,_file)
+     (if (not (file-exists-p path))
+         (message "File no longer exists: %s" (abbreviate-file-name path))
+       (when (bp/agent-sessions--set-visited
+              (lambda (f) (equal (plist-get f :path) path)) t)
+         (bp/agent-sessions--refresh-if-visible))
+       (funcall display-fn (find-file-noselect path))))))
+
 (defface bp/agent-session-file-unvisited
   '((t :inherit bp/agent-session-needs-attention))
   "Face for a shared file not opened since the agent last shared it.
@@ -1987,35 +2037,42 @@ looping behaviour everywhere else in Emacs is left alone."
 
 (defun bp/agent-sessions-jump ()
   "Act on the thing at point.
-On a session row, pop to its vterm buffer.  On a worktree or repo heading,
-open project.el's dispatch menu in that directory (see
+On a session row, pop to its vterm buffer.  On a shared-file row, open the
+file — which is also what clears its highlight.  On a worktree or repo
+heading, open project.el's dispatch menu in that directory (see
 `bp/agent-sessions--switch-project')."
   (interactive)
-  (let ((section (magit-current-section)))
-    (pcase (and section (oref section type))
-      ('bp/agent-session-row
-       (let* ((session (bp/agent-sessions--session-for-id (oref section value)))
-              (buf (and session (plist-get session :buffer))))
-         (if (buffer-live-p buf)
-             (pop-to-buffer buf)
-           (message "No session at point."))))
-      ((or 'bp/agent-session-worktree 'bp/agent-session-repo)
-       (let* ((value (oref section value))
-              (dir (or (plist-get value :path) (plist-get value :root))))
+  (if (bp/agent-sessions--file-at-point)
+      (bp/agent-sessions--open-file-at-point #'pop-to-buffer)
+    (let ((section (magit-current-section)))
+      (pcase (and section (oref section type))
+        ('bp/agent-session-row
+         (let* ((session (bp/agent-sessions--session-for-id (oref section value)))
+                (buf (and session (plist-get session :buffer))))
+           (if (buffer-live-p buf)
+               (pop-to-buffer buf)
+             (message "No session at point."))))
+        ((or 'bp/agent-session-worktree 'bp/agent-session-repo)
+         (let* ((value (oref section value))
+                (dir (or (plist-get value :path) (plist-get value :root))))
          (if (and dir (file-directory-p dir))
              (bp/agent-sessions--switch-project dir)
            (message "No worktree directory at point."))))
-      (_ (message "Nothing to do here.")))))
+        (_ (message "Nothing to do here."))))))
 
 (defun bp/agent-sessions-display ()
-  "Display the session at point in another window, staying in the dashboard."
+  "Display the session or shared file at point in another window.
+Point stays in the dashboard either way."
   (interactive)
-  (let* ((session (bp/agent-sessions--session-at-point))
-         (buf (and session (plist-get session :buffer))))
-    (if (buffer-live-p buf)
-        ;; inhibit-same-window: never reuse/replace the dashboard's own window.
-        (display-buffer buf '(nil (inhibit-same-window . t)))
-      (message "No session at point."))))
+  ;; inhibit-same-window: never reuse/replace the dashboard's own window.
+  (if (bp/agent-sessions--file-at-point)
+      (bp/agent-sessions--open-file-at-point
+       (lambda (buf) (display-buffer buf '(nil (inhibit-same-window . t)))))
+    (let* ((session (bp/agent-sessions--session-at-point))
+           (buf (and session (plist-get session :buffer))))
+      (if (buffer-live-p buf)
+          (display-buffer buf '(nil (inhibit-same-window . t)))
+        (message "No session at point.")))))
 
 (defun bp/agent-sessions--row-locations ()
   "Return (POSITION . ID) for each session row, in buffer order."
@@ -2054,9 +2111,57 @@ Return nil without moving point when ID is no longer displayed."
       (goto-char (car row))
       t)))
 
+(defun bp/agent-sessions--neighbour-ident (section)
+  "Return the ident of the section to put point on once SECTION is gone.
+The next sibling of the same type, else the previous one, else the parent — so
+detaching a file lands on the next file, the last remaining file, or the
+session they hang off, never back at the top of the buffer.
+
+An *ident* rather than a position or a section object because the buffer is
+erased and rebuilt in between, which is the same reason
+`bp/agent-sessions--refresh' restores point by ident; and the reason this is
+needed at all is that the refresh's own restoration cannot help here — the
+section point was on is precisely the one that no longer exists."
+  (when-let* ((parent (and section (oref section parent)))
+              (type (oref section type))
+              (siblings (seq-filter (lambda (c) (eq (oref c type) type))
+                                    (oref parent children)))
+              (pos (seq-position siblings section)))
+    (magit-section-ident (or (nth (1+ pos) siblings)
+                             (and (> pos 0) (nth (1- pos) siblings))
+                             parent))))
+
+(defun bp/agent-sessions--goto-ident (ident)
+  "Move point to the section identified by IDENT, if it is still displayed."
+  (when-let ((target (and ident (magit-get-section ident))))
+    (goto-char (oref target start))
+    t))
+
 (defun bp/agent-sessions-kill ()
-  "Kill the session at point and move to a neighboring session row."
+  "Kill the session at point, or detach the shared file at point.
+On a session row this kills its terminal buffer and moves to a neighbouring
+row.  On a shared-file row it drops the file from that session's list and
+leaves the file on disk completely alone: this list is an inbox, and clearing
+an item out of it must never be able to destroy the thing it points at."
   (interactive)
+  (pcase (bp/agent-sessions--file-at-point)
+    (`(,session ,path ,_file)
+     ;; Resolve the neighbour *before* detaching, while the row is still on
+     ;; screen to have neighbours at all.
+     (let ((ident (bp/agent-sessions--neighbour-ident
+                   (bp/agent-sessions--enclosing-section
+                    'bp/agent-session-file))))
+       (if (bp/agent-sessions--detach-file session path)
+           (progn
+             (bp/agent-sessions--refresh)
+             (bp/agent-sessions--goto-ident ident)
+             (message "Detached %s (the file on disk is untouched)."
+                      (file-name-nondirectory (directory-file-name path))))
+         (message "Not attached to this session."))))
+    (_ (bp/agent-sessions--kill-session))))
+
+(defun bp/agent-sessions--kill-session ()
+  "Kill the session at point and move to a neighboring session row."
   (let* ((session (bp/agent-sessions--session-at-point))
          (buf (and session (plist-get session :buffer)))
          (nearby-id (and (buffer-live-p buf)
@@ -2077,8 +2182,24 @@ Return nil without moving point when ID is no longer displayed."
 Gives the row the same highlight, `●' marker, sort priority and `N'/`P'
 reachability a hook-reported needs-attention has, for sessions you want to
 come back to yourself.  With a prefix argument (UNMARK), clear the mark.
-The mark also clears on its own once you focus the session's buffer."
+The mark also clears on its own once you focus the session's buffer.
+
+On a shared-file row this toggles the unopened highlight instead: `u' on a
+file you have opened lights it up again, and `u' on one you have not clears it
+without opening it — which is the whole point, for a file you have decided you
+do not need to read.  UNMARK always clears."
   (interactive "P")
+  (pcase (bp/agent-sessions--file-at-point)
+    (`(,_session ,path ,file)
+     (let ((visited (or (and unmark t) (null (plist-get file :visited-at)))))
+       (bp/agent-sessions--set-visited
+        (lambda (f) (equal (plist-get f :path) path)) visited)
+       (bp/agent-sessions--refresh)
+       (message (if visited "Marked as read." "Marked as unread."))))
+    (_ (bp/agent-sessions--mark-session-unread unmark))))
+
+(defun bp/agent-sessions--mark-session-unread (unmark)
+  "Set or clear the unread mark on the session row at point."
   (let* ((session (bp/agent-sessions--session-at-point))
          (buf (and session (plist-get session :buffer))))
     (if (not (buffer-live-p buf))
@@ -2279,13 +2400,13 @@ creating one."
        root (plist-get (bp/agent-session--repo-info root) :worktree)))))
 
 (defun bp/agent-sessions--rows ()
-  "Return (LINE-POS . STATUS) for each session row, in buffer order.
+  "Return (LINE-POS . STATUS) for each session and shared-file row, in order.
 This is what the last render drew (`bp/agent-sessions--row-status'), never a
 fresh lookup: only the render path knows the displayed status."
   bp/agent-sessions--row-status)
 
 (defun bp/agent-sessions--goto-row (direction predicate)
-  "Move point to the next/previous session row (DIRECTION is `next' or `prev').
+  "Move point to the next/previous row (DIRECTION is `next' or `prev').
 When PREDICATE is non-nil, only rows whose status satisfies it are considered."
   (let* ((cur (line-beginning-position))
          (positions (mapcar #'car
@@ -2297,8 +2418,8 @@ When PREDICATE is non-nil, only rows whose status satisfies it are considered."
                    ('next (seq-find (lambda (p) (> p cur)) positions))
                    ('prev (seq-find (lambda (p) (< p cur)) (reverse positions))))))
     (cond (target (goto-char target))
-          ((null positions) (message "No matching session."))
-          (t (message "No %s session." (if (eq direction 'next) "next" "previous"))))))
+          ((null positions) (message "No matching row."))
+          (t (message "No %s row." (if (eq direction 'next) "next" "previous"))))))
 
 (defun bp/agent-sessions-next ()
   "Move to the next session row."
@@ -2382,7 +2503,16 @@ are exactly what the next render will order."
            (list (bp/agent-sessions--sessions-scope rkey wkey)
                  (mapcar #'bp/agent-sessions--entry-buffer-name
                          (plist-get wt :entries))
-                 (bp/agent-sessions--session-buffer-name session))))))))
+                 (bp/agent-sessions--session-buffer-name session)))))
+      ('bp/agent-session-file
+       (let* ((row (bp/agent-sessions--enclosing-section 'bp/agent-session-row))
+              (session (and row (bp/agent-sessions--session-for-id
+                                 (oref row value)))))
+         (when session
+           (list (bp/agent-sessions--files-scope session)
+                 (mapcar (lambda (f) (plist-get f :path))
+                         (bp/agent-sessions--session-files session))
+                 (oref section value))))))))
 
 (defun bp/agent-sessions--merge-order (saved visible)
   "Splice the VISIBLE key order into SAVED, keeping absent keys in place.
