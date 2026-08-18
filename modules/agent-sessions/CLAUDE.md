@@ -8,6 +8,8 @@ code says *what* it does; this file records *why*, so the intent survives edits.
 - `agent-sessions.el` — everything; `agent-sessions-codex-hook.sh` — Codex event
   forwarder. The Claude forwarder lives outside the repo
   (`~/.orca/agent-hooks/claude-hook.sh`, wired via `~/.claude/settings.json`).
+- `bin/` — commands agents run *inside* a session terminal, currently just
+  `emacs-share-file`. On every session terminal's PATH; see "Shared files".
 - Wiring/config is in `../agent-session-config.el`.
 
 ## Why it's built this way
@@ -270,6 +272,79 @@ design:
   safe because it never touches parentage detection. Keep it that side of the
   line.
 
+## Shared files — an inbox, not a file manager
+
+`emacs-share-file FILE ["why"]` lets an agent hand the user something to read;
+it lands as a fourth level of the tree, under the agent that sent it, and stays
+highlighted until opened. It exists because a terminal is a bad inbox: "look at
+/tmp/plan.md" scrolls away, and is only seen at all if you are already in that
+buffer.
+
+**It is attached to the session, by the session's most durable identity.** The
+key is `--session-note-keys` reused verbatim — the agent's own session id when
+it has one, the buffer name otherwise, reading both and collapsing onto the
+first on write. So renaming a terminal keeps its files, a file shared into a
+bare shell survives `claude` starting in it, and a session brought back with
+`R` comes back with its files. The *caller* passes the terminal id, because
+that is what the shell environment has; resolving it to a session happens in
+`bp/agent-sessions-share-file`, the same split the hook path makes. Like a
+note, a row outlives the session that owned it and nothing prunes it — the same
+trade, for the same reason.
+
+**Re-sharing a path means "I changed it, look again", not "add it twice".**
+This is why the table carries two timestamps. `visited_at` is cleared so the
+row lights up exactly as it did the first time, but `shared_at` — the sort key
+— is left at the original share, so the row does not move. That is the
+ordering rule the dashboard already lives by: a row may move when something
+meaningful changes, and a row jumping to the bottom of its list is precisely
+the thing the user was trying to aim at moving out from under them.
+
+**Submitting refreshes an open buffer only when it has no unsaved changes.**
+The Emacs entry point looks for a buffer already visiting the submitted path
+and reverts it from disk, so an open plan immediately shows the version the
+agent just handed over. It does not open a buffer merely to revert it, and a
+modified visiting buffer is left exactly as it is: sharing a file must never
+discard the user's edits.
+
+**`k` detaches and never touches disk.** This list is an inbox; clearing an
+item out of it must not be able to destroy the thing it points at. There is
+deliberately no prefix argument that deletes the file — if that is ever added,
+it is a different key, not a modifier on this one.
+
+**An unopened file borrows the needs-attention face, deliberately.** An unread
+file and a waiting session are the same claim on the user's attention, and the
+dashboard should not make anyone learn two highlights for it. The rows push
+onto `--row-status` like every other row, which is what makes `N`/`P` walk to
+them; see that variable's docstring for why status is recorded at render time
+rather than looked up.
+
+**Reading clears it, however the file was opened.** `RET` is the common path,
+but the focus hook that already clears the `u` mark also matches the selected
+window's `buffer-file-truename` against the shared paths, so a file shared by
+one path and opened by another still counts as read. That hook runs at every
+buffer switch, so the check is a set lookup and is gated on the database being
+already open — which it is whenever a terminal has ever existed, and is not in
+an Emacs with no sessions.
+
+**`u` toggles here, where on a session it sets.** Both directions are wanted
+for a file — lighting one up to re-read, and dismissing one you have decided
+not to read at all — and a file row, unlike a session, has somewhere to read
+its current state back from.
+
+**The script fails loudly, unlike the hook forwarders.** Those exit 0 into the
+void by design: a hook firing into a dead Emacs must not break the agent's
+turn. This one is the opposite — an agent that believes it has handed over a
+file when it has not will go on to tell the user about it — so a missing file,
+a terminal outside Emacs, an unreachable server and a refusal from Emacs each
+print to stderr and exit non-zero. `bp/agent-sessions-share-file` therefore
+*returns* its failures as strings rather than signalling: emacsclient's printed
+value is the only channel back to the agent.
+
+**PATH injection is additive by construction.** The terminal env sets
+`PATH=<our bin>:<the PATH the terminal was going to inherit anyway>`, read from
+`process-environment`. Building it from any other source could silently shrink
+the shell's PATH.
+
 ## Wiring is self-owned and additive, never authoritative
 
 `bp/agent-sessions-install` / `-uninstall` manage the hook entries in
@@ -297,6 +372,17 @@ Setup does **not** auto-run install — it writes user config files, so it stays
 an explicit `M-x`. Point users there rather than editing the JSON by hand.
 
 ## Editing
+
+**A schema addition needs the load-time re-migration to be reachable.**
+`--db` runs the schema only when it *opens* the file and then caches the handle
+for the life of the Emacs, so adding a table left every running Emacs querying
+one its connection had never created — a flood of `no such table`, not a clean
+failure. The top-level `when (sqlitep …)` form after `--db` re-runs the
+statements against an already-open handle; every statement is `IF NOT EXISTS`,
+so it is free, and it makes a reload behave like a restart. Keep it in step
+with the schema list. Note what it does *not* do: it cannot alter an existing
+table, so a change that is not a pure addition needs a real migration keyed on
+`meta.schema_version`.
 
 Reload into the running server after any change (definitions don't hot-swap):
 `emacsclient -e '(load-file ".../agent-sessions/agent-sessions.el")'`. A
