@@ -2865,16 +2865,17 @@ Return non-nil on success, nil when SESSION lacks the info to build a link."
                             (buffer-local-value 'default-directory buf)))))
            (agent (plist-get session :agent-type))
            (sid (plist-get session :agent-session-id))
-           (worktree (plist-get session :worktree))
-           (title (let ((buf (plist-get session :buffer)))
-                    (and (buffer-live-p buf)
-                         (buffer-local-value 'bp/agent-session-title buf)))))
+           (branch (and path
+                        (ignore-errors
+                          (let ((default-directory path))
+                            (magit-get-current-branch)))))
+           (title (bp/agent-sessions--session-title session)))
       (when (and path sid)
         (org-link-store-props
          :type "agent-session"
          :link (format "agent-session:%s::%s::%s"
                        agent sid (file-name-as-directory path))
-         :description (format "%s %s %s" (or worktree "?") agent
+         :description (format "%s [%s] %s" (or branch "?") agent
                               (or title sid)))
         t))))
 
