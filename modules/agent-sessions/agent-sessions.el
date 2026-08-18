@@ -934,7 +934,22 @@ order (e.g. for buffers with no creation stamp)."
        position       INTEGER NOT NULL,
        PRIMARY KEY (kind, scope_repo, scope_worktree, member))"
     "CREATE INDEX IF NOT EXISTS order_group
-       ON order_entries (kind, scope_repo, scope_worktree, position)")
+       ON order_entries (kind, scope_repo, scope_worktree, position)"
+
+    ;; Files an agent handed the user to look at, keyed by the same identity a
+    ;; session's note uses.  Two timestamps, not one: `shared_at' is the first
+    ;; time a path was shared and is what orders the list, while `updated_at'
+    ;; is the latest, so an agent re-sharing a changed file can light its row
+    ;; up again without the row moving out from under the cursor.
+    "CREATE TABLE IF NOT EXISTS shared_files (
+       kind       TEXT    NOT NULL,
+       key        TEXT    NOT NULL,
+       path       TEXT    NOT NULL,
+       label      TEXT,
+       shared_at  INTEGER NOT NULL,
+       updated_at INTEGER NOT NULL,
+       visited_at INTEGER,
+       PRIMARY KEY (kind, key, path))")
   "Statements that bring an empty or existing database up to date.
 All are `IF NOT EXISTS', so running them on every open is the whole migration
 story for as long as the schema only ever grows.  `bp/agent-sessions--schema-version'
@@ -962,6 +977,18 @@ caller goes through here rather than touching `bp/agent-sessions--db'."
       (setq bp/agent-sessions--db db)
       (bp/agent-sessions--db-reap db)
       db)))
+
+;; Re-run the schema against an already-open handle, so *loading* this file
+;; picks up a schema addition.  `--db' migrates only when it opens the file,
+;; and the handle is cached for the life of the Emacs — so without this the
+;; documented way to develop this package (reload into the running server)
+;; leaves the new code querying a table the old connection never created,
+;; which is a flood of "no such table" rather than a clean failure.  Every
+;; statement is `IF NOT EXISTS', so re-running them costs nothing.
+(when (sqlitep bp/agent-sessions--db)
+  (with-sqlite-transaction bp/agent-sessions--db
+    (dolist (stmt bp/agent-sessions--db-schema)
+      (sqlite-execute bp/agent-sessions--db stmt))))
 
 (defun bp/agent-sessions--meta-get (db key)
   (caar (sqlite-select db "SELECT value FROM meta WHERE key = ?" (list key))))
@@ -1473,6 +1500,268 @@ note by hand is tedious, since \\[kill-line] only kills the line point is on."
                   "Note saved for %s.")
                 label)))
     (_ (message "Point is not on a repo, worktree, or session."))))
+
+;;; Shared files ------------------------------------------------------------
+;;
+;; An agent that wants the user to read something runs `emacs-share-file FILE
+;; ["why"]' (bin/emacs-share-file, on the PATH of every session terminal); the
+;; file then hangs under that agent's row in the dashboard, highlighted until
+;; the user opens it.  It exists because a terminal is a bad inbox: "look at
+;; /tmp/plan.md" scrolls away, and is only seen at all if you are already in
+;; that buffer.
+;;
+;; This is persisted for the same reason notes and the manual order are — it is
+;; something someone *chose* to put there, not observed session state — and it
+;; obeys the same rules: loaded into a hash table once, written on change, and
+;; never queried from the render path.
+;;
+;; Two design points worth keeping:
+;;
+;; - **A file is attached to the session's most durable identity, not to its
+;;   terminal.**  It reuses `bp/agent-sessions--session-note-keys' verbatim: the
+;;   agent's own session id when it has one, the buffer name otherwise, reading
+;;   both and collapsing onto the first on write.  So renaming a terminal keeps
+;;   its files, a file shared into a bare shell survives `claude' starting in
+;;   it, and a session brought back with `R' comes back with its files.  The
+;;   caller passes the *terminal* id (that is what the shell env has), and this
+;;   layer resolves it — the same split the hook path makes.
+;;
+;; - **Re-sharing a path means "I changed it, look again", not "add it twice".**
+;;   The row's `visited_at' is cleared so it lights up exactly as it did the
+;;   first time, but its `shared_at' — and therefore its position — is left
+;;   alone.  That follows the ordering rule the dashboard already lives by: a
+;;   row may move when something meaningful changes, and a re-share is not that;
+;;   a row jumping to the bottom of the list is the thing the user is trying to
+;;   aim at moving out from under them.
+
+(defvar bp/agent-sessions--shared-files nil
+  "Hash table KEY -> list of shared-file plists, or nil before first load.
+A KEY is (\"session\" ID), exactly as in `bp/agent-sessions--notes'.  Each
+plist is (:path P :label L :shared-at TS :updated-at TS :visited-at TS-or-nil);
+`:visited-at' nil is what makes a row render highlighted.  Backed by the
+`shared_files' table.")
+
+(defvar bp/agent-sessions--shared-paths nil
+  "Hash set of `file-truename's of every shared file, or nil when it is stale.
+Consulted by the focus hook on every buffer switch, so it has to be a set
+lookup rather than a scan; `bp/agent-sessions--shared-paths-invalidate' drops
+it whenever the file table changes.")
+
+(defun bp/agent-sessions--shared-files-table ()
+  "Return the shared-files table, loading it from the database once."
+  (or bp/agent-sessions--shared-files
+      (setq bp/agent-sessions--shared-files
+            (let ((table (make-hash-table :test 'equal)))
+              (pcase-dolist (`(,kind ,key ,path ,label ,shared ,updated ,visited)
+                             (sqlite-select
+                              (bp/agent-sessions--db)
+                              "SELECT kind, key, path, label, shared_at,
+                                      updated_at, visited_at
+                                 FROM shared_files ORDER BY shared_at, path"))
+                (let ((k (list kind key)))
+                  (puthash k
+                           (append (gethash k table)
+                                   (list (list :path path :label label
+                                               :shared-at shared
+                                               :updated-at updated
+                                               :visited-at visited)))
+                           table)))
+              table))))
+
+(defun bp/agent-sessions--shared-paths-invalidate ()
+  "Drop the cached truename set; it is rebuilt on the next lookup."
+  (setq bp/agent-sessions--shared-paths nil))
+
+(defun bp/agent-sessions--shared-path-p (truename)
+  "Non-nil when TRUENAME is the true name of some shared file."
+  (and truename
+       (gethash truename
+                (or bp/agent-sessions--shared-paths
+                    (setq bp/agent-sessions--shared-paths
+                          (let ((set (make-hash-table :test 'equal)))
+                            (maphash
+                             (lambda (_key files)
+                               (dolist (f files)
+                                 (puthash (file-truename (plist-get f :path))
+                                          t set)))
+                             (bp/agent-sessions--shared-files-table))
+                            set))))))
+
+(defun bp/agent-sessions--file-note-key (path)
+  "Note key for the shared file at PATH.
+Keyed on the path alone, not on path-plus-session: the note is about the file,
+and the same file handed to two sessions is still one thing to say something
+about."
+  (list "file" path))
+
+(defun bp/agent-sessions--files-scope (session)
+  "Manual-order scope for SESSION's shared files.
+Packed into the existing two scope columns as (\"files\" SESSION-KEY) rather
+than needing a third: `kind' already separates it from every other scope, and
+adding a column would mean a real migration, which `CREATE TABLE IF NOT
+EXISTS' cannot do.  SESSION-KEY is the same durable identity the files
+themselves are stored under, so an arrangement survives a terminal rename."
+  (list "files" (or (cadr (car (bp/agent-sessions--session-note-keys session)))
+                    "?")))
+
+(defun bp/agent-sessions--session-files (session)
+  "Files shared with SESSION, in display order.
+First-shared first, with any manual order (`M-n' / `M-p') applied on top.
+Every identity the session has had is read, not just the current one, so a
+file attached before `claude' started in the terminal is not invisible in the
+window between that and the next write (which collapses them)."
+  (let ((table (bp/agent-sessions--shared-files-table))
+        files)
+    (dolist (key (bp/agent-sessions--session-note-keys session))
+      ;; `append' shares the tail of its last argument, and `sort' is
+      ;; destructive — without the copy this would reorder the stored list.
+      (setq files (append files (copy-sequence (gethash key table)))))
+    (bp/agent-sessions--apply-manual-order
+     (bp/agent-sessions--files-scope session)
+     (lambda (f) (plist-get f :path))
+     (sort files (lambda (a b) (< (plist-get a :shared-at)
+                                  (plist-get b :shared-at)))))))
+
+(defun bp/agent-sessions--shared-file-write (key file)
+  "Upsert FILE under KEY in the database."
+  (sqlite-execute
+   (bp/agent-sessions--db)
+   "INSERT INTO shared_files
+      (kind, key, path, label, shared_at, updated_at, visited_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(kind, key, path) DO UPDATE
+      SET label      = excluded.label,
+          updated_at = excluded.updated_at,
+          visited_at = excluded.visited_at"
+   (append key (list (plist-get file :path)
+                     (plist-get file :label)
+                     (plist-get file :shared-at)
+                     (plist-get file :updated-at)
+                     (plist-get file :visited-at)))))
+
+(defun bp/agent-sessions--files-collapse (keys)
+  "Move file rows stored under the less durable KEYS onto (car KEYS).
+The same tidying `bp/agent-sessions--note-set' does, and for the same reason: a
+session that gains an agent session id should end up with one file list under
+that id rather than one per identity it has held.  A path already present under
+the primary key wins, so this can never undo a newer share."
+  (let* ((table (bp/agent-sessions--shared-files-table))
+         (primary (car keys))
+         (db (bp/agent-sessions--db))
+         (kept (gethash primary table))
+         (moved nil))
+    (dolist (key (cdr keys))
+      (when-let ((files (gethash key table)))
+        (dolist (f files)
+          (unless (seq-find (lambda (k) (equal (plist-get k :path)
+                                               (plist-get f :path)))
+                            kept)
+            (push f moved)))
+        (remhash key table)
+        (sqlite-execute db "DELETE FROM shared_files WHERE kind = ? AND key = ?"
+                        key)))
+    (when moved
+      (setq moved (nreverse moved))
+      (puthash primary (append kept moved) table)
+      (dolist (f moved)
+        (bp/agent-sessions--shared-file-write primary f)))))
+
+(defun bp/agent-sessions--share-file (session path label)
+  "Attach PATH to SESSION with LABEL, unvisited.  Return the file plist.
+Re-sharing a path already attached updates it in place rather than adding a
+second row: the label is refreshed (an empty LABEL keeps the old one, since an
+agent re-sharing may have nothing to add beyond \"changed\"), `:visited-at' is
+cleared so the row highlights again, and `:shared-at' — the sort key — is left
+at the original share so the row does not move."
+  (let ((keys (bp/agent-sessions--session-note-keys session))
+        (path (expand-file-name path))
+        (now (bp/agent-sessions--now)))
+    (unless keys
+      (error "Session has no durable identity to attach a file to"))
+    (bp/agent-sessions--files-collapse keys)
+    (let* ((table (bp/agent-sessions--shared-files-table))
+           (primary (car keys))
+           (files (gethash primary table))
+           (existing (seq-find (lambda (f) (equal (plist-get f :path) path))
+                               files))
+           (file (list :path path
+                       :label (or (and label (not (string-empty-p label)) label)
+                                  (and existing (plist-get existing :label)))
+                       :shared-at (or (and existing (plist-get existing :shared-at))
+                                      now)
+                       :updated-at now
+                       :visited-at nil)))
+      (puthash primary
+               (if existing
+                   (mapcar (lambda (f) (if (eq f existing) file f)) files)
+                 (append files (list file)))
+               table)
+      (bp/agent-sessions--shared-file-write primary file)
+      (bp/agent-sessions--shared-paths-invalidate)
+      file)))
+
+(defun bp/agent-sessions--detach-file (session path)
+  "Remove PATH from SESSION's shared files; return non-nil if it was attached.
+The file on disk is never touched — this drops the pointer to it, nothing more."
+  (let ((table (bp/agent-sessions--shared-files-table))
+        (db (bp/agent-sessions--db))
+        (removed nil))
+    (dolist (key (bp/agent-sessions--session-note-keys session))
+      (let ((files (gethash key table)))
+        (when (seq-find (lambda (f) (equal (plist-get f :path) path)) files)
+          (puthash key
+                   (seq-remove (lambda (f) (equal (plist-get f :path) path))
+                               files)
+                   table)
+          (sqlite-execute db "DELETE FROM shared_files
+                               WHERE kind = ? AND key = ? AND path = ?"
+                          (append key (list path)))
+          (setq removed t))))
+    (when removed (bp/agent-sessions--shared-paths-invalidate))
+    removed))
+
+(defun bp/agent-sessions--set-visited (match-fn visitedp)
+  "Set the visited state of every shared file MATCH-FN accepts.
+Returns non-nil when something actually changed, so callers can skip a render.
+Matching is by predicate rather than by (session, path) because the two callers
+want different tests — a dashboard command knows the exact stored path, while
+the focus hook only knows the true name of a buffer's file — and because a file
+shared with two sessions should stop nagging from both once it has been read."
+  (let ((db (bp/agent-sessions--db))
+        (stamp (and visitedp (bp/agent-sessions--now)))
+        (changed nil))
+    (maphash
+     (lambda (key files)
+       (dolist (f files)
+         (when (and (funcall match-fn f)
+                    (not (eq (null (plist-get f :visited-at)) (null stamp))))
+           (plist-put f :visited-at stamp)
+           (sqlite-execute db "UPDATE shared_files SET visited_at = ?
+                                WHERE kind = ? AND key = ? AND path = ?"
+                           (list stamp (car key) (cadr key)
+                                 (plist-get f :path)))
+           (setq changed t))))
+     (bp/agent-sessions--shared-files-table))
+    changed))
+
+;;;###autoload
+(defun bp/agent-sessions-share-file (session-id path &optional label)
+  "Attach PATH to the agent session running in terminal SESSION-ID.
+The entry point `bin/emacs-share-file' calls over emacsclient, so SESSION-ID is
+the terminal's EMACS_AGENT_SESSION_ID — the id the shell has — and resolving it
+to whatever session is running there happens here, the same split the hook path
+makes.  Returns a string for the caller to print: emacsclient is the agent's
+only channel back, so a failure has to be reported in the value, not signalled."
+  (let ((session (bp/agent-sessions--session-for-id session-id)))
+    (cond
+     ((null session)
+      (format "No Emacs terminal registered for session id %s" session-id))
+     ((not (file-exists-p path))
+      (format "No such file: %s" path))
+     (t
+      (bp/agent-sessions--share-file session path label)
+      (bp/agent-sessions--refresh-if-visible)
+      (format "Shared %s" (abbreviate-file-name (expand-file-name path)))))))
 
 (defun bp/agent-sessions--build-tree (entries)
   "Group live ENTRIES into a list of repo plists for rendering.
