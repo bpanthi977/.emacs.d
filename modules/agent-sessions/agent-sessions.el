@@ -686,7 +686,8 @@ indentation conveys the relationship."
          'font-lock-face face))
       (bp/agent-sessions--insert-note
        (bp/agent-sessions--session-note-keys session)
-       (concat "    " indent "    ")))))
+       (concat "    " indent "    "))
+      (bp/agent-sessions--insert-files session (concat "    " indent "    ")))))
 
 (defun bp/agent-sessions--insert-entries (entries)
   "Insert ENTRIES, nesting any branched session under its parent when present.
@@ -1762,6 +1763,59 @@ only channel back, so a failure has to be reported in the value, not signalled."
       (bp/agent-sessions--share-file session path label)
       (bp/agent-sessions--refresh-if-visible)
       (format "Shared %s" (abbreviate-file-name (expand-file-name path)))))))
+
+(defface bp/agent-session-file-unvisited
+  '((t :inherit bp/agent-session-needs-attention))
+  "Face for a shared file not opened since the agent last shared it.
+Inherits the needs-attention face deliberately: an unread file and a waiting
+session are the same claim on the user's attention, and the dashboard should
+not make them learn two highlights for it.")
+
+(defface bp/agent-session-file
+  '((t :inherit default))
+  "Face for a shared file the user has already opened.")
+
+(defun bp/agent-sessions--insert-file (file indent)
+  "Insert a row for shared FILE, indented by INDENT.
+INDENT puts the row at the same depth as the session's note — one level in
+from the session row — so it reads as hanging off that session rather than as
+another row beside it.  Its section value is the path:
+stable across renders, unique within a session, and disambiguated from the
+same path under another session by magit's parent chain."
+  (let* ((path (plist-get file :path))
+         (unvisited (null (plist-get file :visited-at)))
+         ;; One stat per file per render.  Affordable at the scale this holds
+         ;; (a handful of paths, all local) and worth it: a file an agent
+         ;; wrote to /tmp and the reaper has since removed should say so
+         ;; rather than fail on RET.
+         (missing (not (file-exists-p path))))
+    ;; Record what this row *shows*, for `N'/`P' — see the docstring of
+    ;; `bp/agent-sessions--row-status'.  An unopened file is reachable by the
+    ;; attention keys for the same reason it is highlighted like one.
+    (push (cons (line-beginning-position)
+                (if unvisited 'needs-attention 'idle))
+          bp/agent-sessions--row-status)
+    (magit-insert-section (bp/agent-session-file path)
+      (magit-insert-heading
+       (propertize
+        (concat indent (if unvisited "● " "  ")
+                (format "%-28s %s"
+                        (file-name-nondirectory (directory-file-name path))
+                        (or (plist-get file :label)
+                            (abbreviate-file-name path)))
+                (if missing "  (missing)" "")
+                "\n")
+        'font-lock-face (if unvisited
+                            'bp/agent-session-file-unvisited
+                          'bp/agent-session-file)))
+      (bp/agent-sessions--insert-note
+       (list (bp/agent-sessions--file-note-key path))
+       (concat indent "    ")))))
+
+(defun bp/agent-sessions--insert-files (session indent)
+  "Insert a row for every file shared with SESSION, indented by INDENT."
+  (dolist (file (bp/agent-sessions--session-files session))
+    (bp/agent-sessions--insert-file file indent)))
 
 (defun bp/agent-sessions--build-tree (entries)
   "Group live ENTRIES into a list of repo plists for rendering.
