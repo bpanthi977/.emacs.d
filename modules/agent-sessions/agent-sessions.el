@@ -2900,8 +2900,9 @@ Return non-nil on success, nil when SESSION lacks the info to build a link."
          :type "agent-session"
          :link (format "agent-session:%s::%s::%s"
                        agent sid (file-name-as-directory path))
-         :description (format "%s [%s] %s" (or branch "?") agent
-                              (or title sid)))
+         :description (if branch
+                          (format "%s %s %s" branch agent (or title sid))
+                        (format "%s %s" agent (or title sid))))
         t))))
 
 (defun bp/agent-sessions--org-follow-link (link &optional _arg)
