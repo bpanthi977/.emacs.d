@@ -27,3 +27,4 @@
 /agent-sessions.db
 /agent-sessions.db-shm
 /agent-sessions.db-wal
+/forks/
