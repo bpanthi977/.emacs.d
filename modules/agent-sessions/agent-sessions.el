@@ -3440,6 +3440,77 @@ RULES
 
 ;;;; Entry points (called from `bin/emacs-agent')
 
+(defcustom bp/agent-orchestration-claude-skills-dir
+  (expand-file-name "~/.claude/skills/")
+  "Where Claude Code looks for personal skills."
+  :type 'directory)
+
+(defcustom bp/agent-orchestration-codex-skills-dir
+  (expand-file-name "~/.codex/skills/")
+  "Where Codex looks for skills, in the same `<name>/SKILL.md' layout Claude uses."
+  :type 'directory)
+
+(defcustom bp/agent-orchestration-codex-prompts-dir
+  (expand-file-name "~/.codex/prompts/")
+  "Where Codex looks for custom prompts, each usable as `/<name>'."
+  :type 'directory)
+
+(defconst bp/agent-orchestration--skill-name "orca"
+  "Name the skill is invoked by: `/orca', or `/orca --main' to coordinate.")
+
+(defun bp/agent-orchestration--skill-dir ()
+  (expand-file-name (format "skills/%s/" bp/agent-orchestration--skill-name)
+                    bp/agent-sessions--dir))
+
+(defun bp/agent-orchestration--link (target link)
+  "Point LINK at TARGET, returning a string describing what happened.
+Symlinks rather than copies so editing the guide in this package takes effect
+at the agent's next invocation; and refuses to replace anything that is not
+already our own link, because both directories belong to the user."
+  (cond
+   ((and (file-symlink-p link)
+         (equal (file-truename link) (file-truename target)))
+    (format "%s already linked" (abbreviate-file-name link)))
+   ((or (file-exists-p link) (file-symlink-p link))
+    (if (file-symlink-p link)
+        (progn (delete-file link)
+               (make-symbolic-link target link)
+               (format "%s relinked" (abbreviate-file-name link)))
+      (format "%s exists and is not a symlink — left alone"
+              (abbreviate-file-name link))))
+   (t
+    (make-directory (file-name-directory link) t)
+    (make-symbolic-link target link)
+    (format "%s linked" (abbreviate-file-name link)))))
+
+;;;###autoload
+(defun bp/agent-orchestration-install-skill ()
+  "Make the orchestration skill loadable by Claude Code and Codex as `/orca'.
+Links this package's `skills/orca' into every directory the two tools read:
+both skill directories, and Codex's prompts directory so `/orca' works there
+as a slash command too.  The guides themselves are served by `emacs-agent
+guide', so what is installed is a stub that cannot go stale.  Idempotent."
+  (interactive)
+  (let* ((dir (bp/agent-orchestration--skill-dir))
+         (results
+          (list
+           (bp/agent-orchestration--link
+            (directory-file-name dir)
+            (expand-file-name bp/agent-orchestration--skill-name
+                              bp/agent-orchestration-claude-skills-dir))
+           (bp/agent-orchestration--link
+            (directory-file-name dir)
+            (expand-file-name bp/agent-orchestration--skill-name
+                              bp/agent-orchestration-codex-skills-dir))
+           (bp/agent-orchestration--link
+            (expand-file-name "orca-prompt.md" dir)
+            (expand-file-name (format "%s.md" bp/agent-orchestration--skill-name)
+                              bp/agent-orchestration-codex-prompts-dir)))))
+    (unless (file-directory-p dir)
+      (error "agent-sessions: missing skill directory %s" dir))
+    (unless (server-running-p) (server-start))
+    (message "agent-sessions: %s" (string-join results "; "))))
+
 (defun bp/agent-orchestration-spawn (coordinator-id type worktree task &optional title)
   "Start a TYPE agent in WORKTREE on TASK, dispatched by COORDINATOR-ID.
 Returns a string to print.  WORKTREE must already exist: allocating checkouts
