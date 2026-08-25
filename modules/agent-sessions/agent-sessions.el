@@ -3440,6 +3440,92 @@ RULES
 
 ;;;; Entry points (called from `bin/emacs-agent')
 
+(defcustom bp/agent-orchestration-trust-new-worktrees t
+  "When non-nil, register a spawn's directory as trusted with the agent first.
+Both agent CLIs stop at an interactive trust prompt the first time they run in
+a directory they have not seen (\"Do you trust the contents of this
+directory?\"), and a worker stopped there never reads its brief — so an
+orchestrator spawning into a worktree it just created would sit waiting for a
+report that cannot come.  Registering the directory up front is what makes an
+unattended spawn possible.
+
+The cost is real and worth stating: any directory an orchestrator spawns into
+becomes trusted for that agent from then on.  Set this to nil to leave both
+configs alone and approve each new directory by hand instead — `spawn' then
+says which worker is waiting on you."
+  :type 'boolean)
+
+(defcustom bp/agent-orchestration-claude-config-file
+  (expand-file-name "~/.claude.json")
+  "Claude Code's own config, where per-directory trust is recorded."
+  :type 'file)
+
+(defcustom bp/agent-orchestration-codex-config-file
+  (expand-file-name "~/.codex/config.toml")
+  "Codex's config, where per-directory trust is recorded."
+  :type 'file)
+
+(defun bp/agent-orchestration--trust-claude (dir)
+  "Record DIR as trusted in Claude Code's config; nil when it already was.
+Reads and rewrites through this package's own JSON helpers, so everything else
+in that file (it holds the user's whole Claude state) round-trips untouched and
+a `.bak' is left behind.  Only written when something actually changes: live
+Claude sessions rewrite this file themselves, and every needless write of ours
+is another chance to land between one of their reads and writes."
+  (let* ((file bp/agent-orchestration-claude-config-file)
+         (config (bp/agent-sessions--read-json file))
+         (projects (or (gethash "projects" config) (make-hash-table :test 'equal)))
+         (entry (or (gethash dir projects) (make-hash-table :test 'equal))))
+    (unless (eq (gethash "hasTrustDialogAccepted" entry) t)
+      (puthash "hasTrustDialogAccepted" t entry)
+      (puthash dir entry projects)
+      (puthash "projects" projects config)
+      (bp/agent-sessions--write-json file config)
+      (format "pre-trusted %s for claude" (abbreviate-file-name dir)))))
+
+(defun bp/agent-orchestration--trust-codex (dir)
+  "Record DIR as trusted in Codex's config; nil when it already had an entry.
+Appends a `[projects.\"DIR\"]' table rather than parsing the file: a new table
+header is always a legal thing to add at the end of a TOML file, and there is
+no TOML reader here that could round-trip the rest of it safely.  An existing
+entry is left exactly as it is, even if it says untrusted — that would be the
+user's own decision about this directory."
+  (let* ((file bp/agent-orchestration-codex-config-file)
+         (header (format "[projects.\"%s\"]" dir))
+         (existing (and (file-exists-p file)
+                        (with-temp-buffer
+                          (insert-file-contents file)
+                          (buffer-string)))))
+    (unless (and existing (string-search header existing))
+      (when (file-exists-p file) (copy-file file (concat file ".bak") t))
+      (make-directory (file-name-directory file) t)
+      (with-temp-buffer
+        (when existing
+          (insert existing)
+          (unless (string-suffix-p "\n" existing) (insert "\n")))
+        (insert (format "\n%s\ntrust_level = \"trusted\"\n" header))
+        (write-region (point-min) (point-max) file nil 'quiet))
+      (format "pre-trusted %s for codex" (abbreviate-file-name dir)))))
+
+(defun bp/agent-orchestration--ensure-trusted (agent dir)
+  "Make AGENT trust DIR before it is launched there.  Returns a note or nil.
+The path is canonicalised because that is what the agent's own process will
+see: on macOS a spawn into `/tmp/x' runs in `/private/tmp/x', and a trust entry
+under the other spelling would not match.  A config we cannot read is reported
+rather than raised: a spawn that works and warns beats a spawn that fails."
+  (when bp/agent-orchestration-trust-new-worktrees
+    (let ((path (directory-file-name (file-truename dir))))
+      (condition-case err
+          (pcase agent
+            ('claude (bp/agent-orchestration--trust-claude path))
+            ('codex (bp/agent-orchestration--trust-codex path))
+            ;; A type the user added themselves: we have no idea where it keeps
+            ;; trust, so say nothing rather than guess.
+            (_ nil))
+        (error (format "could not pre-trust %s for %s (%s) — the worker may be sitting at a trust prompt"
+                       (abbreviate-file-name path) agent
+                       (error-message-string err)))))))
+
 (defcustom bp/agent-orchestration-claude-skills-dir
   (expand-file-name "~/.claude/skills/")
   "Where Claude Code looks for personal skills."
@@ -3534,7 +3620,8 @@ stray worktree or branch behind."
      ((string-empty-p (string-trim (or task "")))
       "Refusing to spawn a worker with an empty --task")
      (t
-      (let* ((brief (bp/agent-orchestration--write-brief coordinator-id task))
+      (let* ((trust-note (bp/agent-orchestration--ensure-trusted agent dir))
+             (brief (bp/agent-orchestration--write-brief coordinator-id task))
              (label (if (and title (not (string-empty-p (string-trim title))))
                         (string-trim title)
                       (bp/agent-orchestration--task-title task)))
@@ -3572,8 +3659,9 @@ stray worktree or branch behind."
             (bp/agent-sessions--terminal-send
              buf (format template (shell-quote-argument brief)))
             (bp/agent-sessions--refresh-if-visible)
-            (format "Spawned %s (%s) in %s\nTask: %s\nBrief: %s"
-                    worker-id type (abbreviate-file-name dir) label brief))))))))
+            (format "Spawned %s (%s) in %s\nTask: %s\nBrief: %s%s"
+                    worker-id type (abbreviate-file-name dir) label brief
+                    (if trust-note (concat "\nNote: " trust-note) "")))))))))
 
 (defun bp/agent-orchestration-send (from-id to type subject body files report)
   "Queue a message from FROM-ID to TO and try to deliver it.  Returns a string."
