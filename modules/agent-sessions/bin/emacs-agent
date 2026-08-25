@@ -1,0 +1,205 @@
+#!/bin/sh
+# Talk to other agents through the Emacs agent-sessions dashboard.
+#
+#   emacs-agent spawn --type claude|codex --worktree DIR --task TEXT [--title T]
+#   emacs-agent send --to ID --type TYPE --subject S [--body B] [--files csv] [--report P]
+#   emacs-agent done --summary S [--files csv] [--report P] [--subject S] [--to ID]
+#   emacs-agent ask --question Q [--timeout SECONDS] [--to ID]
+#   emacs-agent check [--types csv] [--peek]
+#   emacs-agent wait [--types csv] [--timeout SECONDS] [--interval SECONDS]
+#   emacs-agent list
+#   emacs-agent worktrees
+#   emacs-agent guide [--main]
+#
+# Every verb but `guide' is an emacsclient call into the Emacs that owns this
+# terminal, and is gated on EMACS_AGENT_SESSION_ID — the id agent-sessions.el
+# injects into every session terminal's environment (along with this script's
+# directory on PATH).  Outside such a terminal there is nothing to talk to, so
+# these fail loudly rather than pretending to have worked.
+#
+# Waiting polls from here rather than blocking inside Emacs: an emacsclient
+# call runs on Emacs's only thread, so a blocking wait would freeze the editor
+# for its whole duration.
+
+set -u
+
+selfdir=$(cd -- "$(dirname -- "$0")" 2>/dev/null && pwd -P) || selfdir=""
+KEEPALIVE_EVERY=15
+
+usage() {
+  sed -n '3,17p' "$0" | sed -e 's/^# \{0,1\}//'
+}
+
+die() { echo "emacs-agent: $1" >&2; exit 1; }
+
+need_session() {
+  [ -n "${EMACS_AGENT_SESSION_ID:-}" ] ||
+    die "not inside an Emacs agent session terminal (no EMACS_AGENT_SESSION_ID)"
+  command -v emacsclient >/dev/null 2>&1 || die "emacsclient not found"
+}
+
+# Escape a value for interpolation into an elisp string literal.
+esc() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
+
+# Turn emacsclient's printed elisp string back into plain text.
+unquote() {
+  printf '%s' "$1" | sed -e 's/^"//' -e 's/"$//' \
+    -e 's/\\n/\
+/g' -e 's/\\t/	/g' -e 's/\\"/"/g' -e 's/\\\\/\\/g'
+}
+
+# call ELISP -> prints the returned string; non-zero only when Emacs is unreachable.
+call() {
+  reply=$(emacsclient -e "$1" 2>&1) ||
+    die "could not reach Emacs: $reply"
+  unquote "$reply"
+}
+
+# An entry point's failures come back as text, so recognise the shapes that
+# mean "did not happen" and exit non-zero on them.
+report() { # report OUTPUT SUCCESS-PATTERN
+  case "$1" in
+    $2) printf '%s\n' "$1" ;;
+    *) printf '%s\n' "$1" >&2; exit 1 ;;
+  esac
+}
+
+verb=${1:-}
+[ -n "$verb" ] || { usage >&2; exit 2; }
+shift 2>/dev/null || true
+case "$verb" in -h|--help|help) usage; exit 0 ;; esac
+
+type_=""; to=""; subject=""; body=""; files=""; report_path=""
+worktree=""; task=""; title=""; summary=""; question=""; types=""
+timeout=90; interval=3; peek=""; main=""
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --type) type_=${2:-}; shift 2 ;;
+    --to) to=${2:-}; shift 2 ;;
+    --subject) subject=${2:-}; shift 2 ;;
+    --body) body=${2:-}; shift 2 ;;
+    --files) files=${2:-}; shift 2 ;;
+    --report) report_path=${2:-}; shift 2 ;;
+    --worktree) worktree=${2:-}; shift 2 ;;
+    --task) task=${2:-}; shift 2 ;;
+    --task-file) task=$(cat -- "${2:-}") || die "cannot read --task-file ${2:-}"; shift 2 ;;
+    --title) title=${2:-}; shift 2 ;;
+    --summary) summary=${2:-}; shift 2 ;;
+    --question) question=${2:-}; shift 2 ;;
+    --types) types=${2:-}; shift 2 ;;
+    --timeout) timeout=${2:-}; shift 2 ;;
+    --interval) interval=${2:-}; shift 2 ;;
+    --peek) peek=1; shift ;;
+    --main) main=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) die "unknown option: $1 (try 'emacs-agent help')" ;;
+  esac
+done
+
+do_send() { # do_send TO TYPE SUBJECT BODY FILES REPORT
+  out=$(call "(bp/agent-orchestration-send \"$(esc "$EMACS_AGENT_SESSION_ID")\" \"$(esc "$1")\" \"$(esc "$2")\" \"$(esc "$3")\" \"$(esc "$4")\" \"$(esc "$5")\" \"$(esc "$6")\")")
+  report "$out" 'Sent*'
+}
+
+do_check() { # do_check TYPES CONSUME -> prints "messages: N" and the messages
+  consume=t; [ -n "$2" ] || consume=nil
+  call "(bp/agent-orchestration-check \"$(esc "$EMACS_AGENT_SESSION_ID")\" \"$(esc "$1")\" $consume)"
+}
+
+count_of() { printf '%s' "$1" | sed -n '1s/^messages: \([0-9]*\)$/\1/p'; }
+
+# Poll for mail until something matching arrives or the deadline passes.
+poll() { # poll TYPES TIMEOUT INTERVAL
+  started=$(date +%s)
+  last_ping=$started
+  while :; do
+    out=$(do_check "$1" consume)
+    n=$(count_of "$out")
+    case "$n" in
+      ''|0) : ;;
+      *) printf '%s\n' "$out"; return 0 ;;
+    esac
+    now=$(date +%s)
+    elapsed=$((now - started))
+    [ "$elapsed" -lt "$2" ] || {
+      echo "messages: 0 (nothing after ${elapsed}s; call wait again to keep waiting)"
+      return 0
+    }
+    if [ $((now - last_ping)) -ge "$KEEPALIVE_EVERY" ]; then
+      # Keeps the calling agent's tool from reading a long wait as a hang.
+      echo "{\"_keepalive\":true,\"elapsed\":$elapsed}" >&2
+      last_ping=$now
+    fi
+    sleep "$3"
+  done
+}
+
+case "$verb" in
+  guide)
+    file=guide-worker.md
+    [ -z "$main" ] || file=guide-main.md
+    path="$selfdir/../skills/orca/$file"
+    [ -r "$path" ] || die "guide not found at $path"
+    cat -- "$path"
+    ;;
+
+  spawn)
+    need_session
+    [ -n "$type_" ] || die "spawn needs --type (claude, codex, ...)"
+    [ -n "$worktree" ] || die "spawn needs --worktree DIR (see 'emacs-agent worktrees')"
+    [ -n "$task" ] || die "spawn needs --task TEXT or --task-file FILE"
+    out=$(call "(bp/agent-orchestration-spawn \"$(esc "$EMACS_AGENT_SESSION_ID")\" \"$(esc "$type_")\" \"$(esc "$worktree")\" \"$(esc "$task")\" \"$(esc "$title")\")")
+    report "$out" 'Spawned*'
+    ;;
+
+  send)
+    need_session
+    [ -n "$to" ] || die "send needs --to ID"
+    [ -n "$subject" ] || die "send needs --subject"
+    do_send "$to" "$type_" "$subject" "$body" "$files" "$report_path"
+    ;;
+
+  done)
+    need_session
+    [ -n "$summary" ] || die "done needs --summary (three sentences)"
+    [ -n "$to" ] || to=${EMACS_AGENT_COORDINATOR:-}
+    [ -n "$to" ] || die "no coordinator to report to; pass --to ID"
+    [ -n "$subject" ] || subject="Done"
+    do_send "$to" done "$subject" "$summary" "$files" "$report_path"
+    ;;
+
+  ask)
+    need_session
+    [ -n "$question" ] || die "ask needs --question"
+    [ -n "$to" ] || to=${EMACS_AGENT_COORDINATOR:-}
+    [ -n "$to" ] || die "no coordinator to ask; pass --to ID"
+    do_send "$to" question "${subject:-Question}" "$question" "" "" || exit 1
+    poll answer "$timeout" "$interval"
+    ;;
+
+  check)
+    need_session
+    if [ -n "$peek" ]; then do_check "$types" ""; else do_check "$types" consume; fi
+    ;;
+
+  wait)
+    need_session
+    poll "$types" "$timeout" "$interval"
+    ;;
+
+  list)
+    need_session
+    call "(bp/agent-orchestration-list \"$(esc "$EMACS_AGENT_SESSION_ID")\")"
+    ;;
+
+  worktrees)
+    need_session
+    out=$(call "(bp/agent-orchestration-worktrees \"$(esc "$EMACS_AGENT_SESSION_ID")\")")
+    report "$out" 'repo:*'
+    ;;
+
+  *)
+    die "unknown verb: $verb (try 'emacs-agent help')"
+    ;;
+esac
