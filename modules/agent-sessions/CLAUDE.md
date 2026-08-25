@@ -8,8 +8,13 @@ code says *what* it does; this file records *why*, so the intent survives edits.
 - `agent-sessions.el` — everything; `agent-sessions-codex-hook.sh` — Codex event
   forwarder. The Claude forwarder lives outside the repo
   (`~/.orca/agent-hooks/claude-hook.sh`, wired via `~/.claude/settings.json`).
-- `bin/` — commands agents run *inside* a session terminal, currently just
-  `emacs-share-file`. On every session terminal's PATH; see "Shared files".
+- `bin/` — commands agents run *inside* a session terminal: `emacs-share-file`
+  (see "Shared files") and `emacs-agent` (see "Orchestration"). On every session
+  terminal's PATH.
+- `skills/orca/` — the `/orca` skill an agent loads to learn orchestration, and
+  the two guides `emacs-agent guide` serves.
+- `orchestration/` — notes on how *Orca* (the app) does the same thing; read
+  before redesigning this, not as a description of what is here.
 - Wiring/config is in `../agent-session-config.el`.
 
 ## Why it's built this way
@@ -237,6 +242,144 @@ refresh made trivial actions (sorting, a hook tick) slow. Hence the worktree /
 repo-info / transcript-uuid caches. The tension is freshness vs. speed: the
 internal refresh trusts the caches; only `g` re-reads git from disk. Keep new
 per-refresh work off the git path.
+
+## Orchestration — an agent spawning and talking to other agents
+
+`bin/emacs-agent` (spawn/send/done/ask/check/wait/list/worktrees) lets an agent
+start another agent in another worktree and block until it reports. It reaches
+Emacs the way `emacs-share-file` does, and returns its failures as the printed
+value for the same reason.
+
+**Emacs owns only what an agent cannot do for itself.** There are no task rows,
+no dependency graph and no scheduler, and adding them is the obvious wrong turn.
+The orchestrator is an agent with a context window; that context *is* the plan,
+and a second copy in a table would be a second thing to keep honest — with the
+table losing, because only the agent knows why it changed its mind. What is left
+is the part an agent genuinely cannot do: start a terminal, address a live one,
+and wait for it.
+
+**Several workers may share a worktree, and nothing here stops them.** The
+constraint is not one agent per checkout — parallel readers (research, review,
+audit) writing findings to separate files want the *same* tree, and a checkout
+each would be overhead that also gives each a different view of a dirty tree.
+What actually collides is concurrent writes to one file, and git state: the
+index and HEAD belong to the worktree, so a co-tenant running `git add` stages
+everyone's half-finished edits. So `spawn` deliberately has no exclusivity
+check — adding one would forbid the cheapest useful case — and the rule lives
+where it can be stated with its exception: the launch preamble tells every
+worker to touch only the files its task names and to leave git alone unless the
+task says the worktree is its own, and the coordinator guide tells the
+orchestrator to say which of those it is.  `emacs-agent worktrees` reports the
+count of agents in each worktree rather than free/busy for the same reason: the
+caller needs the facts, not our verdict on whether it may work there.
+
+**A worker learns who it is from its environment, not from its launch command.**
+The id a worker is addressed by is minted inside the vterm/eat advice that
+builds its environment, so at the moment we assemble the command there is no id
+to write into it. Hence `bp/agent-sessions--extra-terminal-env`, bound around
+the create call: role, coordinator and brief path ride in alongside
+`EMACS_AGENT_SESSION_ID`, and `emacs-agent` reads them so the worker never has
+to be told its own name.
+
+**The task is passed at launch, as a file the shell reads.** `claude "$(cat
+BRIEF)"` rather than starting the agent and sending the task afterwards: a TUI
+that is still booting silently drops input, and a two-kilobyte multi-line prompt
+as one quoted argument is exactly the line a TUI mangles. The brief file is kept
+after launch — it is the only record of what a worker was actually told, and
+re-running that one line reproduces the launch by hand.
+
+**Spawning restores the window configuration.** `+` showing its new terminal is
+right because the user asked for it; three background spawns rearranging the
+layout the user is reading is not. Same `save-window-excursion` the restore path
+uses, for the same reason.
+
+**Mail is persisted, and keyed by durable identity — not by the address it was
+sent to.** Unread mail is exactly what the persistence rule above is for: the
+recipient cannot reconstruct a message it never saw, and a crash between a
+worker reporting and its coordinator reading would otherwise lose the report
+silently. But mail is *addressed* to a terminal id, which carries this Emacs's
+pid and dies with it, so the record files each message under the same identity a
+note or shared file uses: the agent's own session id, falling back to the
+terminal id. That fallback is deliberately not the buffer name that notes fall
+back to — a name is reused by a later terminal, and inheriting a stranger's
+unread mail (which is then *pasted into its prompt*) is a different order of
+wrong than inheriting a stale note. Mail under a terminal key therefore never
+survives a restart, which is correct: nothing can resume a bare shell.
+
+So there are two structures, and they answer different questions. The hash table
+is the working copy, keyed the way mail is addressed, and it is what the render
+path reads — the render path must never query the database. The `mail` table is
+the record; `bp/agent-orchestration--hydrate` copies unread rows into the working
+copy at the two moments a session's durable identity becomes known: a hook event
+(which is also how a session restored with `R` gets its mail back, attached to
+the conversation rather than to the terminal that used to hold it) and an
+explicit inbox read. Hydration is idempotent by message id, and ids carry the
+minting Emacs's pid so a restored message cannot collide with a new one. Reads
+write `read_at` through, or a restart would redeliver mail the agent has already
+acted on. A killed terminal drops its working copy in
+`bp/agent-session--cleanup`, never the record.
+
+One consequence worth stating: a message can outlive the terminal that sent it,
+so the sender is resolved through its durable key at display time. When that
+conversation is live again the reply command names its *current* terminal; when
+it is not, the message says so instead of printing an address that would reach
+either nobody or somebody else.
+
+**Waiting polls from the shell, not from Emacs.** An emacsclient call runs on
+Emacs's only thread, so a blocking wait inside Emacs would freeze the editor for
+its whole duration — which for this feature is minutes. `emacs-agent wait` loops
+over cheap `check` calls instead, and prints a keepalive to stderr every 15s so
+the calling agent's tool does not read a long wait as a hung command.
+
+**Mail is pushed into an agent that is resting, and never into one mid-turn.**
+An orchestrator that is waiting collects its own mail; the case that needs help
+is mail arriving for an agent that has finished its turn, which would otherwise
+sit unread until the human prompted it. So delivery fires on the `Stop` hook
+(via `bp/agent-orchestration-deliver`) and on arrival, and is gated on two
+things — three, counting the one learned the hard way. It has not read its
+inbox recently, which is what stops a waiting orchestrator being handed the same
+message twice (and when it defers for that reason it schedules a retry, because
+mail landing just after a wait gave up would otherwise wait for the next hook
+event). Its status is not `running', i.e. no turn is in progress. And something
+holds its terminal's foreground.
+
+Both of the latter are phrased as exclusions on purpose. Enumerating the states
+that *are* fine has already failed once: the first version listed `idle' and
+`needs-attention', and `needs-attention' becomes `stopped' the moment the user
+looks at the terminal, so delivery quietly stopped for exactly the session an
+orchestrator is most likely to be watched in. And the foreground test is not
+tidiness — with the shell's own prompt in front, a paste plus Enter is not
+reaching a TUI at all, it is the shell *running the message as a command line*,
+where the message was written by another agent. Mail for a bare shell stays
+queued for `emacs-agent check' instead.
+Delivery is one bracketed paste plus a delayed Enter: typed plainly, every
+newline in the message would submit, firing the agent's turn on the first line.
+
+**Pre-trusting the spawn directory is a deliberate widening, not a convenience.**
+Both agent CLIs gate a directory they have never run in behind an interactive
+trust prompt, and a worker stopped there never reads its brief — so for the case
+this feature exists for, spawning into a just-allocated worktree, every spawn
+would be a wait for a report that cannot come. `spawn` therefore registers the
+directory with the agent first, additively and idempotently, leaving an existing
+entry alone even when it says untrusted. The cost is that any directory an
+orchestrator spawns into becomes trusted for that agent from then on, which is
+why it is a defcustom and why each registration is reported in what `spawn`
+prints rather than done quietly.
+
+**The dashboard needed almost nothing.** A worker records its coordinator in the
+same `:branched-from` slot a `b`-branch uses, so the existing nesting renders it
+under its parent (same worktree) or tags it `↳ from …` (elsewhere), and its task
+becomes the row's title override. The only addition is the `✉N` badge, which
+reads the in-memory mailbox — the render path stays off the database, as the
+rule above requires.
+
+**The skill is a stub; the guide ships with the tool.** `/orca` (and `/orca
+--main`) tell an agent when to engage and to run `emacs-agent guide [--main]`;
+the guides themselves live next to the command and are symlinked, not copied,
+into `~/.claude/skills` and `~/.codex/prompts`. Two copies of a protocol, one of
+them cached in a config directory, is how a skill ends up describing flags the
+command no longer has. This is the one idea worth keeping from Orca's own design
+(`orchestration/provenance.md`).
 
 ## Fork/branch tracking — the one place with no ground truth
 

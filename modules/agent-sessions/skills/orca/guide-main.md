@@ -163,8 +163,11 @@ than repeating the claim.
 
 ## Limits worth knowing
 
-- Mail lives in the running Emacs only. If Emacs restarts, the mailboxes are
-  gone (the terminals die with it too).
+- Mail is stored, so a crash does not lose a report you had not read yet. It
+  comes back attached to the *conversation*, not the terminal: when the human
+  restores a session (`R` in the dashboard), its unread mail is waiting. Mail to
+  a terminal that never started an agent is the exception — there is nothing to
+  restore it to.
 - Ids are Emacs terminal ids (`11588-42`), stable for the life of the terminal.
 - A worker that never fires an agent hook (a bare shell, a crashed launch) still
   appears in the dashboard, but with no agent status. If a spawn produces a row
