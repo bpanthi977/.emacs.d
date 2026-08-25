@@ -3044,6 +3044,20 @@ Return non-nil on success, nil when SESSION lacks the info to build a link."
                         (format "%s %s" agent (or title sid))))
         t))))
 
+(defun bp/agent-sessions--store-file-link (path)
+  "Store an Org `file:' link to PATH, described by its bare file name.
+Return non-nil on success.  A shared-file row is a pointer to a file, so the
+useful link is the ordinary one any other buffer would produce — not something
+that goes through this package.  The description is the file name alone,
+extension included: the row already sits under the session that shared it, and
+the path it came from is rarely what the surrounding prose wants to read."
+  (when (and path (not (string-empty-p path)))
+    (org-link-store-props
+     :type "file"
+     :link (concat "file:" (abbreviate-file-name path))
+     :description (file-name-nondirectory (directory-file-name path)))
+    t))
+
 (defun bp/agent-sessions--org-follow-link (link &optional _arg)
   "Follow an `agent-session:' LINK, jumping to or resuming the session.
 LINK is AGENT::SESSION-ID::WORKTREE-PATH, as produced by the `:store'
@@ -3056,16 +3070,22 @@ the confirmation prompt Org shows before running arbitrary elisp."
     (error "Malformed agent-session link: %s" link)))
 
 (defun bp/agent-sessions--org-store-link (&optional _interactive)
-  "Store an `elisp:' link that resumes a Claude/Codex session.
-Works both on a session row in `bp/agent-sessions-mode' and inside a vterm
-buffer that has an active session (keyed by the buffer-local
-`bp/agent-session-id').  Registered as the `:store' handler for
-`org-store-link'."
-  (bp/agent-sessions--store-link-for
-   (cond ((derived-mode-p 'bp/agent-sessions-mode)
-          (bp/agent-sessions--session-at-point))
-         (bp/agent-session-id
-          (gethash bp/agent-session-id bp/agent-sessions)))))
+  "Store a link for the dashboard row at point, or for the session around point.
+A shared-file row stores a plain `file:' link to that file; a session row (or a
+terminal buffer with a live session, keyed by the buffer-local
+`bp/agent-session-id') stores an `agent-session:' link that resumes it.
+Registered as the `:store' handler for `org-store-link'."
+  (if-let* (((derived-mode-p 'bp/agent-sessions-mode))
+            (file (bp/agent-sessions--file-at-point)))
+      ;; A shared-file row links to the file, not to the session that shared
+      ;; it.  Checked first because a file row is nested *inside* a session
+      ;; row, so the session is what point would otherwise resolve to.
+      (bp/agent-sessions--store-file-link (nth 1 file))
+    (bp/agent-sessions--store-link-for
+     (cond ((derived-mode-p 'bp/agent-sessions-mode)
+            (bp/agent-sessions--session-at-point))
+           (bp/agent-session-id
+            (gethash bp/agent-session-id bp/agent-sessions))))))
 
 (defun bp/agent-sessions--sync-default-directory ()
   "Track the worktree/repo at point in `default-directory'.
