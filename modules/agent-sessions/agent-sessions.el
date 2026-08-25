@@ -3793,13 +3793,22 @@ Signals a `user-error' (rather than clobbering) if FILE holds invalid JSON."
     (make-hash-table :test 'equal)))
 
 (defun bp/agent-sessions--write-json (file obj)
-  "Write OBJ to FILE as pretty-printed JSON, backing up any existing FILE."
+  "Write OBJ to FILE as pretty-printed JSON, backing up any existing FILE.
+`json-serialize' returns a *unibyte* string of UTF-8 bytes.  Inserted as-is,
+every non-ASCII character becomes a run of raw bytes, and `json-pretty-print-
+buffer' then re-encodes each of those as literal `\\302\\267' escape text —
+so a round-trip silently rewrites `·' as four visible characters, and does it
+to every em dash and accent in the file.  Decoding first is what makes the
+round-trip lossless."
   (make-directory (file-name-directory file) t)
   (when (file-exists-p file)
     (copy-file file (concat file ".bak") t))
-  (with-temp-file file
-    (insert (json-serialize obj :null-object :null :false-object :false))
-    (json-pretty-print-buffer)))
+  (let ((coding-system-for-write 'utf-8))
+    (with-temp-file file
+      (insert (decode-coding-string
+               (json-serialize obj :null-object :null :false-object :false)
+               'utf-8))
+      (json-pretty-print-buffer))))
 
 (defun bp/agent-sessions--our-group-p (group script)
   "Non-nil if hook GROUP runs our SCRIPT (matched by basename)."
