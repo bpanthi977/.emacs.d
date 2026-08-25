@@ -2404,14 +2404,35 @@ is `bp/agent-sessions-terminal'."
          (bufname (format "%s-%s" base bp/agent-sessions-terminal)))
     (bp/agent-sessions--terminal-open dir bufname)))
 
+(defun bp/agent-sessions--goto-terminal-row (buf)
+  "Move the dashboard's point to the row for terminal BUF, if it has one.
+Creating a terminal re-renders the dashboard, and that render restores point
+to the section it was on — the worktree or repo heading `+' was pressed on —
+so a row that did not exist before it has to be sought out afterwards.  The
+window points are set explicitly because the dashboard is no longer the
+selected buffer by then (the new terminal is), and an unselected window
+displays its own point, not the buffer's."
+  (when-let* ((id (and (buffer-live-p buf)
+                       (buffer-local-value 'bp/agent-session-id buf)))
+              (dashboard (get-buffer bp/agent-sessions-buffer-name)))
+    (with-current-buffer dashboard
+      (when (bp/agent-sessions--goto-session-id id)
+        (dolist (win (get-buffer-window-list dashboard nil t))
+          (set-window-point win (point)))))))
+
 (defun bp/agent-sessions-new-vterm ()
-  "Create a new vterm in the worktree at point, named after that worktree."
+  "Create a new vterm in the worktree at point, named after that worktree.
+Leaves the dashboard's point on the new terminal's row, so the thing just
+created is what `k', `t', `e' and `n'/`p' act from.  A second `+' still opens
+a terminal in the same worktree, since `bp/agent-sessions--context-at-point'
+walks up from a session row to the worktree containing it."
   (interactive)
   (let* ((ctx (bp/agent-sessions--context-at-point))
          (dir (plist-get ctx :path)))
     (if (or (null dir) (not (file-directory-p dir)))
         (message "No worktree at point.")
-      (bp/agent-sessions--create-terminal dir (plist-get ctx :name)))))
+      (bp/agent-sessions--goto-terminal-row
+       (bp/agent-sessions--create-terminal dir (plist-get ctx :name))))))
 
 ;;;###autoload
 (defun bp/agent-session-switch-or-new ()
