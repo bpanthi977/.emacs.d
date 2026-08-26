@@ -253,7 +253,7 @@ Populates the cache on first use; `bp/agent-sessions-refresh' clears it."
 Agents typically set this to something like the current task/session summary.")
 
 (defvar-local bp/agent-session-title-override nil
-  "A user-chosen title for this session, set via the dashboard's `t' command.
+  "A user-chosen title for this session, set via the dashboard's `SPC' command.
 When non-nil it takes precedence over `bp/agent-session-title' everywhere the
 session is labelled, so the agent's OSC title updates don't clobber it.")
 
@@ -776,6 +776,35 @@ an agent reading its inbox must not fail because the database is busy."
   (let ((n (bp/agent-orchestration--pending-count id)))
     (if (> n 0) (format "  ✉%d" n) "")))
 
+(defun bp/agent-sessions--state-column-width ()
+  "Width of the state column: the widest state, plus a separating space.
+Computed rather than fixed so a state added to `bp/agent-sessions-states' does
+not push the titles of stated rows out of line with unstated ones."
+  (1+ (apply #'max 0 (mapcar #'length bp/agent-sessions-states))))
+
+(defun bp/agent-sessions--row-text (prefix state suffix face)
+  "Build a session row: PREFIX, STATE in its own column, then SUFFIX.
+FACE dresses the whole row (it is what spans an attention highlight across it),
+and the state's own face is *merged* on top rather than replacing it — merged,
+because the state faces set a foreground and the row face sets a background, and
+either replacing the row face or letting it win would lose one of the two."
+  (let* ((column (format (format "%%-%ds" (bp/agent-sessions--state-column-width))
+                         (or state "")))
+         (row (propertize (concat prefix column suffix) 'font-lock-face face))
+         (state-face (and state (bp/agent-sessions--state-face state))))
+    (when state-face
+      ;; A *list* of faces on `font-lock-face', not `add-face-text-property':
+      ;; that function merges into `face', which these rows do not use (magit
+      ;; buffers run font-lock, which owns `face'), so the merge was silently
+      ;; ignored.  Earlier faces in the list win per attribute, which is
+      ;; exactly the split wanted here — the state's foreground over the row's
+      ;; background.
+      (put-text-property (length prefix)
+                         (+ (length prefix) (length state))
+                         'font-lock-face (list state-face face)
+                         row))
+    row))
+
 (defun bp/agent-sessions--insert-session (entry &optional depth suppress-parent-note)
   "Insert a session row for ENTRY.
 DEPTH indents the row (children of a branched-from parent are rendered one
@@ -801,18 +830,18 @@ indentation conveys the relationship."
       ;; collapsible body; with no note the body is empty and magit shows no
       ;; fold indicator.
       (magit-insert-heading
-        (propertize
+        (bp/agent-sessions--row-text
          (concat "    " indent marker
-                 (format "%-7s %-16s %s%s%s%s\n"
-                         (plist-get session :agent-type)
-                         status
-                         title
-                         (if last-event (format " (%s)" last-event) "")
-                         (bp/agent-orchestration--row-badge id)
-                         (if (and branched-from (not suppress-parent-note))
-                             (format "  ↳ from %s" (cdr branched-from))
-                           "")))
-         'font-lock-face face))
+                 (format "%-7s %-16s " (plist-get session :agent-type) status))
+         (bp/agent-sessions--session-state session)
+         (format "%s%s%s%s\n"
+                 title
+                 (if last-event (format " (%s)" last-event) "")
+                 (bp/agent-orchestration--row-badge id)
+                 (if (and branched-from (not suppress-parent-note))
+                     (format "  ↳ from %s" (cdr branched-from))
+                   ""))
+         face))
       (bp/agent-sessions--insert-note
        (bp/agent-sessions--session-note-keys session)
        (concat "    " indent "    "))
@@ -1056,6 +1085,16 @@ order (e.g. for buffers with no creation stamp)."
     ;; The scope columns default to '' rather than NULL on purpose: SQLite
     ;; treats NULLs as distinct from each other in a primary key, so a NULL
     ;; scope would make every write insert a duplicate instead of replacing.
+    ;; The workflow state a session is in (`t' in the dashboard).  Keyed like a
+    ;; note, because it is the same kind of thing: something the user chose
+    ;; about a session, which would be useless if it evaporated on restart.
+    "CREATE TABLE IF NOT EXISTS session_states (
+       kind       TEXT NOT NULL,
+       key        TEXT NOT NULL,
+       state      TEXT NOT NULL,
+       updated_at INTEGER NOT NULL,
+       PRIMARY KEY (kind, key))"
+
     "CREATE TABLE IF NOT EXISTS order_entries (
        kind           TEXT    NOT NULL,
        scope_repo     TEXT    NOT NULL DEFAULT '',
@@ -1491,6 +1530,12 @@ rest keep the automatic order after them."
 ;; reason as the manual order: it is something the user wrote, not session
 ;; state, so it has to outlive both the session and Emacs.
 
+(defvar bp/agent-sessions--states nil
+  "Hash of (KIND KEY) -> workflow state string, or nil before first use.
+Loaded from `session_states' once and written through on change, like the
+notes table: the render path reads it on every row and must never query the
+database.")
+
 (defvar bp/agent-sessions--notes nil
   "Hash table KEY -> note string, or nil before the notes are first read.
 A KEY is (\"repo\" REPO-KEY), (\"worktree\" WORKTREE-KEY) or (\"session\" ID),
@@ -1567,6 +1612,87 @@ one note per identity it has had."
         (remhash (car keys) table)
         (sqlite-execute db "DELETE FROM notes WHERE kind = ? AND key = ?"
                         (car keys))))))
+
+(defcustom bp/agent-sessions-states '("TODO" "BLOCKED" "DONE" "REVIEW" "LEARN")
+  "Workflow states a session can be in, in the order `t' cycles them.
+`t' moves a session to the next one and off the end back to no state, so the
+order is the only thing that decides how many presses a given state costs.  No
+state is a state — a session nobody has triaged should not have to claim to be
+anything."
+  :type '(repeat string))
+
+(defface bp/agent-session-state-todo '((t :inherit org-todo))
+  "Face for the TODO state, borrowed from Org so it matches the agenda.")
+
+(defface bp/agent-session-state-done '((t :inherit org-done))
+  "Face for the DONE state, borrowed from Org so it matches the agenda.")
+
+(defface bp/agent-session-state-review '((t :inherit bold :foreground "#7aa2f7"))
+  "Face for the REVIEW state: waiting on someone else to look.")
+
+(defface bp/agent-session-state-learn '((t :inherit bold :foreground "#bb9af7"))
+  "Face for the LEARN state: finished, but there is something here to take away.")
+
+(defun bp/agent-sessions--state-face (state)
+  "Face for STATE, or nil for one this package has no opinion about.
+Looked up by name rather than by position in `bp/agent-sessions-states' so a
+reordered or extended list keeps its colours; a state added by the user simply
+renders unstyled until they define `bp/agent-session-state-<name>'."
+  (let ((face (intern (format "bp/agent-session-state-%s" (downcase state)))))
+    (and (facep face) face)))
+
+(defun bp/agent-sessions--states-table ()
+  "Return the workflow-state table, loading it from the database once."
+  (or bp/agent-sessions--states
+      (setq bp/agent-sessions--states
+            (let ((table (make-hash-table :test 'equal)))
+              (pcase-dolist (`(,kind ,key ,state)
+                             (sqlite-select (bp/agent-sessions--db)
+                                            "SELECT kind, key, state FROM session_states"))
+                (puthash (list kind key) state table))
+              table))))
+
+(defun bp/agent-sessions--session-state (session)
+  "The workflow state recorded for SESSION, or nil.
+Every identity the session has held is consulted, like a note, so a state set
+on a bare terminal is still shown once `claude'/`codex' starts in it."
+  (let ((table (bp/agent-sessions--states-table)))
+    (seq-some (lambda (key) (gethash key table))
+              (bp/agent-sessions--session-note-keys session))))
+
+(defun bp/agent-sessions--state-set (keys state)
+  "Record STATE under the first of KEYS; a nil or empty STATE clears it.
+Collapses the less durable KEYS onto the first exactly as `bp/agent-sessions--
+note-set' does, so a session that gains an agent session id carries one state
+under that id rather than one per identity it has had."
+  (let ((table (bp/agent-sessions--states-table))
+        (db (bp/agent-sessions--db)))
+    (with-sqlite-transaction db
+      (dolist (key (cdr keys))
+        (remhash key table)
+        (sqlite-execute db "DELETE FROM session_states WHERE kind = ? AND key = ?" key))
+      (if (and state (not (string-empty-p state)))
+          (progn
+            (puthash (car keys) state table)
+            (sqlite-execute db "INSERT INTO session_states VALUES (?, ?, ?, ?)
+                                ON CONFLICT(kind, key) DO UPDATE
+                                  SET state      = excluded.state,
+                                      updated_at = excluded.updated_at"
+                            (append (car keys)
+                                    (list state (bp/agent-sessions--now)))))
+        (remhash (car keys) table)
+        (sqlite-execute db "DELETE FROM session_states WHERE kind = ? AND key = ?"
+                        (car keys))))))
+
+(defun bp/agent-sessions--next-state (state)
+  "The state after STATE in `bp/agent-sessions-states', wrapping through nil."
+  (let ((states bp/agent-sessions-states))
+    (cond ((null state) (car states))
+          ((member state states)
+           ;; Off the end is nil rather than the first state: the cycle has to
+           ;; pass through "no state" or there would be no way back to it.
+           (nth (1+ (seq-position states state)) states))
+          (t (car states)))))
 
 (defface bp/agent-session-note
   '((t :inherit font-lock-comment-face))
@@ -2474,6 +2600,29 @@ Clearing it (entering an empty string) restores the agent's live title."
         (message (if (string-empty-p new)
                      "Title override cleared."
                    (format "Title set to %s" new)))))))
+
+(defun bp/agent-sessions-cycle-state ()
+  "Move the session at point to the next workflow state.
+Cycles through `bp/agent-sessions-states' and off the end back to no state.
+With a prefix argument, pick a state directly instead — with five of them, a
+cycle is a poor way to reach a particular one."
+  (interactive)
+  (let* ((session (bp/agent-sessions--session-at-point))
+         (keys (and session (bp/agent-sessions--session-note-keys session))))
+    (if (not keys)
+        (message "No session at point.")
+      (let* ((current (bp/agent-sessions--session-state session))
+             (new (if current-prefix-arg
+                      (let ((choice (completing-read
+                                     "State (empty to clear): "
+                                     bp/agent-sessions-states nil t)))
+                        (and (not (string-empty-p choice)) choice))
+                    (bp/agent-sessions--next-state current))))
+        (bp/agent-sessions--state-set keys new)
+        (bp/agent-sessions--refresh)
+        (message (if new
+                     (format "State: %s" new)
+                   "State cleared."))))))
 
 (defun bp/agent-sessions--context-at-point ()
   "Return (:path DIR :name NAME) for the worktree/repo enclosing point, or nil.
@@ -3829,7 +3978,8 @@ out one that is already taken — or hide one that just became available."
 (define-key bp/agent-sessions-mode-map (kbd "k") #'bp/agent-sessions-kill)
 (define-key bp/agent-sessions-mode-map (kbd "b") #'bp/agent-sessions-branch)
 (define-key bp/agent-sessions-mode-map (kbd "B") #'bp/agent-sessions-mark-parent)
-(define-key bp/agent-sessions-mode-map (kbd "t") #'bp/agent-sessions-edit-title)
+(define-key bp/agent-sessions-mode-map (kbd "t") #'bp/agent-sessions-cycle-state)
+(define-key bp/agent-sessions-mode-map (kbd "SPC") #'bp/agent-sessions-edit-title)
 (define-key bp/agent-sessions-mode-map (kbd "u") #'bp/agent-sessions-mark-unread)
 (define-key bp/agent-sessions-mode-map (kbd "e") #'bp/agent-sessions-edit-note)
 (define-key bp/agent-sessions-mode-map (kbd "R") #'bp/agent-sessions-restore)
