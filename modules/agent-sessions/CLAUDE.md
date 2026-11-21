@@ -8,14 +8,24 @@ code says *what* it does; this file records *why*, so the intent survives edits.
 - `agent-sessions.el` — everything; `agent-sessions-codex-hook.sh` — Codex event
   forwarder. The Claude forwarder lives outside the repo
   (`~/.orca/agent-hooks/claude-hook.sh`, wired via `~/.claude/settings.json`).
-- `bin/` — commands agents run *inside* a session terminal: `emacs-share-file`
   (see "Shared files") and `emacs-agent` (see "Orchestration"). On every session
   terminal's PATH.
+- `bin/` — commands agents run *inside* a session terminal: `emacs-share`
 - `skills/orca/` — the `/orca` skill an agent loads to learn orchestration, and
   the two guides `emacs-agent guide` serves.
 - `orchestration/` — notes on how *Orca* (the app) does the same thing; read
   before redesigning this, not as a description of what is here.
 - Wiring/config is in `../agent-session-config.el`.
+
+## Live Emacs safety
+
+**Never kill, signal, restart, or force-quit the user's Emacs process or server.**
+This includes sending `SIGINT` to interrupt a hung diagnostic. If an
+`emacsclient` call hangs, stop only that client invocation or leave it alone;
+do not target the Emacs process with `kill`, `pkill`, or `killall`. Stop live
+diagnostics and tell the user if the server is unresponsive. Continue with
+isolated batch Emacs tests where possible, leaving the user's live sessions
+untouched.
 
 ## Why it's built this way
 
@@ -133,7 +143,11 @@ would suppress fork auto-detection, which is guarded on the session being new.
 So the flag is buffer-local and applied at display time on a *copy* of the
 plist — never mutate the registry entry from the render path. It clears the
 same way a real one does, by focusing the session, and is deliberately not
-persisted: it's session state, which by the rule above evaporates on restart.
+persisted: it's session state, which by the rule above evaporates on restart. `u` toggles: on a row that reads as unread (the mark, or a hook-reported
+needs-attention) it marks read exactly as focusing would, so one key undoes
+whichever made the row light up. It then moves to the row that was on the
+next line, by identity captured *before* the toggle: a re-sort can move the
+toggled row, so "one line down after refresh" would land somewhere arbitrary.
 
 **A row with no registry entry names whatever is running, from the kernel.**
 Hooks can't be relied on to say what a terminal is running, because Codex
@@ -196,26 +210,57 @@ made two concurrently busy sessions swap places several times a second — the
 row you were aiming at moved out from under point. The default order therefore
 uses only keys that are stable under activity: a coarse attention bucket
 (error → needs-attention → running → rest), then buffer creation time, then
-buffer name as a deterministic final tie-break (hash iteration order must never
+terminal id as a deterministic final tie-break (hash iteration order must never
 leak into the layout). A row *does* move when its status changes — that's a
-rare, meaningful event, unlike a tool call. Repos and worktrees are plain
-alphabetical: a fixed skeleton is what makes the tree navigable from memory, so
-urgency is expressed only *within* a worktree. Recency sort survives behind `s`
+rare, meaningful event, unlike a tool call. Repos and worktrees are alphabetical.
+Folder view rows start with a dynamically sized worktree column. Recency sort
+survives behind `s`
 for when you want it; don't make it the default again.
 
 **Manual order overrides the automatic one per group, and only per group.**
-`M-n`/`M-p` move the repo / worktree / row at point within its own siblings and
+`M-n`/`M-p` move the repo, worktree, folder, or row at point within its siblings and
 persist that group's key list. Design points worth keeping: items with no
 recorded key keep the automatic order and sort *after* the placed ones, so a new
 session never displaces a slot the user chose; rewriting a group splices the
 visible keys back into the saved list instead of replacing it, so a repo or
-worktree whose terminals are all closed doesn't lose its remembered slot; and
-keys are stable identities (canonical paths, buffer name for a row) rather than
-display labels, which change on a branch checkout. Reordering acts on the flat
-per-worktree list that `--insert-entries` then nests, so moving a *fork* row
+session whose terminal is closed doesn't lose its remembered slot; and
+keys are stable identities rather than display labels, which change on a
+branch checkout. A row is keyed by its agent's session id — which a session
+resumed after a restart gets back — or by its terminal id when no agent has
+started in it. Never by buffer name: setting a title renames the buffer (see
+below), and the order must not depend on what a session is called. Reordering acts on the flat
+per-repo list that `--insert-entries` then nests, so moving a *fork* row
 past a sibling of its parent's group may not visibly move it — the nesting wins.
 Manual order is disabled while `s` (recency) is active; those two orderings
 would fight, and recency should stay a temporary lens.
+
+**Folders belong to repos.** The default view is repo → worktree → session, with
+the session's folder shown on its row. `f` gives repo → folder → session,
+including a No folder group under each repo. Folder view rows put the worktree
+name first and the branch after the title; the non-folder view has neither on
+session rows because its worktree heading provides that context. `Shift+TAB`
+advances one
+hierarchy level at a time: repos, folders or worktrees, sessions, then files
+and links. At the deepest level it cycles back to repos only. The cycle skips
+absent levels and survives a dashboard refresh.
+Manual TAB expansion of an individual section also survives refresh: Magit's
+visibility cache records it, so a hook-driven render must not reapply the
+global Shift+TAB level over those individual choices.
+`F` on a row moves it to a folder in that repo and creates an unmatched name.
+`F` on a folder heading renames or deletes that repo's folder. `k` on a folder
+heading deletes it only when it shows no session, so clearing out empty
+folders needs no prompt while a populated one still goes through `F`'s
+confirmation. Folder names may
+repeat in different repos. SQLite schema version 3 migrates the old global
+assignments using the session log's repo root, splitting a global folder when
+its members belong to multiple repos. A legacy assignment with no logged repo
+is claimed by its repo when that session next appears.
+A fork (`b`, or an auto-detected one) starts in its parent's folder. The parent's
+folder is copied onto the child's terminal at its first hook, the same moment
+parentage is decided, and is then persisted like any other folder choice. It is
+a default, not a rule: it never overrides a folder already chosen for the
+terminal, never crosses repos, and is not re-applied later, so moving the child
+out of the folder sticks.
 
 **A stray key closes the dispatch menu instead of trapping you in it.** `RET`
 on a repo/worktree heading opens project.el's switch menu, whose own
@@ -228,6 +273,14 @@ that single call so the looping behaviour survives everywhere else. Build the
 keymap and prompt from project.el's own `project-switch-commands` /
 `project-prefix-map` / `project--menu-prompt` rather than a private list, so a
 user's customised menu keeps working.
+
+**A title names the buffer too.** Every path that sets a title override — `SPC`
+on the dashboard, a title restored by `R`/restore-previous, a worker's task from
+`emacs-agent spawn` — goes through `--set-title-override`, which renames the
+terminal to `<worktree> - <title>` so the buffer list and mode line say what the
+dashboard says. Clearing a title leaves the name alone. The agent's own OSC
+title never renames anything: it changes constantly, and a buffer name that
+churns under `C-x b` is worse than a stale one.
 
 **A note follows the most durable identity its subject has.** Repos and
 worktrees are keyed by canonical path, as above, but a *session* prefers the
@@ -637,24 +690,42 @@ design:
   safe because it never touches parentage detection. Keep it that side of the
   line.
 
-## Shared files — an inbox, not a file manager
+## Shared files and work links — an inbox, not a file manager
 
-`emacs-share-file FILE ["why"]` lets an agent hand the user something to read;
+`emacs-share file FILE ["why"]` lets an agent hand the user something to read;
 it lands as a fourth level of the tree, under the agent that sent it, and stays
 highlighted until opened. It exists because a terminal is a bad inbox: "look at
 /tmp/plan.md" scrolls away, and is only seen at all if you are already in that
 buffer.
 
+`emacs-share link linear|pr URL [LABEL]` uses the same UI
+for the external work that explains a session. A session can have multiple
+Linear tickets and PRs; each URL has its own row. Exact re-registration is a
+true no-op and preserves the read state; changing a URL's label marks that row
+unread again while keeping its position. A new URL adds a new row.
+
+`emacs-share state STATE|--clear` sets the session's workflow state, the same
+field `t` cycles. The middle of `bp/agent-sessions-states` is the
+issue-workflow skill's phases, so an agent running it reports each transition
+and the column shows whose turn it is; the *-REVIEW states and `PR-OPEN` are the
+skill's gates, where the agent has stopped for the user. **One field, last
+writer wins.** The agent overwrites a state the user set by hand on its next
+transition, and the user can override the agent at any time with `t`; a
+separate agent-owned column would show two answers to "where is this session"
+and leave the user to reconcile them. A state outside the list is refused, not
+stored, because an agent typo would otherwise render as a plausible-looking
+unstyled state that no `t` cycle passes through.
+
 **It is attached to the session, by the session's most durable identity.** The
 key is `--session-note-keys` reused verbatim — the agent's own session id when
 it has one, the buffer name otherwise, reading both and collapsing onto the
-first on write. So renaming a terminal keeps its files, a file shared into a
+first on write. So renaming a terminal keeps its attachments, one added to a
 bare shell survives `claude` starting in it, and a session brought back with
-`R` comes back with its files. The *caller* passes the terminal id, because
-that is what the shell environment has; resolving it to a session happens in
-`bp/agent-sessions-share-file`, the same split the hook path makes. Like a
-note, a row outlives the session that owned it and nothing prunes it — the same
-trade, for the same reason.
+`R` gets them back. The *caller* passes the terminal id, because that is what
+the shell environment has; `bp/agent-sessions-share-file` and
+`bp/agent-sessions-share-link` resolve it to a session, the same split the hook
+path makes. Like a note, a row outlives the session that owned it and nothing
+prunes it — the same trade, for the same reason.
 
 **Re-sharing a path means "I changed it, look again", not "add it twice".**
 This is why the table carries two timestamps. `visited_at` is cleared so the
@@ -676,15 +747,17 @@ item out of it must not be able to destroy the thing it points at. There is
 deliberately no prefix argument that deletes the file — if that is ever added,
 it is a different key, not a modifier on this one.
 
-**An unopened file borrows the needs-attention face, deliberately.** An unread
-file and a waiting session are the same claim on the user's attention, and the
-dashboard should not make anyone learn two highlights for it. The rows push
-onto `--row-status` like every other row, which is what makes `N`/`P` walk to
-them; see that variable's docstring for why status is recorded at render time
-rather than looked up.
+**An unopened attachment borrows the needs-attention face, deliberately.** An
+unread file or link and a waiting session are the same claim on the user's
+attention, and the dashboard should not make anyone learn two highlights for
+it. The rows push onto `--row-status` like every other row, which is what makes
+`N`/`P` walk to them; see that variable's docstring for why status is recorded
+at render time rather than looked up.
 
-**Reading clears it, however the file was opened.** `RET` is the common path,
-but the focus hook that already clears the `u` mark also matches the selected
+**Reading clears it, however the file was opened.** `RET` is the common path;
+`d` opens the newest commit touching the file in a Magit revision buffer
+filtered to that path, and clears it only after the diff opens successfully.
+The focus hook that already clears the `u` mark also matches the selected
 window's `buffer-file-truename` against the shared paths, so a file shared by
 one path and opened by another still counts as read. That hook runs at every
 buffer switch, so the check is a set lookup and is gated on the database being
@@ -692,19 +765,71 @@ already open — which it is whenever a terminal has ever existed, and is not in
 an Emacs with no sessions.
 
 **`u` toggles here, where on a session it sets.** Both directions are wanted
-for a file — lighting one up to re-read, and dismissing one you have decided
-not to read at all — and a file row, unlike a session, has somewhere to read
-its current state back from.
+for an attachment — lighting one up to re-read, and dismissing one you have
+decided not to read at all — and an attachment row, unlike a session, has
+somewhere to read its current state back from. `RET` and `v` browse an external
+link, and `k` detaches it without affecting the remote issue or pull request.
 
-**The script fails loudly, unlike the hook forwarders.** Those exit 0 into the
+**The sharing command fails loudly, unlike the hook forwarders.** Those exit 0 into the
 void by design: a hook firing into a dead Emacs must not break the agent's
 turn. This one is the opposite — an agent that believes it has handed over a
 file when it has not will go on to tell the user about it — so a missing file,
 a terminal outside Emacs, an unreachable server and a refusal from Emacs each
 print to stderr and exit non-zero. `bp/agent-sessions-share-file` therefore
 *returns* its failures as strings rather than signalling: emacsclient's printed
-value is the only channel back to the agent.
+value is the only channel back to the agent. `emacs-share-file` is a symlink to
+`emacs-share` that selects file mode implicitly, so already-running agents keep
+working while new instructions use the unified command.
 
+**A PR link shows GitHub's state, fetched by the dashboard and never stored.**
+A session with exactly one PR link gets two glyphs after its STATE column
+(lifecycle: `◌` draft, `○` open, `◔` checks running or, red, failed, `◕` in
+merge queue, `◉` merged, `⊘` closed; then review: `◇` reviewer assigned,
+leading to `✓` approved or `✗` changes requested), and every PR link row ends
+with the same state in words. A review decision outranks pending requests:
+GitHub keeps listing a reviewer who was asked after someone else approved. With
+several PRs no single one speaks for the session, so its row shows none and
+the column has no width when no session qualifies, like the lock column.
+
+- **In memory only.** GitHub is the source of truth and one request rebuilds
+  the table, so it fails the persistence bar above; a restart refetches.
+- **The dashboard polls, not the agents, and only because GitHub cannot
+  push.** A change notification needs a repo webhook (admin rights, plus a
+  local forwarder that can miss events while Emacs is closed); the
+  notifications API is itself polling and does not report checks or the merge
+  queue. The render records the PR URLs it drew and only arms timers: the
+  poll, and a near-immediate one-shot for a URL never asked about, so a
+  freshly shared PR does not wait a whole interval. The render path starting a
+  process would put the network on the hot path the git note warns about. `g`
+  forces a refetch, merged and closed PRs included; otherwise those are
+  fetched once, since they cannot change.
+- **The poll is adaptive: fast while a PR is in motion, slow while all are
+  settled.** Checks running and the merge queue end by themselves, usually
+  within minutes, so while any PR shown is in one of those states the next
+  poll is `bp/agent-sessions-pr-poll-interval-active` (20s) away; otherwise
+  `bp/agent-sessions-pr-poll-interval` (180s). Settled includes a failed
+  fetch, so an auth or network failure is retried slowly rather than hammered.
+  The poll is therefore a one-shot timer re-armed by each fetch's completion,
+  timed by the states that fetch just learned; a repeating timer would keep
+  the interval it was born with. A poll that starts no fetch (nothing to ask
+  about, or one still running) re-arms itself, and none is armed once the
+  dashboard is gone; the next render showing a PR starts the chain again.
+- **One `gh api graphql` request for all of them, one at a time.** `gh pr
+  view --json` has no merge-queue field, which is why it is GraphQL. Each PR
+  is an alias (`p0`, `p1`, …), and a tick that finds a request still running
+  does nothing, so a slow GitHub cannot pile up processes; a request is killed
+  after `bp/agent-sessions-pr-fetch-timeout`.
+- **Failures are shown where they apply, and never erase a good state.** gh
+  exits 1 when *one* PR fails but still prints the others' data with an
+  `errors` entry naming the alias (verified), so the output is parsed whatever
+  the exit status and only that PR gets its message. A whole-request failure
+  (network, auth, rate limit) says nothing about any one PR, so it is recorded
+  only for PRs with no known state; the rest keep showing what GitHub last
+  said. Unfetched reads `…`/`fetching…`, failed reads `?` and the reason.
+  Nothing goes to the echo area: a background poll must not interrupt.
+- **This file is dynamically bound.** The sentinel cannot close over the URLs
+  it fetched, so they ride on the process (`process-put`), and the callbacks
+  are named functions.
 
 **PATH injection is additive by construction.** The terminal env sets
 `PATH=<our bin>:<the PATH the terminal was going to inherit anyway>`, read from
@@ -764,7 +889,9 @@ statements against an already-open handle; every statement is `IF NOT EXISTS`,
 so it is free, and it makes a reload behave like a restart. Keep it in step
 with the schema list. Note what it does *not* do: it cannot alter an existing
 table, so a change that is not a pure addition needs a real migration keyed on
-`meta.schema_version`.
+`meta.schema_version`. Shared links moved from one row per kind to one row per
+URL in version 2; `--db-migrate` handles existing databases, including reloads
+into a running Emacs.
 
 Reload into the running server after any change (definitions don't hot-swap):
 `emacsclient -e '(load-file ".../agent-sessions/agent-sessions.el")'`. A

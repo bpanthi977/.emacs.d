@@ -1,0 +1,115 @@
+#!/bin/sh
+# Hand a file, an external work link, or a workflow state to the human through
+# agent-sessions.
+#
+#   emacs-share file FILE [DESCRIPTION]
+#   emacs-share link linear|pr URL [LABEL]
+#   emacs-share state STATE|--clear
+#
+# `emacs-share-file' is a compatibility symlink to this command.  When invoked
+# under that name it keeps accepting the original FILE [DESCRIPTION] syntax.
+
+set -u
+
+program=$(basename -- "$0")
+
+usage() {
+  if [ "$program" = "emacs-share-file" ]; then
+    echo "Usage: emacs-share-file FILE [DESCRIPTION]"
+  else
+    echo "Usage: emacs-share file FILE [DESCRIPTION]"
+    echo "       emacs-share link linear|pr URL [LABEL]"
+    echo "       emacs-share state STATE|--clear"
+  fi
+}
+
+die() { echo "$program: $1" >&2; exit 1; }
+
+need_session() {
+  [ -n "${EMACS_AGENT_SESSION_ID:-}" ] ||
+    die "not inside an Emacs agent session terminal"
+  command -v emacsclient >/dev/null 2>&1 || die "emacsclient not found"
+}
+
+# Escape a value for interpolation into an elisp string literal.
+esc() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
+
+# Turn emacsclient's printed elisp string back into plain text.
+unquote() {
+  printf '%s' "$1" | sed -e 's/^"//' -e 's/"$//' \
+    -e 's/\\n/\
+/g' -e 's/\\t/	/g' -e 's/\\"/"/g' -e 's/\\\\/\\/g'
+}
+
+call() {
+  share_reply=$(emacsclient -e "$1" 2>&1) ||
+    die "could not reach Emacs: $share_reply"
+  unquote "$share_reply"
+}
+
+if [ "$program" = "emacs-share-file" ]; then
+  case "${1:-}" in
+    -h|--help|"") usage >&2; exit 2 ;;
+  esac
+  mode=file
+else
+  mode=${1:-}
+  case "$mode" in
+  esac
+  shift
+fi
+
+case "$mode" in
+  file)
+    [ $# -le 2 ] || die "file accepts FILE and an optional DESCRIPTION"
+    file=$1
+    label=${2:-}
+    [ -e "$file" ] || die "no such file: $file"
+
+    # Absolutize without depending on realpath/readlink -f, which differ
+    # across platforms.  The dashboard outlives the caller's working directory.
+    file_dir=$(dirname -- "$file")
+    file_base=$(basename -- "$file")
+    absolute_dir=$(cd -- "$file_dir" 2>/dev/null && pwd -P) ||
+      die "cannot resolve directory of: $file"
+    case "$absolute_dir" in
+      */) absolute_path="$absolute_dir$file_base" ;;
+      *)  absolute_path="$absolute_dir/$file_base" ;;
+    esac
+
+    need_session
+    case "$output" in
+      Shared*) printf '%s\n' "$output" ;;
+      *) die "$output" ;;
+    esac
+    ;;
+
+  state)
+    state=$1
+    [ "$state" = "--clear" ] && state=
+
+    need_session
+    output=$(call "(bp/agent-sessions-share-state \"$(esc "$EMACS_AGENT_SESSION_ID")\" \"$(esc "$state")\" \"$(esc "$agent_session_id")\")")
+    case "$output" in
+      State*) printf '%s\n' "$output" ;;
+      *) die "$output" ;;
+    esac
+    ;;
+
+  link)
+    [ $# -le 3 ] || die "link accepts KIND, URL, and an optional LABEL"
+    kind=$1
+    url=$2
+    label=${3:-}
+
+    need_session
+    case "$output" in
+      Linked*) printf '%s\n' "$output" ;;
+      *) die "$output" ;;
+    esac
+    ;;
+
+  *)
+    die "unknown share type: $mode (try '$program help')"
+    ;;
+esac

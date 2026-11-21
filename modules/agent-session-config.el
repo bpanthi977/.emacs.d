@@ -138,7 +138,6 @@ Intended as :around advice for `eat--adjust-process-window-size'."
     (add-to-list 'ivy-sort-functions-alist
                  '(bp/agent-sessions-send-region . nil)))
   (add-to-list 'project-switch-commands '(bp/agent-session-switch-or-new "Agent Session"))
-
   ;; Let M-m (bp/global-prefix) reach Emacs instead of being swallowed by vterm.
   ;; `vterm-keymap-exceptions' keys are removed from `vterm-mode-map'; its :set
   ;; rebuilds the map, so use setopt (not setq) to apply the change.
@@ -147,6 +146,7 @@ Intended as :around advice for `eat--adjust-process-window-size'."
       (setopt vterm-keymap-exceptions (cons "M-m" vterm-keymap-exceptions)))
     (define-key vterm-mode-map (kbd "C-c C-l")
                 #'bp/agent-session-insert-org-link))
+
   ;; Same for ghostel: `ghostel-keymap-exceptions' keys pass through to Emacs;
   ;; its :set rebuilds the semi-char keymap, so use setopt.  `C-c C-l' is
   ;; ghostel's `ghostel-line-mode'; the org link wins here, as in vterm and eat.

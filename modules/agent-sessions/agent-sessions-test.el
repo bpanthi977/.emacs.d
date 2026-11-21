@@ -7,6 +7,28 @@
   (list :id (concat "test-" subject) :from "sender" :from-label "sender"
         :type type :subject subject :body "" :files "" :report "" :read nil))
 
+(ert-deftest bp/agent-sessions-session-row-omits-raw-hook-event ()
+  (with-temp-buffer
+    (bp/agent-sessions-mode)
+    (let ((inhibit-read-only t)
+          (bp/agent-sessions--row-status nil)
+          (entry (list :id "terminal"
+                       :title "Investigate the issue"
+                       :session (list :agent-type "codex"
+                                      :status 'running
+                                      :last-event "PreToolUse"))))
+      (cl-letf (((symbol-function 'bp/agent-sessions--session-state)
+                 (lambda (_) nil))
+                ((symbol-function 'bp/agent-orchestration--row-badge)
+                 (lambda (_) ""))
+                ((symbol-function 'bp/agent-sessions--insert-note) #'ignore)
+                ((symbol-function 'bp/agent-sessions--insert-links) #'ignore)
+                ((symbol-function 'bp/agent-sessions--insert-files) #'ignore))
+        (bp/agent-sessions--insert-session entry)
+        (should (string-match-p "running" (buffer-string)))
+        (should (string-match-p "Investigate the issue" (buffer-string)))
+        (should-not (string-match-p "PreToolUse" (buffer-string)))))))
+
 (ert-deftest bp/agent-orchestration-status-alone-does-not-steer-running-codex ()
   (let* ((id "terminal")
          (message (bp/agent-orchestration-test--message "status" "progress"))
@@ -466,6 +488,666 @@ old screen.  Mail used to wait there until the human submitted a prompt."
       (should (= (nth 2 invocation)
                  bp/agent-orchestration--native-queue-timeout)))))
 
+(ert-deftest bp/agent-sessions-show-file-diff-opens-latest-commit-then-reads ()
+  (let ((path "/repo/docs/plan.md")
+        events)
+    (cl-letf (((symbol-function 'bp/agent-sessions--file-at-point)
+               (lambda () (list 'session path (list :path path))))
+              ((symbol-function 'magit-toplevel)
+               (lambda (_) "/repo/"))
+              ((symbol-function 'magit-git-string)
+               (lambda (&rest args)
+                 (push (list 'git default-directory args) events)
+                 "abc123"))
+              ((symbol-function 'magit-show-commit--arguments)
+               (lambda () '(("--stat") nil)))
+              ((symbol-function 'magit-show-commit)
+               (lambda (commit args files &optional _module)
+                 (push (list 'show default-directory commit args files) events)))
+              ((symbol-function 'bp/agent-sessions--set-visited)
+               (lambda (match-fn visitedp)
+                 (push (list 'visited
+                             (funcall match-fn (list :path path))
+                             visitedp)
+                       events)
+                 t))
+              ((symbol-function 'bp/agent-sessions--refresh-if-visible)
+               (lambda () (push '(refresh) events))))
+      (bp/agent-sessions-show-file-diff)
+      (should
+       (equal (nreverse events)
+              '((git "/repo/"
+                     ("log" "-1" "--format=%H" "--follow" "--"
+                      "docs/plan.md"))
+                (show "/repo/" "abc123" ("--stat") ("docs/plan.md"))
+                (visited t t)
+                (refresh)))))))
+
+(ert-deftest bp/agent-sessions-show-file-diff-keeps-uncommitted-file-unread ()
+  (let ((path "/repo/docs/plan.md")
+        shown visited)
+    (cl-letf (((symbol-function 'bp/agent-sessions--file-at-point)
+               (lambda () (list 'session path (list :path path))))
+              ((symbol-function 'magit-toplevel)
+               (lambda (_) "/repo/"))
+              ((symbol-function 'magit-git-string)
+               (lambda (&rest _) nil))
+              ((symbol-function 'magit-show-commit)
+               (lambda (&rest _) (setq shown t)))
+              ((symbol-function 'bp/agent-sessions--set-visited)
+               (lambda (&rest _) (setq visited t))))
+      (should-error (bp/agent-sessions-show-file-diff) :type 'user-error)
+      (should-not shown)
+      (should-not visited))))
+
+(defun bp/agent-sessions-test--write-file (path contents)
+  "Replace PATH with CONTENTS for a shared-file test."
+  (with-temp-file path
+    (insert contents)))
+
+(ert-deftest bp/agent-sessions-share-file-keeps-latest-two-submissions ()
+  (bp/agent-sessions-test--with-temp-db
+    (let* ((source (make-temp-file "agent-shared-file-" nil ".md"))
+           (session (list :agent-session-id "thread-1"))
+           (key '("session" "thread-1")))
+      (unwind-protect
+          (progn
+            (bp/agent-sessions-test--write-file source "first\n")
+            (let ((first (bp/agent-sessions--share-file session source nil)))
+              (should (equal source (plist-get first :path))))
+            (let ((snapshot (bp/agent-sessions--file-snapshot-row
+                             (list key) source)))
+              (should-not (plist-get snapshot :previous-path))
+              (should (equal "first\n"
+                             (with-temp-buffer
+                               (insert-file-contents
+                                (plist-get snapshot :current-path))
+                               (buffer-string)))))
+            (bp/agent-sessions-test--write-file source "second\n")
+            (bp/agent-sessions--share-file session source nil)
+            (bp/agent-sessions-test--write-file source "third\n")
+            (bp/agent-sessions--share-file session source nil)
+            (let ((snapshot (bp/agent-sessions--file-snapshot-row
+                             (list key) source)))
+              (should (equal "second\n"
+                             (with-temp-buffer
+                               (insert-file-contents
+                                (plist-get snapshot :previous-path))
+                               (buffer-string))))
+              (should (equal "third\n"
+                             (with-temp-buffer
+                               (insert-file-contents
+                                (plist-get snapshot :current-path))
+                               (buffer-string)))))
+            (should
+             (equal '((1))
+                    (sqlite-select
+                     (bp/agent-sessions--db)
+                     "SELECT COUNT(*) FROM shared_file_snapshots"))))
+        (delete-file source)))))
+
+(ert-deftest bp/agent-sessions-file-snapshots-follow-durable-session-id ()
+  (bp/agent-sessions-test--with-temp-db
+    (let ((source (make-temp-file "agent-shared-file-"))
+          (buffer (generate-new-buffer "agent-snapshot-terminal")))
+      (unwind-protect
+          (let ((terminal-session (list :buffer buffer)))
+            (bp/agent-sessions-test--write-file source "before id\n")
+            (bp/agent-sessions--share-file terminal-session source nil)
+            (bp/agent-sessions-test--write-file source "after id\n")
+            (let* ((durable-session
+                    (list :buffer buffer :agent-session-id "thread-2"))
+                   (durable-key '("session" "thread-2")))
+              (bp/agent-sessions--share-file durable-session source nil)
+              (let ((snapshot (bp/agent-sessions--file-snapshot-row
+                               (list durable-key) source)))
+                (should (equal "before id\n"
+                               (with-temp-buffer
+                                 (insert-file-contents
+                                  (plist-get snapshot :previous-path))
+                                 (buffer-string))))
+                (should (equal "after id\n"
+                               (with-temp-buffer
+                                 (insert-file-contents
+                                  (plist-get snapshot :current-path))
+                                 (buffer-string)))))
+              (should
+               (equal '((0))
+                      (sqlite-select
+                       (bp/agent-sessions--db)
+                       "SELECT COUNT(*) FROM shared_file_snapshots
+                         WHERE kind = 'session' AND key = ?"
+                       (list (buffer-name buffer)))))))
+        (kill-buffer buffer)
+        (delete-file source)))))
+
+(ert-deftest bp/agent-sessions-show-submission-diff-compares-cache-then-reads ()
+  (let* ((path "/outside-git/plan.md")
+         (previous (make-temp-file "previous--plan-"))
+         (current (make-temp-file "current--plan-"))
+         (session (list :agent-session-id "thread-1"))
+         (buffer (get-buffer-create "*Agent submission diff: plan.md*"))
+         events)
+    (unwind-protect
+        (cl-letf (((symbol-function 'bp/agent-sessions--file-at-point)
+                   (lambda () (list session path (list :path path))))
+                  ((symbol-function 'bp/agent-sessions--file-snapshot-row)
+                   (lambda (keys candidate)
+                     (push (list 'snapshot keys candidate) events)
+                     (list :previous-path previous :current-path current)))
+                  ((symbol-function 'diff-no-select)
+                   (lambda (old new switches no-async destination)
+                     (push (list 'diff old new switches no-async destination)
+                           events)
+                     buffer))
+                  ((symbol-function 'bp/agent-sessions--set-visited)
+                   (lambda (match-fn visitedp)
+                     (push (list 'visited
+                                 (funcall match-fn (list :path path))
+                                 visitedp)
+                           events)
+                     t))
+                  ((symbol-function 'bp/agent-sessions--refresh-if-visible)
+                   (lambda () (push '(refresh) events)))
+                  ((symbol-function 'pop-to-buffer)
+                   (lambda (shown) (push (list 'pop shown) events))))
+          (bp/agent-sessions-show-file-submission-diff)
+          (should
+           (equal
+            (nreverse events)
+            `((snapshot (("session" "thread-1")) ,path)
+              (diff ,previous ,current "-u" t ,buffer)
+              (visited t t)
+              (refresh)
+              (pop ,buffer)))))
+      (kill-buffer buffer)
+      (delete-file previous)
+      (delete-file current))))
+
+(ert-deftest bp/agent-sessions-show-submission-diff-needs-two-versions ()
+  (let ((path "/outside-git/plan.md")
+        visited)
+    (cl-letf (((symbol-function 'bp/agent-sessions--file-at-point)
+               (lambda ()
+                 (list (list :agent-session-id "thread-1") path
+                       (list :path path))))
+              ((symbol-function 'bp/agent-sessions--file-snapshot-row)
+               (lambda (&rest _)
+                 (list :current-path "/cache/current--plan.md")))
+              ((symbol-function 'bp/agent-sessions--set-visited)
+               (lambda (&rest _) (setq visited t))))
+      (should-error (bp/agent-sessions-show-file-submission-diff)
+                    :type 'user-error)
+      (should-not visited))))
+
+(ert-deftest bp/agent-sessions-capital-d-initializes-missing-snapshot ()
+  (bp/agent-sessions-test--with-temp-db
+    (let* ((path (make-temp-file "agent-shared-file-"))
+           (session (list :agent-session-id "thread-1"))
+           (key '("session" "thread-1"))
+           visited message-text)
+      (unwind-protect
+          (progn
+            (bp/agent-sessions-test--write-file path "current contents\n")
+            (cl-letf (((symbol-function 'bp/agent-sessions--file-at-point)
+                       (lambda () (list session path (list :path path))))
+                      ((symbol-function 'bp/agent-sessions--set-visited)
+                       (lambda (&rest _) (setq visited t)))
+                      ((symbol-function 'message)
+                       (lambda (format-string &rest args)
+                         (setq message-text
+                               (apply #'format format-string args)))))
+              (bp/agent-sessions-show-file-submission-diff))
+            (let ((snapshot (bp/agent-sessions--file-snapshot-row
+                             (list key) path)))
+              (should snapshot)
+              (should-not (plist-get snapshot :previous-path))
+              (should
+               (equal "current contents\n"
+                      (with-temp-buffer
+                        (insert-file-contents
+                         (plist-get snapshot :current-path))
+                        (buffer-string)))))
+            (should (equal message-text
+                           "Saved current file as its first submitted snapshot"))
+            (should-not visited))
+        (delete-file path)))))
+
+(ert-deftest bp/agent-sessions-capital-d-is-contextual ()
+  (let (action file-at-point)
+    (cl-letf (((symbol-function 'bp/agent-sessions--file-at-point)
+               (lambda () file-at-point))
+              ((symbol-function 'bp/agent-sessions-show-file-submission-diff)
+               (lambda () (setq action 'diff)))
+              ((symbol-function 'bp/agent-sessions-detach-parent)
+               (lambda () (setq action 'detach))))
+      (setq file-at-point '(session path file))
+      (bp/agent-sessions-submission-diff-or-detach-parent)
+      (should (eq action 'diff))
+      (setq action nil file-at-point nil)
+      (bp/agent-sessions-submission-diff-or-detach-parent)
+      (should (eq action 'detach)))))
+
+(ert-deftest bp/agent-sessions-shared-links-allow-multiple-per-kind ()
+  (bp/agent-sessions-test--with-temp-db
+    (let* ((session (list :agent-session-id "thread-1"))
+           (first (bp/agent-sessions--share-link
+                   session "linear" "https://linear.app/issue/ABC-1" "ABC-1"))
+           (shared-at (plist-get first :shared-at)))
+      (should-not (plist-get first :visited-at))
+      (should (bp/agent-sessions--set-link-visited
+               (lambda (link) (equal (plist-get link :url)
+                                     "https://linear.app/issue/ABC-1")) t))
+      (let ((same (bp/agent-sessions--share-link
+                   session "linear" "https://linear.app/issue/ABC-1" "ABC-1")))
+        (should (plist-get same :visited-at))
+        (should (= shared-at (plist-get same :shared-at))))
+      (let ((second (bp/agent-sessions--share-link
+                     session "linear" "https://linear.app/issue/ABC-2" "ABC-2")))
+        (should-not (plist-get second :visited-at)))
+      (bp/agent-sessions--share-link
+       session "pr" "https://github.com/org/repo/pull/1" "PR 1")
+      (bp/agent-sessions--share-link
+       session "pr" "https://github.com/org/repo/pull/2" "PR 2")
+      (should (= 4 (length (bp/agent-sessions--session-links session))))
+      (with-temp-buffer
+        (bp/agent-sessions-mode)
+        (let ((inhibit-read-only t)
+              (bp/agent-sessions--row-status nil))
+          (bp/agent-sessions--insert-links session "  ")
+          (dolist (label '("ABC-1" "ABC-2" "PR 1" "PR 2"))
+            (should (string-match-p (regexp-quote label) (buffer-string))))))
+      (should (equal '((2))
+                     (sqlite-select
+                      (bp/agent-sessions--db)
+                      "SELECT COUNT(*) FROM shared_links
+                        WHERE owner_kind = 'session'
+                          AND owner_key = 'thread-1'
+                          AND link_kind = 'linear'")))
+      (should (bp/agent-sessions--detach-link
+               session "https://linear.app/issue/ABC-2"))
+      (should (= 3 (length (bp/agent-sessions--session-links session))))
+      (should (plist-get (car (bp/agent-sessions--session-links session))
+                         :visited-at)))))
+
+(ert-deftest bp/agent-sessions-shared-links-migrate-old-key ()
+  (bp/agent-sessions-test--with-temp-db
+    (let ((db (bp/agent-sessions--db)))
+      (sqlite-execute db "DROP TABLE shared_links")
+      (sqlite-execute db "CREATE TABLE shared_links (
+        owner_kind TEXT NOT NULL, owner_key TEXT NOT NULL,
+        link_kind TEXT NOT NULL, url TEXT NOT NULL, label TEXT,
+        shared_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+        visited_at INTEGER, PRIMARY KEY (owner_kind, owner_key, link_kind))")
+      (sqlite-execute db "INSERT INTO shared_links VALUES
+        ('session', 'thread-1', 'linear', 'https://linear.app/issue/ABC-1',
+         'ABC-1', 100, 100, 101)")
+      (sqlite-execute db "UPDATE meta SET value = '1' WHERE key = 'schema_version'")
+      (bp/agent-sessions--db-migrate db)
+      (bp/agent-sessions--share-link
+       (list :agent-session-id "thread-1") "linear"
+       "https://linear.app/issue/ABC-2" "ABC-2")
+      (should (equal '((2))
+                     (sqlite-select db "SELECT COUNT(*) FROM shared_links")))
+      (should (equal '((101))
+                     (sqlite-select db "SELECT visited_at FROM shared_links
+                       WHERE url = 'https://linear.app/issue/ABC-1'"))))))
+
+(ert-deftest bp/agent-sessions-mark-unread-moves-to-the-next-row ()
+  (with-temp-buffer
+    (bp/agent-sessions-mode)
+    (let ((inhibit-read-only t)
+          (file (list :path "/tmp/agent-file-1" :visited-at nil)))
+      (magit-insert-section (bp/agent-sessions-root)
+        (magit-insert-section (bp/agent-session-row "session-1")
+          (magit-insert-heading "session 1\n")
+          (magit-insert-section (bp/agent-session-file "/tmp/agent-file-1")
+            (magit-insert-heading "file 1\n"))
+          (magit-insert-section (bp/agent-session-file "/tmp/agent-file-2")
+            (magit-insert-heading "file 2\n")))
+        (magit-insert-section (bp/agent-session-row "session-2")
+          (magit-insert-heading "session 2\n")
+          (magit-insert-section (bp/agent-session-file "/tmp/agent-file-3")
+            (magit-insert-heading "file 3\n"))))
+      (goto-char (point-min))
+      (search-forward "file 1")
+      (cl-letf (((symbol-function 'bp/agent-sessions--file-at-point)
+                 (lambda () (list 'session "/tmp/agent-file-1" file)))
+                ((symbol-function 'bp/agent-sessions--set-visited)
+                 (lambda (_match visited)
+                   (plist-put file :visited-at (and visited 1))
+                   t))
+                ((symbol-function 'bp/agent-sessions--refresh) #'ignore))
+        (bp/agent-sessions-mark-unread)
+        (should (equal "/tmp/agent-file-2"
+                       (oref (magit-current-section) value)))
+        (should (plist-get file :visited-at))
+        ;; Past a session's last file, on to the next session's row.
+        (bp/agent-sessions-mark-unread)
+        (should (equal "session-2" (oref (magit-current-section) value)))
+        ;; From a session row to its first file; the last row stays put.
+        (bp/agent-sessions-mark-unread)
+        (should (equal "/tmp/agent-file-3"
+                       (oref (magit-current-section) value)))
+        (bp/agent-sessions-mark-unread)
+        (should (equal "/tmp/agent-file-3"
+                       (oref (magit-current-section) value))))
+      (should (eq (lookup-key bp/agent-sessions-mode-map (kbd "m"))
+                  (lookup-key bp/agent-sessions-mode-map (kbd "u")))))))
+
+(ert-deftest bp/agent-sessions-mark-unread-toggles-a-session-row ()
+  (let ((buf (generate-new-buffer " *agent-session-toggle*"))
+        (bp/agent-sessions (make-hash-table :test #'equal)))
+    (unwind-protect
+        (cl-letf (((symbol-function 'bp/agent-sessions--link-at-point) #'ignore)
+                  ((symbol-function 'bp/agent-sessions--file-at-point) #'ignore)
+                  ((symbol-function 'bp/agent-sessions--session-at-point)
+                   (lambda () (list :buffer buf)))
+                  ((symbol-function 'bp/agent-sessions--refresh) #'ignore))
+          (with-current-buffer buf (setq-local bp/agent-session-id "s-1"))
+          (puthash "s-1" (list :status 'stopped) bp/agent-sessions)
+          (cl-flet ((marked ()
+                      (buffer-local-value 'bp/agent-session--marked-unread buf)))
+            ;; Read -> unread -> read.
+            (bp/agent-sessions-mark-unread)
+            (should (marked))
+            (bp/agent-sessions-mark-unread)
+            (should-not (marked))
+            ;; An agent-reported needs-attention reads as unread: `u' marks it
+            ;; read the way focusing would, without setting the manual mark.
+            (puthash "s-1" (list :status 'needs-attention) bp/agent-sessions)
+            (bp/agent-sessions-mark-unread)
+            (should-not (marked))
+            (should (eq 'stopped (plist-get (gethash "s-1" bp/agent-sessions)
+                                            :status)))
+            ;; The prefix argument always marks read.
+            (bp/agent-sessions-mark-unread)
+            (should (marked))
+            (bp/agent-sessions-mark-unread t)
+            (should-not (marked))
+            (bp/agent-sessions-mark-unread t)
+            (should-not (marked))))
+      (kill-buffer buf))))
+
+(ert-deftest bp/agent-sessions-share-link-validates-kind-and-url ()
+  (let ((session (list :agent-session-id "thread-1"))
+        refreshed)
+    (cl-letf (((symbol-function 'bp/agent-sessions--session-for-id)
+               (lambda (_) session))
+              ((symbol-function 'bp/agent-sessions--refresh-if-visible)
+               (lambda () (setq refreshed t))))
+      (should (string-prefix-p
+               "Unknown link kind"
+               (bp/agent-sessions-share-link
+                "terminal" "ticket" "https://example.com/1")))
+      (should (string-prefix-p
+               "Invalid link URL"
+               (bp/agent-sessions-share-link
+                "terminal" "linear" "file:///tmp/issue")))
+      (should-not refreshed))))
+
+(ert-deftest bp/agent-sessions-open-link-marks-read-before-browsing ()
+  (let* ((link (list :kind "pr" :url "https://github.com/org/repo/pull/1"))
+         events)
+    (cl-letf (((symbol-function 'bp/agent-sessions--link-at-point)
+               (lambda () (list 'session "pr" link)))
+              ((symbol-function 'bp/agent-sessions--set-link-visited)
+               (lambda (match-fn visitedp)
+                 (push (list 'visited (funcall match-fn link) visitedp) events)
+                 t))
+              ((symbol-function 'bp/agent-sessions--refresh-if-visible)
+               (lambda () (push '(refresh) events)))
+              ((symbol-function 'browse-url)
+               (lambda (url) (push (list 'browse url) events))))
+      (bp/agent-sessions--open-link-at-point)
+      (should
+       (equal (nreverse events)
+              '((visited t t)
+                (refresh)
+                (browse "https://github.com/org/repo/pull/1")))))))
+
+(ert-deftest bp/agent-sessions-w-copies-attachment-value ()
+  (let ((kill-ring nil)
+        (link nil)
+        (file nil))
+    (cl-letf (((symbol-function 'bp/agent-sessions--link-at-point)
+               (lambda () link))
+              ((symbol-function 'bp/agent-sessions--file-at-point)
+               (lambda () file)))
+      (setq file '(session "/tmp/shared plan.md" nil))
+      (bp/agent-sessions-copy-attachment)
+      (should (equal "/tmp/shared plan.md" (car kill-ring)))
+      (setq file nil
+            link '(session "https://example.com/pr/1"
+                           (:url "https://example.com/pr/1")))
+      (bp/agent-sessions-copy-attachment)
+      (should (equal "https://example.com/pr/1" (car kill-ring)))
+      (setq link nil)
+      (bp/agent-sessions-copy-attachment)
+      (should (equal "https://example.com/pr/1" (car kill-ring))))
+    (should (eq (lookup-key bp/agent-sessions-mode-map (kbd "w"))
+                #'bp/agent-sessions-copy-attachment))))
+
+(ert-deftest bp/agent-sessions-share-state-sets-and-clears ()
+  (let ((session (list :agent-session-id "thread-1"))
+        writes refreshes)
+    (cl-letf (((symbol-function 'bp/agent-sessions--session-for-id)
+               (lambda (_) session))
+              ((symbol-function 'bp/agent-sessions--state-set)
+               (lambda (keys state) (push (list keys state) writes)))
+              ((symbol-function 'bp/agent-sessions--refresh-if-visible)
+               (lambda () (setq refreshes (1+ (or refreshes 0))))))
+      (should (equal "State: PLAN-REVIEW"
+                     (bp/agent-sessions-share-state "terminal" "PLAN-REVIEW")))
+      (should (equal "State cleared"
+                     (bp/agent-sessions-share-state "terminal" "")))
+      (should (equal (nreverse writes)
+                     (list (list (bp/agent-sessions--session-note-keys session)
+                                 "PLAN-REVIEW")
+                           (list (bp/agent-sessions--session-note-keys session)
+                                 nil))))
+      (should (= refreshes 2)))))
+
+(ert-deftest bp/agent-sessions-share-state-refuses-unknown-state ()
+  (let ((session (list :agent-session-id "thread-1"))
+        written)
+    (cl-letf (((symbol-function 'bp/agent-sessions--session-for-id)
+               (lambda (_) session))
+              ((symbol-function 'bp/agent-sessions--state-set)
+               (lambda (&rest _) (setq written t)))
+              ((symbol-function 'bp/agent-sessions--refresh-if-visible)
+               #'ignore))
+      (let ((reply (bp/agent-sessions-share-state "terminal" "MERGED")))
+        (should (string-prefix-p "Unknown state `MERGED'" reply))
+        (should (string-match-p "PLAN-REVIEW" reply)))
+      (should-not written))))
+
+(ert-deftest bp/agent-sessions-share-state-without-session ()
+  (cl-letf (((symbol-function 'bp/agent-sessions--session-for-share)
+             (lambda (&rest _) nil)))
+    (should (string-prefix-p
+             "No Emacs terminal registered"
+             (bp/agent-sessions-share-state "terminal" "DONE")))
+    (should (string-prefix-p
+             "No Emacs agent session registered for agent id thread-1"
+             (bp/agent-sessions-share-state "terminal" "DONE" "thread-1")))))
+
+(ert-deftest bp/agent-sessions-states-cycle-in-workflow-order ()
+  (let ((seen nil) (state nil))
+    (dotimes (_ (1+ (length bp/agent-sessions-states)))
+      (setq state (bp/agent-sessions--next-state state))
+      (push state seen))
+    (should (equal (nreverse seen)
+                   '("TODO" "PLANNING" "PLAN-REVIEW" "IMPLEMENTING"
+                     "IMPL-REVIEW" "PR-OPEN" "AUTOFIX" "REVIEW" "DONE"
+                     "BLOCKED" "LEARN" nil)))))
+
+(ert-deftest bp/agent-sessions-copy-tree-as-org-list ()
+  (bp/agent-sessions-test--with-temp-db
+    (let* ((bp/agent-sessions--notes nil)
+           (bp/agent-sessions--order nil)
+           (worktree (make-temp-file "agent-sessions-worktree-" t))
+           (plan (expand-file-name "plan.md" worktree))
+           (session (list :agent-session-id "thread-1" :agent-type "claude"
+                          :worktree-path worktree))
+           (row (magit-section))
+           (kill-ring nil)
+           (kill-ring-yank-pointer nil)
+           (interprogram-cut-function nil))
+      (unwind-protect
+          (progn
+            (oset row type 'bp/agent-session-row)
+            (oset row value "terminal")
+            (write-region "" nil plan)
+            (bp/agent-sessions--note-set
+             (bp/agent-sessions--session-note-keys session) "Done\nShipped")
+            (bp/agent-sessions--share-link
+             session "pr" "https://github.com/org/repo/pull/1" "PR #1")
+            (bp/agent-sessions--share-file session plan "")
+            (bp/agent-sessions--note-set
+             (list (bp/agent-sessions--file-note-key plan)) "Read first")
+            (cl-letf (((symbol-function 'bp/agent-sessions--session-for-id)
+                       (lambda (_) session))
+                      ((symbol-function 'magit-current-section)
+                       (lambda () row)))
+              (bp/agent-sessions-copy-tree))
+            (should (equal
+                     (concat
+                      "- [[agent-session:claude::thread-1::"
+                      (file-name-as-directory worktree)
+                      "][claude thread-1]]\n"
+                      "  Done\n"
+                      "  Shipped\n"
+                      "  - [[https://github.com/org/repo/pull/1][PR #1]]\n"
+                      "  - [[file:" (abbreviate-file-name plan) "][plan.md]]\n"
+                      "    Read first\n")
+                     (current-kill 0))))
+        (delete-directory worktree t)))))
+
+(ert-deftest bp/agent-sessions-copy-tree-nests-forks-under-parent ()
+  (bp/agent-sessions-test--with-temp-db
+    (let* ((bp/agent-sessions--notes nil)
+           (bp/agent-sessions--order nil)
+           (sessions
+            `(("parent" :agent-session-id "p" :agent-type "claude")
+              ("child" :agent-session-id "c" :agent-type "claude"
+               :branched-from ("p" . "parent"))
+              ("other" :agent-session-id "o" :agent-type "claude")
+              ;; A cycle has no root, and must still be copied once each.
+              ("loop-a" :agent-session-id "a" :agent-type "claude"
+               :branched-from ("b" . "loop-b"))
+              ("loop-b" :agent-session-id "b" :agent-type "claude"
+               :branched-from ("a" . "loop-a"))))
+           (worktree (magit-section))
+           (rows (mapcar (lambda (entry)
+                           (let ((row (magit-section)))
+                             (oset row type 'bp/agent-session-row)
+                             (oset row value (car entry))
+                             (oset row parent worktree)
+                             row))
+                         sessions)))
+      (oset worktree type 'bp/agent-session-worktree)
+      (oset worktree value (list :label "wt" :path "/nonexistent/wt"))
+      (oset worktree children rows)
+      (cl-letf (((symbol-function 'bp/agent-sessions--session-for-id)
+                 (lambda (id) (cdr (assoc id sessions))))
+                ((symbol-function 'bp/agent-sessions--session-org-link)
+                 (lambda (session)
+                   (cons (plist-get session :agent-session-id)
+                         (plist-get session :agent-session-id)))))
+        (should (equal (concat "- [[p][p]]\n"
+                               "  - [[c][c]]\n")
+                       (bp/agent-sessions--org-tree (car rows) "")))
+        (should (equal (concat "- wt\n"
+                               "  - [[p][p]]\n"
+                               "    - [[c][c]]\n"
+                               "  - [[o][o]]\n"
+                               "  - [[a][a]]\n"
+                               "    - [[b][b]]\n")
+                       (bp/agent-sessions--org-tree worktree "")))))))
+
+(ert-deftest bp/agent-sessions-manual-order-ignores-buffer-name ()
+  (bp/agent-sessions-test--with-temp-db
+   (let* ((agent (generate-new-buffer "*agent*"))
+          (bare (generate-new-buffer "*bare*"))
+          (entries
+           (list (list :session (list :buffer agent :agent-session-id "uuid-1"))
+                 (list :session (list :buffer bare))))
+          (scope (bp/agent-sessions--sessions-scope "/repo" "/repo/wt"))
+          (bp/agent-sessions--order nil))
+     (unwind-protect
+         (progn
+           (with-current-buffer bare (setq-local bp/agent-session-id "123-4"))
+           ;; An agent is keyed by its own session id, a bare terminal by its
+           ;; terminal id.
+           (should (equal (mapcar #'bp/agent-sessions--entry-order-key entries)
+                          '("uuid-1" "123-4")))
+           (bp/agent-sessions--order-write-group scope nil '("123-4" "uuid-1"))
+           (with-current-buffer agent (rename-buffer "wt - renamed agent"))
+           (with-current-buffer bare (rename-buffer "wt - renamed bare"))
+           (should (equal (bp/agent-sessions--apply-manual-order
+                           scope #'bp/agent-sessions--entry-order-key entries)
+                          (reverse entries))))
+       (mapc #'kill-buffer (list agent bare))))))
+
+(defmacro bp/agent-sessions-test--with-titled-terminal (buf &rest body)
+  "Run BODY with BUF bound to a terminal buffer in worktree `project_3'."
+  (declare (indent 1))
+  `(let ((,buf (generate-new-buffer "*eat*")))
+     (unwind-protect
+         (cl-letf (((symbol-function 'bp/agent-sessions--buffer-repo-info)
+                    (lambda (_) (list :worktree-name "project_3"))))
+           ,@body)
+       (kill-buffer ,buf))))
+
+(ert-deftest bp/agent-sessions-edit-title-renames-buffer ()
+  (bp/agent-sessions-test--with-titled-terminal buf
+    (cl-letf (((symbol-function 'bp/agent-sessions--session-at-point)
+               (lambda () (list :buffer buf)))
+              ((symbol-function 'bp/agent-sessions--refresh) #'ignore)
+              ((symbol-function 'read-string) (lambda (&rest _) "Fix login")))
+      (bp/agent-sessions-edit-title))
+    (should (equal (buffer-name buf) "project_3 - Fix login"))
+    (should (equal (buffer-local-value 'bp/agent-session-title-override buf)
+                   "Fix login"))
+    ;; Clearing the title keeps the name it last had.
+    (cl-letf (((symbol-function 'bp/agent-sessions--session-at-point)
+               (lambda () (list :buffer buf)))
+              ((symbol-function 'bp/agent-sessions--refresh) #'ignore)
+              ((symbol-function 'read-string) (lambda (&rest _) "")))
+      (bp/agent-sessions-edit-title))
+    (should-not (buffer-local-value 'bp/agent-session-title-override buf))
+    (should (equal (buffer-name buf) "project_3 - Fix login"))))
+
+(ert-deftest bp/agent-sessions-restored-title-renames-buffer ()
+  (bp/agent-sessions-test--with-titled-terminal buf
+    (cl-letf (((symbol-function 'bp/agent-sessions--refresh-if-visible) #'ignore))
+      (bp/agent-sessions--restore-title buf (list :title "Old task")))
+    (should (equal (buffer-name buf) "project_3 - Old task"))))
+
+(ert-deftest bp/agent-sessions-agent-title-renames-buffer ()
+  "An agent's OSC title renames its buffer until the user sets one."
+  (bp/agent-sessions-test--with-titled-terminal buf
+    (let ((bp/agent-sessions (make-hash-table :test 'equal)))
+      (with-current-buffer buf
+        (setq-local bp/agent-session-id "agent-title")
+        ;; A plain shell's title (no agent registered) leaves the name alone.
+        (bp/agent-sessions--set-agent-title "user@host:~")
+        (should (equal (buffer-name buf) "*eat*"))
+        (puthash "agent-title" (list :buffer buf) bp/agent-sessions)
+        (bp/agent-sessions--set-agent-title "Fix login")
+        (should (equal (buffer-name buf) "project_3 - Fix login"))
+        ;; Animated status glyphs don't reach the name.
+        (bp/agent-sessions--set-agent-title "⠏ Fix login")
+        (should (equal (buffer-name buf) "project_3 - Fix login"))
+        (bp/agent-sessions--set-agent-title "✳ Fix login")
+        (should (equal (buffer-name buf) "project_3 - Fix login"))
+        ;; A user title wins over later agent titles.
+        (bp/agent-sessions--set-title-override buf "Mine")
+        (bp/agent-sessions--set-agent-title "Agent again")
+        (should (equal (buffer-name buf) "project_3 - Mine"))
+        (should (equal bp/agent-session-title "Agent again"))))))
+
 (ert-deftest bp/agent-sessions-terminal-id-for-agent ()
   "A Codex thread id finds its own terminal, whatever id the daemon carries."
   (let ((bp/agent-sessions (make-hash-table :test 'equal))
@@ -542,6 +1224,11 @@ The colors are what a live ghostel rendered for `ESC[2m' on this theme."
       (should-not (bp/agent-orchestration--claude-ghost-completion-p green-faint))
       (should-not (bp/agent-orchestration--claude-ghost-completion-p
                    (concat typed faint))))))
+
+(ert-deftest bp/agent-orchestration-worker-title-renames-buffer ()
+  (bp/agent-sessions-test--with-titled-terminal buf
+    (bp/agent-orchestration--mark-worker buf "coord" (list) "Write tests")
+    (should (equal (buffer-name buf) "project_3 - Write tests"))))
 
 (provide 'agent-sessions-test)
 ;;; agent-sessions-test.el ends here

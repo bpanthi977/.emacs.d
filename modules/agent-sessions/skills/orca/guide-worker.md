@@ -55,12 +55,12 @@ Rules:
   `rebase`, `stash`) unless your task says the worktree is yours. The index and
   HEAD are shared per worktree: staging anything would stage a co-tenant's
   half-finished edits along with yours.
-- `emacs-share-file FILE "why"` hands a file to the *human* in their dashboard.
 - To stop a `wait` you started in the background, stop that task by its id or
   kill the exact pid you started. Never `pkill -f "emacs-agent wait"` or kill
   by any other pattern: it matches every agent's mailbox watcher on the machine.
 - Your final report's body is read first and often only. Lead with what changed
   and whether it works; put long detail in a file and name its path.
+- `emacs-share file FILE "why"` hands a file to the *human* in their dashboard.
   That is not a substitute for your final report to your coordinator.
 
 The human can also talk to you directly in this terminal. If they redirect you,

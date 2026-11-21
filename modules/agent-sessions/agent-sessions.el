@@ -10,6 +10,7 @@
 (require 'seq)
 (require 'json)
 (require 'server)
+(require 'diff)
 ;; Not autoloaded: `with-sqlite-transaction' is a macro in sqlite.el, so
 ;; without this the persistent store's writes fail at *call* time, long after
 ;; the file has loaded cleanly.
@@ -31,8 +32,8 @@
 (defconst bp/agent-sessions--bin-dir
   (expand-file-name "bin" bp/agent-sessions--dir)
   "Directory of the commands an agent may run from inside a session terminal.
-Placed on the PATH of every session terminal, so `emacs-share-file' is simply
-there — nothing for the user to install and nothing for the agent to locate.")
+Placed on the PATH of every session terminal, so `emacs-share' is simply there
+— nothing for the user to install and nothing for the agent to locate.")
 
 (defvar bp/agent-sessions--extra-terminal-env nil
   "Extra `VAR=VALUE' strings to inject into the next terminal created.
@@ -127,6 +128,9 @@ output arriving in a terminal that was already selected.")
 This bridges startup until the agent's first hook confirms its identity, so a
 message addressed through an older terminal can find this live replacement.")
 
+(defvar-local bp/agent-session--folder-id nil
+  "Folder chosen for this terminal before or between agent session ids.")
+
 (defconst bp/agent-sessions-buffer-name "*Agent Sessions*")
 
 (defcustom bp/agent-sessions-terminal 'vterm
@@ -139,11 +143,9 @@ Terminals of the other backends opened by hand are still tracked."
                  (const :tag "ghostel" ghostel)))
 
 (defcustom bp/agent-sessions-show-all-worktrees nil
-  "When non-nil, list every worktree of a repo, even those with no session.
-This makes it easy to spin up a new session in an idle worktree with the
-`+' key (`bp/agent-sessions-new-vterm').  Only repos that already have at
-least one session are shown; the option controls whether their empty
-worktrees are listed too."
+  "Legacy option retained for compatibility.
+Worktrees are now a session column; `+' on a repo or folder offers all of its
+worktrees, including those with no session."
   :type 'boolean)
 
 (defcustom bp/agent-session-notify-on-attention t
@@ -153,11 +155,15 @@ not on every hook event, so a session that stays waiting is announced once."
   :type 'boolean)
 
 (defvar bp/agent-sessions-sort-by-activity nil
-  "When non-nil, sort repos, worktrees, and sessions by most recent activity.
+  "When non-nil, sort repos and sessions by most recent activity.
 Off by default because `:updated-at' changes on every hook event, so two
 sessions running at once continually swap places in the dashboard.  The
-default is the stable order of `bp/agent-sessions--sort-tree-stable'.
+default is a stable alphabetical repo order with attention sorted sessions.
 Toggle with `s' \(`bp/agent-sessions-toggle-sort').")
+
+(defvar bp/agent-sessions-group-by-folder nil
+  "When non-nil, display repo → folder → session.
+The other view displays repo → worktree → session.  Toggle with `f'.")
 
 (defconst bp/agent-session-status-alist
   '((claude . ((Stop . needs-attention)
@@ -199,11 +205,12 @@ easy to tell apart.  Falls back to just the directory name when BRANCH is nil
 (defun bp/agent-session--repo-info (dir)
   "Return session repo/worktree info for the git repo containing DIR.
 The plist has :repo NAME, :repo-root ROOT (the main worktree's directory),
-:worktree LABEL, and :worktree-path DIR."
+:worktree LABEL, :worktree-name NAME, :branch BRANCH, and :worktree-path DIR."
   (let* ((default-directory dir)
          (toplevel (ignore-errors (magit-toplevel))))
     (if (not toplevel)
-        (list :repo nil :repo-root nil :worktree nil :worktree-path nil)
+        (list :repo nil :repo-root nil :worktree nil :worktree-name nil
+              :branch nil :worktree-path nil)
       (let* ((common-dir (ignore-errors
                             (let ((default-directory toplevel))
                               (magit-git-string "rev-parse" "--path-format=absolute"
@@ -218,6 +225,9 @@ The plist has :repo NAME, :repo-root ROOT (the main worktree's directory),
         (list :repo repo-name
               :repo-root (file-name-as-directory main-root)
               :worktree worktree-label
+              :worktree-name (file-name-nondirectory
+                              (directory-file-name toplevel))
+              :branch branch
               :worktree-path (file-name-as-directory toplevel))))))
 
 (defun bp/agent-sessions--compute-worktrees (root)
@@ -291,6 +301,11 @@ branched/forked from.  Set on a freshly branched terminal (by the `b' command
 or `bp/agent-sessions-mark-parent') so its agent session records the parentage
 once its first hook fires, and preserved across subsequent hook events.")
 
+(defvar-local bp/agent-session--parent-detached-p nil
+  "Non-nil when this session was explicitly detached from its fork parent.
+This prevents fork auto-detection from restoring a relationship removed with
+`bp/agent-sessions-detach-parent'.")
+
 (defvar-local bp/agent-session--marked-unread nil
   "When non-nil, the user marked this session as needing attention (`u').
 Kept on the buffer rather than in `bp/agent-sessions' so it works for a plain
@@ -300,11 +315,31 @@ flag only overrides the status at display time, and is cleared the same way a
 real needs-attention is: by looking at the session.")
 
 (defun bp/agent-sessions--capture-title (title)
-  (setq-local bp/agent-session-title title))
+  (bp/agent-sessions--set-agent-title title))
+
+(defun bp/agent-sessions--set-agent-title (title)
+  "Record TITLE as the current buffer's agent-set (OSC) title.
+In an agent session the user has not titled, the buffer is renamed to follow
+it, as `bp/agent-sessions--set-title-override' does for a user title.  Plain
+shells are left alone: their OSC titles are prompts, not task summaries."
+  (setq-local bp/agent-session-title title)
+  (let ((name (and (stringp title)
+                   ;; Drop the leading status glyph agents animate (Claude's
+                   ;; `✳'/`◐', Codex's braille spinner), or the buffer would be
+                   ;; renamed on every frame.
+                   (string-trim
+                    (replace-regexp-in-string
+                     "\\`[^[:alnum:][:space:]]+[[:space:]]+" "" title)))))
+    (when (and bp/agent-session-id
+               (gethash bp/agent-session-id bp/agent-sessions)
+               (not bp/agent-session-title-override)
+               name
+               (not (string-empty-p name)))
+      (bp/agent-sessions--rename-to-title (current-buffer) name))))
 
 (defun bp/agent-sessions--eat-advice (orig-fun program arg display-fn)
   "Give eat sessions the same id injection/registration as vterm.
-Injects EMACS_AGENT_SESSION_ID and the shared-file command's directory via
+Injects EMACS_AGENT_SESSION_ID and the agent command directory via
 `process-environment' (which `eat-exec' inherits when it spawns the shell) and
 registers the resulting buffer."
   (let* ((id (format "%d-%d" (emacs-pid) (cl-incf bp/agent-session-counter)))
@@ -326,7 +361,7 @@ registers the resulting buffer."
 ;; advising the emulator's title setter, which runs with the eat buffer
 ;; current (same idea as the `vterm--set-title' advice above).
 (defun bp/agent-sessions--eat-capture-title (title &rest _)
-  (setq-local bp/agent-session-title title))
+  (bp/agent-sessions--set-agent-title title))
 
 ;; ghostel has a pre-spawn hook, run in the new buffer while
 ;; `process-environment' is bound to the child's environment, so it needs no
@@ -475,6 +510,8 @@ the body names the agent type, state, and its terminal title (task summary)."
              (branched-from (or (and existing (plist-get existing :branched-from))
                                 (buffer-local-value 'bp/agent-session--branched-from buf)
                                 (and (not existing)
+                                     (not (buffer-local-value
+                                           'bp/agent-session--parent-detached-p buf))
                                      (equal agent-type "claude")
                                      transcript-path
                                      (bp/agent-sessions--detect-parent
@@ -491,9 +528,19 @@ the body names the agent type, state, and its terminal title (task summary)."
                        :repo (plist-get info :repo)
                        :repo-root (plist-get info :repo-root)
                        :worktree (plist-get info :worktree)
+                       :worktree-name (plist-get info :worktree-name)
+                       :branch (plist-get info :branch)
                        :worktree-path (plist-get info :worktree-path)
                        :branched-from branched-from)
                  bp/agent-sessions)
+        ;; A fork starts in its parent's folder.  Only on the first event, the
+        ;; same moment parentage is decided, so it stays a default rather than
+        ;; a rule the user's later choice has to fight.
+        (unless existing
+          (bp/agent-sessions--folder-inherit
+           buf branched-from
+           (bp/agent-sessions--canonical-path (plist-get info :repo-root))))
+        (bp/agent-sessions--folder-hydrate buf agent-session-id)
         ;; Keep the restore log in step.  `SessionEnd' is the agent telling us
         ;; it is going away while its terminal stays; every other event just
         ;; describes a session that is still running.  Note this deliberately
@@ -630,6 +677,8 @@ so idle terminals still appear in the dashboard tree."
           :repo (plist-get info :repo)
           :repo-root (plist-get info :repo-root)
           :worktree (plist-get info :worktree)
+          :worktree-name (plist-get info :worktree-name)
+          :branch (plist-get info :branch)
           :worktree-path (plist-get info :worktree-path))))
 
 (defun bp/agent-sessions--session-for-id (id)
@@ -875,15 +924,61 @@ Computed rather than fixed so a state added to `bp/agent-sessions-states' does
 not push the titles of stated rows out of line with unstated ones."
   (1+ (apply #'max 0 (mapcar #'length bp/agent-sessions-states))))
 
-(defun bp/agent-sessions--row-text (prefix state suffix face)
-  "Build a session row: PREFIX, STATE in its own column, then SUFFIX.
+(defun bp/agent-sessions--session-worktree-name (session)
+  "Return SESSION's worktree directory name, including older registry entries."
+  (or (plist-get session :worktree-name)
+      (let* ((label (plist-get session :worktree))
+             (path (plist-get session :worktree-path))
+             (name (and path (file-name-nondirectory
+                              (directory-file-name path)))))
+        (if (and name label (string-prefix-p (concat name " (") label)
+                 (string-suffix-p ")" label))
+            name
+          (or label name "?")))))
+
+(defun bp/agent-sessions--session-branch (session)
+  "Return SESSION's branch, including older registry entries."
+  (or (plist-get session :branch)
+      (let* ((label (plist-get session :worktree))
+             (name (bp/agent-sessions--session-worktree-name session))
+             (prefix (concat name " (")))
+        (and label (string-prefix-p prefix label)
+             (string-suffix-p ")" label)
+             (substring label (length prefix) -1)))))
+
+(defvar-local bp/agent-sessions--worktree-column-width 1
+  "Width of the worktree name column in the current dashboard render.")
+
+(defvar-local bp/agent-sessions--pr-column-width 0
+  "Width of the PR glyph column in the current dashboard render.
+Zero when no session has exactly one PR link, so the column costs nothing on a
+dashboard that does not use PR links.")
+
+(defun bp/agent-sessions--layer-faces (text base)
+  "Copy TEXT with BASE layered under each character's own `font-lock-face'.
+Characters without a face get BASE alone.  Layered rather than replaced for
+the reason `bp/agent-sessions--row-text' gives: the inner face carries a
+foreground, BASE may carry a row's attention background, and both must show."
+  (let ((out (copy-sequence text)))
+    (dotimes (i (length out))
+      (let ((own (get-text-property i 'font-lock-face text)))
+        (put-text-property i (1+ i) 'font-lock-face
+                           (if own (list own base) base)
+                           out)))
+    out))
+
+(defun bp/agent-sessions--row-text (prefix state suffix face &optional marks)
+  "Build a session row: PREFIX, STATE in its own column, MARKS, then SUFFIX.
 FACE dresses the whole row (it is what spans an attention highlight across it),
 and the state's own face is *merged* on top rather than replacing it — merged,
 because the state faces set a foreground and the row face sets a background, and
-either replacing the row face or letting it win would lose one of the two."
+either replacing the row face or letting it win would lose one of the two.
+MARKS (the PR glyph column) keeps its own faces, merged over FACE the same way."
   (let* ((column (format (format "%%-%ds" (bp/agent-sessions--state-column-width))
                          (or state "")))
-         (row (propertize (concat prefix column suffix) 'font-lock-face face))
+         (row (concat (propertize (concat prefix column) 'font-lock-face face)
+                      (bp/agent-sessions--layer-faces (or marks "") face)
+                      (propertize suffix 'font-lock-face face)))
          (state-face (and state (bp/agent-sessions--state-face state))))
     (when state-face
       ;; A *list* of faces on `font-lock-face', not `add-face-text-property':
@@ -913,9 +1008,12 @@ indentation conveys the relationship."
                    ('error "✖ ")
                    (_ "  ")))
          (title (or (plist-get entry :title) ""))
-         (last-event (plist-get session :last-event))
          (branched-from (plist-get session :branched-from))
-         (indent (make-string (* 2 (or depth 0)) ?\s)))
+         (indent (make-string (* 2 (or depth 0)) ?\s))
+         (base "    ")
+         (folder (and (not bp/agent-sessions-group-by-folder)
+                      (bp/agent-sessions--folder
+                       (bp/agent-sessions--folder-for-session session)))))
     ;; Record what this row *shows*, for `N'/`P' (see the variable's docstring).
     (push (cons (line-beginning-position) status) bp/agent-sessions--row-status)
     (magit-insert-section (bp/agent-session-row id)
@@ -924,21 +1022,30 @@ indentation conveys the relationship."
       ;; fold indicator.
       (magit-insert-heading
         (bp/agent-sessions--row-text
-         (concat "    " indent marker
-                 (format "%-7s %-16s " (plist-get session :agent-type) status))
+         (concat base indent
+                 (when bp/agent-sessions-group-by-folder
+                   (format
+                    (format "%%-%ds" bp/agent-sessions--worktree-column-width)
+                    (bp/agent-sessions--session-worktree-name session)))
+                 marker
+                 (format "%-7s %-16s "
          (bp/agent-sessions--session-state session)
-         (format "%s%s%s%s\n"
                  title
-                 (if last-event (format " (%s)" last-event) "")
                  (bp/agent-orchestration--row-badge id)
+                 (if folder (format "  [%s]" (plist-get folder :name)) "")
                  (if (and branched-from (not suppress-parent-note))
                      (format "  ↳ from %s" (cdr branched-from))
+                   "")
+                 (if-let ((branch (and bp/agent-sessions-group-by-folder
+                                      (bp/agent-sessions--session-branch session))))
+                     (format "  (%s)" branch)
                    ""))
-         face))
+         face
+         (bp/agent-sessions--pr-marks session)))
       (bp/agent-sessions--insert-note
        (bp/agent-sessions--session-note-keys session)
-       (concat "    " indent "    "))
-      (bp/agent-sessions--insert-files session (concat "    " indent "    ")))))
+       (concat base indent "    "))
+      (bp/agent-sessions--insert-links session (concat base indent "    "))
 
 (defun bp/agent-sessions--insert-entries (entries)
   "Insert ENTRIES, nesting any branched session under its parent when present.
@@ -1090,14 +1197,32 @@ buckets carries information, whereas a row moving because a tool ran does not.")
   (let ((buf (plist-get session :buffer)))
     (or (and (buffer-live-p buf) (buffer-name buf)) "")))
 
-(defun bp/agent-sessions--entry-buffer-name (entry)
-  (bp/agent-sessions--session-buffer-name (plist-get entry :session)))
+(defun bp/agent-sessions--session-terminal-id (session)
+  "SESSION's terminal id (`bp/agent-session-id'), or \"\" if it has none."
+  (let ((buf (plist-get session :buffer)))
+    (or (and (buffer-live-p buf) (buffer-local-value 'bp/agent-session-id buf))
+        "")))
+
+(defun bp/agent-sessions--entry-terminal-id (entry)
+  (bp/agent-sessions--session-terminal-id (plist-get entry :session)))
+
+(defun bp/agent-sessions--session-order-key (session)
+  "Manual-order key for SESSION: the agent's session id, else its terminal id.
+The agent's id is what survives a restart (a resumed session gets it back), so
+it keeps a placed row in its slot across one; a plain terminal has no such id
+and is placed only for as long as it lives.  Never the buffer name, which a
+title change rewrites."
+  (or (plist-get session :agent-session-id)
+      (bp/agent-sessions--session-terminal-id session)))
+
+(defun bp/agent-sessions--entry-order-key (entry)
+  (bp/agent-sessions--session-order-key (plist-get entry :session)))
 
 (defun bp/agent-sessions--sort-entries (entries)
-  "Sort ENTRIES by attention bucket, then oldest-first, then buffer name.
+  "Sort ENTRIES by attention bucket, then oldest-first, then terminal id.
 Every key is stable under ordinary activity: unlike `:updated-at', none of
 them changes when a session merely runs a tool, so two busy sessions keep
-their positions instead of trading places on each hook event.  The buffer name
+their positions instead of trading places on each hook event.  The terminal id
 is the final tie-break so the order never depends on hash-table iteration
 order (e.g. for buffers with no creation stamp)."
   (sort (copy-sequence entries)
@@ -1112,8 +1237,8 @@ order (e.g. for buffers with no creation stamp)."
                       ;; Unstamped buffers sort after stamped ones.
                       ((and ca (not cb)) t)
                       ((and cb (not ca)) nil)
-                      (t (string< (bp/agent-sessions--entry-buffer-name a)
-                                  (bp/agent-sessions--entry-buffer-name b))))))))))
+                      (t (string< (bp/agent-sessions--entry-terminal-id a)
+                                  (bp/agent-sessions--entry-terminal-id b))))))))))
 
 ;;; Persisted user intent ---------------------------------------------------
 ;;
@@ -1136,7 +1261,7 @@ order (e.g. for buffers with no creation stamp)."
   "SQLite file holding the notes, the manual order, and the session log."
   :type 'file)
 
-(defconst bp/agent-sessions--schema-version 1)
+(defconst bp/agent-sessions--schema-version 3)
 
 (defvar bp/agent-sessions--db nil
   "Open SQLite handle, or nil before the database is first used.")
@@ -1167,6 +1292,15 @@ order (e.g. for buffers with no creation stamp)."
     "CREATE INDEX IF NOT EXISTS sessions_open
        ON sessions (emacs_sid) WHERE closed_at IS NULL"
     "CREATE INDEX IF NOT EXISTS sessions_agent ON sessions (agent_sid)"
+
+    "CREATE TABLE IF NOT EXISTS folders (
+       id   INTEGER PRIMARY KEY,
+       repo TEXT NOT NULL,
+       name TEXT NOT NULL COLLATE NOCASE,
+       UNIQUE (repo, name))"
+    "CREATE TABLE IF NOT EXISTS session_folders (
+       agent_sid TEXT PRIMARY KEY,
+       folder_id INTEGER NOT NULL)"
 
     "CREATE TABLE IF NOT EXISTS notes (
        kind       TEXT NOT NULL,
@@ -1234,12 +1368,89 @@ order (e.g. for buffers with no creation stamp)."
        shared_at  INTEGER NOT NULL,
        updated_at INTEGER NOT NULL,
        visited_at INTEGER,
-       PRIMARY KEY (kind, key, path))")
+       PRIMARY KEY (kind, key, path))"
+
+    ;; The two most recent copies made when an agent shared a file.  The
+    ;; contents live outside SQLite in `bp/agent-sessions-file-snapshot-directory';
+    ;; this table only follows the same durable owner identity as the file row.
+    "CREATE TABLE IF NOT EXISTS shared_file_snapshots (
+       kind          TEXT    NOT NULL,
+       key           TEXT    NOT NULL,
+       path          TEXT    NOT NULL,
+       previous_path TEXT,
+       current_path  TEXT    NOT NULL,
+       updated_at    INTEGER NOT NULL,
+       PRIMARY KEY (kind, key, path))"
+
+    ;; External work items an agent wants to keep visible beside its shared
+    ;; files.  Each URL has its own row; retrying a registration is idempotent.
+    "CREATE TABLE IF NOT EXISTS shared_links (
+       owner_kind TEXT    NOT NULL,
+       owner_key  TEXT    NOT NULL,
+       link_kind  TEXT    NOT NULL,
+       url        TEXT    NOT NULL,
+       label      TEXT,
+       shared_at  INTEGER NOT NULL,
+       updated_at INTEGER NOT NULL,
+       visited_at INTEGER,
   "Statements that bring an empty or existing database up to date.
-All are `IF NOT EXISTS', so running them on every open is the whole migration
-story for as long as the schema only ever grows.  `bp/agent-sessions--schema-version'
-is recorded in `meta' so a future change that *rewrites* data can tell how old
-a file is.")
+Schema migrations are handled by `bp/agent-sessions--db-migrate'.")
+
+(defun bp/agent-sessions--db-migrate (db)
+  "Migrate existing tables in DB after the additive schema is installed."
+  (when (< (string-to-number (or (caar (sqlite-select db
+                                                "SELECT value FROM meta WHERE key = 'schema_version'"))
+                                 "0")) 2)
+    (sqlite-execute db "CREATE TABLE shared_links_v2 (
+       owner_kind TEXT NOT NULL, owner_key TEXT NOT NULL,
+       link_kind TEXT NOT NULL, url TEXT NOT NULL, label TEXT,
+       shared_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
+       visited_at INTEGER, PRIMARY KEY (owner_kind, owner_key, url))")
+    (sqlite-execute db "INSERT INTO shared_links_v2 SELECT * FROM shared_links")
+    ;; Existing manual-order keys were link kinds.  Each kind had one URL.
+    (sqlite-execute db "UPDATE order_entries SET member = (
+       SELECT url FROM shared_links
+        WHERE owner_key = order_entries.scope_repo
+          AND link_kind = order_entries.member)
+       WHERE kind = 'links' AND EXISTS (
+       SELECT 1 FROM shared_links
+        WHERE owner_key = order_entries.scope_repo
+          AND link_kind = order_entries.member)")
+    (sqlite-execute db "DROP TABLE shared_links")
+    (sqlite-execute db "ALTER TABLE shared_links_v2 RENAME TO shared_links")
+    (sqlite-execute db "UPDATE meta SET value = '2' WHERE key = 'schema_version'")
+    (when (boundp 'bp/agent-sessions--order)
+      (setq bp/agent-sessions--order nil)))
+  (when (< (string-to-number (or (caar (sqlite-select db
+                                                "SELECT value FROM meta WHERE key = 'schema_version'"))
+                                 "0")) 3)
+    (sqlite-execute db "CREATE TABLE folders_v3 (
+       id INTEGER PRIMARY KEY, repo TEXT NOT NULL,
+       name TEXT NOT NULL COLLATE NOCASE, UNIQUE (repo, name))")
+    ;; A folder used in more than one repo becomes one folder in each repo.
+    ;; The session log records the canonical repo root for durable sessions.
+    (sqlite-execute db "INSERT OR IGNORE INTO folders_v3 (repo, name)
+       SELECT repos.repo, f.name FROM folders f CROSS JOIN (
+         SELECT DISTINCT s.repo FROM session_folders sf
+         JOIN sessions s ON s.agent_sid = sf.agent_sid
+         WHERE s.repo IS NOT NULL AND s.repo != '') repos")
+    ;; Keep unmatched and empty legacy folders available for assignment when
+    ;; a session next appears, rather than silently dropping their names.
+    (sqlite-execute db "INSERT OR IGNORE INTO folders_v3 (repo, name)
+       SELECT '', name FROM folders")
+    (sqlite-execute db "UPDATE session_folders SET folder_id = (
+       SELECT f3.id FROM folders_v3 f3
+       JOIN folders old ON old.name = f3.name COLLATE NOCASE
+       WHERE old.id = session_folders.folder_id
+         AND f3.repo = COALESCE((SELECT repo FROM sessions
+             WHERE agent_sid = session_folders.agent_sid
+               AND repo IS NOT NULL AND repo != ''
+             ORDER BY id DESC LIMIT 1), ''))")
+    (sqlite-execute db "DROP TABLE folders")
+    (sqlite-execute db "ALTER TABLE folders_v3 RENAME TO folders")
+    (sqlite-execute db "UPDATE meta SET value = '3' WHERE key = 'schema_version'")
+    (when (boundp 'bp/agent-sessions--folders-loaded-p)
+      (setq bp/agent-sessions--folders-loaded-p nil))))
 
 (defun bp/agent-sessions--now () (truncate (float-time)))
 
@@ -1258,7 +1469,8 @@ caller goes through here rather than touching `bp/agent-sessions--db'."
         (dolist (stmt bp/agent-sessions--db-schema)
           (sqlite-execute db stmt))
         (sqlite-execute db "INSERT OR IGNORE INTO meta VALUES ('schema_version', ?)"
-                        (list (number-to-string bp/agent-sessions--schema-version))))
+                        (list (number-to-string bp/agent-sessions--schema-version)))
+        (bp/agent-sessions--db-migrate db))
       (setq bp/agent-sessions--db db)
       (bp/agent-sessions--db-reap db)
       db)))
@@ -1273,7 +1485,8 @@ caller goes through here rather than touching `bp/agent-sessions--db'."
 (when (sqlitep bp/agent-sessions--db)
   (with-sqlite-transaction bp/agent-sessions--db
     (dolist (stmt bp/agent-sessions--db-schema)
-      (sqlite-execute bp/agent-sessions--db stmt))))
+      (sqlite-execute bp/agent-sessions--db stmt))
+    (bp/agent-sessions--db-migrate bp/agent-sessions--db)))
 
 (defun bp/agent-sessions--meta-get (db key)
   (caar (sqlite-select db "SELECT value FROM meta WHERE key = ?" (list key))))
@@ -1463,15 +1676,16 @@ is *killed* mid-exit the reap still has a recent time to date the crash from."
 
 (defvar bp/agent-sessions--order nil
   "Hash table SCOPE -> ordered list of item keys, or nil before first load.
-One scope per group that can be reordered: the repo list, one per repo's
-worktrees, one per worktree's sessions.  A scope is a list — (\"worktrees\"
+One scope per group that can be reordered: the repo list, each repo's
+worktrees and folders, and each worktree's or folder's sessions.  A scope is
+a list — (\"worktrees\"
 REPO-KEY) and friends — rather than a joined string, so no separator character
 can ever appear inside a path component and blur two scopes together.
 
 Item keys are stable identities rather than display labels, which change with
 a branch checkout: a canonical repo root, a canonical worktree path, and — for
-a session — its buffer name, the only session-level identity that can outlive
-a restart.  Backed by the `order_entries' table.")
+a session — its agent's session id, which a resumed session gets back after a
+restart, else its terminal id.  Backed by the `order_entries' table.")
 
 (defconst bp/agent-sessions--repos-scope '("repos"))
 
@@ -1480,6 +1694,15 @@ a restart.  Backed by the `order_entries' table.")
 
 (defun bp/agent-sessions--sessions-scope (repo-key worktree-key)
   (list "sessions" repo-key worktree-key))
+
+(defun bp/agent-sessions--folders-scope (repo-key)
+  (list "folders" repo-key))
+
+(defun bp/agent-sessions--folder-sessions-scope (repo-key folder-id)
+  (list "folder-sessions" repo-key (format "%s" (or folder-id "none"))))
+
+(defun bp/agent-sessions--folder-key (folder)
+  (format "%s" (or (plist-get folder :id) "none")))
 
 (defun bp/agent-sessions--repo-key (repo)
   "Manual-order key for REPO: its canonical root, else its display name."
@@ -1606,7 +1829,7 @@ rest keep the automatic order after them."
                           (bp/agent-sessions--apply-manual-order
                            (bp/agent-sessions--sessions-scope
                             rkey (bp/agent-sessions--worktree-key wt))
-                           #'bp/agent-sessions--entry-buffer-name
+                           #'bp/agent-sessions--entry-order-key
                            (bp/agent-sessions--sort-entries
                             (plist-get wt :entries)))))
                        (plist-get repo :worktrees))
@@ -1673,6 +1896,229 @@ the id key."
     (delq nil (list (and sid (list "session" sid))
                     (and (not (string-empty-p name)) (list "session" name))))))
 
+;;; Folders -----------------------------------------------------------------
+;; Folder names and durable session assignments are user choices.  A plain
+;; terminal keeps its choice on the buffer until an agent supplies an id.
+
+(defvar bp/agent-sessions--folders-loaded-p nil)
+(defvar bp/agent-sessions--folders-cache-version nil
+  "Schema version used to populate the in-memory folder cache.")
+(defvar bp/agent-sessions--folders nil
+  "List of (:id ID :repo ROOT :name NAME) folders, loaded once from SQLite.")
+(defvar bp/agent-sessions--folder-assignments nil
+  "Hash of agent session id to folder id, loaded with the folder list.")
+
+(defun bp/agent-sessions--load-folders ()
+  "Load folder choices once; subsequent dashboard renders use memory only."
+  ;; Reloading this module does not reset `defvar' values in a running Emacs.
+  ;; A pre-migration cache has folders without :repo and ids that no longer
+  ;; match SQLite after the global-to-repo migration.
+  (when (and bp/agent-sessions--folders-loaded-p
+             (or (not (eql bp/agent-sessions--folders-cache-version
+                           bp/agent-sessions--schema-version))
+                 (seq-some (lambda (folder) (not (plist-member folder :repo)))
+                           bp/agent-sessions--folders)))
+    (setq bp/agent-sessions--folders-loaded-p nil))
+  (unless bp/agent-sessions--folders-loaded-p
+    (let ((db (bp/agent-sessions--db))
+          (assignments (make-hash-table :test 'equal)))
+      (setq bp/agent-sessions--folders
+            (mapcar (lambda (row) (list :id (car row) :repo (cadr row)
+                                        :name (nth 2 row)))
+                    (sqlite-select db "SELECT id, repo, name FROM folders ORDER BY name COLLATE NOCASE")))
+      (pcase-dolist (`(,sid ,folder-id)
+                     (sqlite-select db "SELECT agent_sid, folder_id FROM session_folders"))
+        (puthash sid folder-id assignments))
+      (setq bp/agent-sessions--folder-assignments assignments
+            bp/agent-sessions--folders-loaded-p t
+            bp/agent-sessions--folders-cache-version
+            bp/agent-sessions--schema-version))))
+
+(defun bp/agent-sessions--folder (id)
+  "Return the saved folder with ID, or nil."
+  (bp/agent-sessions--load-folders)
+  (seq-find (lambda (folder) (equal id (plist-get folder :id)))
+            bp/agent-sessions--folders))
+
+(defun bp/agent-sessions--session-repo (session)
+  "Return the canonical repo root for SESSION, or nil outside a repo."
+  (bp/agent-sessions--canonical-path
+   (or (plist-get session :repo-root)
+       (plist-get session :worktree-path)
+       (let ((buf (plist-get session :buffer)))
+         (and (buffer-live-p buf)
+              (buffer-local-value 'default-directory buf))))))
+
+(defun bp/agent-sessions--folders-for-repo (repo)
+  "Return folders belonging to canonical REPO."
+  (bp/agent-sessions--load-folders)
+  (seq-filter (lambda (folder) (equal repo (plist-get folder :repo)))
+              bp/agent-sessions--folders))
+
+(defun bp/agent-sessions--folder-session-id (session)
+  "Return SESSION's durable id, including an in-progress resume."
+  (or (plist-get session :agent-session-id)
+      (let ((buf (plist-get session :buffer)))
+        (and (buffer-live-p buf)
+             (buffer-local-value 'bp/agent-session--resuming-session-id buf)))))
+
+(defun bp/agent-sessions--folder-for-session (session)
+  "Return the folder id assigned to SESSION, if any."
+  (bp/agent-sessions--load-folders)
+  (let* ((buf (plist-get session :buffer))
+         (sid (bp/agent-sessions--folder-session-id session))
+         (saved (and sid (gethash sid bp/agent-sessions--folder-assignments))))
+    (or (and (equal (plist-get (bp/agent-sessions--folder saved) :repo)
+                    (bp/agent-sessions--session-repo session))
+             saved)
+        (and (buffer-live-p buf)
+             (equal (plist-get (bp/agent-sessions--folder
+                                (buffer-local-value 'bp/agent-session--folder-id buf))
+                               :repo)
+                    (bp/agent-sessions--session-repo session))
+             (buffer-local-value 'bp/agent-session--folder-id buf)))))
+
+(defun bp/agent-sessions--folder-set (session folder-id)
+  "Assign SESSION to FOLDER-ID, or clear its assignment when nil."
+  (bp/agent-sessions--load-folders)
+  (when (and folder-id
+             (not (equal (plist-get (bp/agent-sessions--folder folder-id) :repo)
+                         (bp/agent-sessions--session-repo session))))
+    (user-error "Folder does not belong to this repo"))
+  (let ((sid (bp/agent-sessions--folder-session-id session))
+        (buf (plist-get session :buffer)))
+    (when sid
+      (if folder-id
+          (progn
+            (sqlite-execute
+             (bp/agent-sessions--db)
+             "INSERT INTO session_folders (agent_sid, folder_id) VALUES (?, ?)
+                ON CONFLICT(agent_sid) DO UPDATE SET folder_id = excluded.folder_id"
+             (list sid folder-id))
+            (puthash sid folder-id bp/agent-sessions--folder-assignments))
+        (sqlite-execute (bp/agent-sessions--db)
+                        "DELETE FROM session_folders WHERE agent_sid = ?" (list sid))
+        (remhash sid bp/agent-sessions--folder-assignments)))
+    (when (buffer-live-p buf)
+      (with-current-buffer buf
+        (setq-local bp/agent-session--folder-id folder-id)))))
+
+(defun bp/agent-sessions--folder-hydrate (buf agent-sid)
+  "Carry BUF's folder choice to AGENT-SID, or restore its saved folder."
+  (when (and agent-sid (buffer-live-p buf))
+    (bp/agent-sessions--load-folders)
+    (let* ((session (gethash (buffer-local-value 'bp/agent-session-id buf)
+                             bp/agent-sessions))
+           (repo (and session (bp/agent-sessions--session-repo session)))
+           (saved (gethash agent-sid bp/agent-sessions--folder-assignments))
+           (local (buffer-local-value 'bp/agent-session--folder-id buf))
+           (folder (bp/agent-sessions--folder saved)))
+      (cond
+       ((and saved (equal (plist-get folder :repo) repo))
+        (with-current-buffer buf
+          (setq-local bp/agent-session--folder-id saved)))
+       ;; A legacy global assignment without a matching log row has no repo
+       ;; until its agent appears.  Claim it for this repo at that point.
+       ((and folder repo (equal (plist-get folder :repo) ""))
+        (let ((target
+               (or (seq-find (lambda (item)
+                               (string-equal-ignore-case
+                                (plist-get item :name) (plist-get folder :name)))
+                             (bp/agent-sessions--folders-for-repo repo))
+                   (bp/agent-sessions--folder-create
+                    (plist-get folder :name) repo))))
+          (bp/agent-sessions--folder-set
+           (append (list :buffer buf :agent-session-id agent-sid)
+                   (list :repo-root repo))
+           (plist-get target :id))))
+       ((and local session
+             (equal (plist-get (bp/agent-sessions--folder local) :repo) repo))
+        (bp/agent-sessions--folder-set
+         (append (list :buffer buf :agent-session-id agent-sid)
+                 (list :repo-root repo))
+         local))))))
+
+(defun bp/agent-sessions--folder-inherit (buf branched-from repo)
+  "Put BUF in the folder of the session BRANCHED-FROM names, within REPO.
+BRANCHED-FROM is the (PARENT-SID . LABEL) a fork records.  Only the
+terminal's own choice is set, and only when it has none, so
+`bp/agent-sessions--folder-hydrate' persists it under the child's id.  Called
+once, on a terminal's first hook, so a child the user later moves out of the
+folder is not put back."
+  (when (and (buffer-live-p buf) (car branched-from)
+             (not (buffer-local-value 'bp/agent-session--folder-id buf)))
+    (bp/agent-sessions--load-folders)
+    (let ((parent-folder (gethash (car branched-from)
+                                  bp/agent-sessions--folder-assignments)))
+      (when (and parent-folder
+                 (equal (plist-get (bp/agent-sessions--folder parent-folder)
+                                   :repo)
+                        repo))
+        (with-current-buffer buf
+          (setq-local bp/agent-session--folder-id parent-folder))))))
+
+(defun bp/agent-sessions--folder-create (name repo)
+  "Create or find a folder named NAME in canonical REPO."
+  (bp/agent-sessions--load-folders)
+  (setq name (string-trim name))
+  (when (or (string-empty-p name)
+            (string-equal-ignore-case name "No folder"))
+    (user-error "Choose a different folder name"))
+  (unless repo (user-error "Select a repo to create a folder"))
+  (let ((db (bp/agent-sessions--db)))
+    ;; SQLite is authoritative if another Emacs has created this folder since
+    ;; we loaded our cache.  Return its existing id in that case.
+    (sqlite-execute db "INSERT INTO folders (repo, name) VALUES (?, ?)
+                        ON CONFLICT(repo, name) DO NOTHING"
+                    (list repo name))
+    (pcase-let* ((`(,id ,saved-name)
+                  (car (sqlite-select db
+                       "SELECT id, name FROM folders
+                         WHERE repo = ? AND name = ? COLLATE NOCASE"
+                       (list repo name))))
+                 (folder (or (bp/agent-sessions--folder id)
+                             (list :id id :repo repo :name saved-name))))
+      (plist-put folder :name saved-name)
+      (unless (member folder bp/agent-sessions--folders)
+        (push folder bp/agent-sessions--folders))
+      folder)))
+
+(defun bp/agent-sessions--folder-rename (folder name)
+  "Rename FOLDER to NAME."
+  (setq name (string-trim name))
+  (when (or (string-empty-p name)
+            (string-equal-ignore-case name "No folder"))
+    (user-error "Choose a different folder name"))
+  (when (seq-find (lambda (other)
+                    (and (not (equal (plist-get other :id) (plist-get folder :id)))
+                         (equal (plist-get other :repo) (plist-get folder :repo))
+                         (string-equal-ignore-case name (plist-get other :name))))
+                  bp/agent-sessions--folders)
+    (user-error "Folder already exists: %s" name))
+  (sqlite-execute (bp/agent-sessions--db)
+                  "UPDATE folders SET name = ? WHERE id = ?"
+                  (list name (plist-get folder :id)))
+  (plist-put folder :name name))
+
+(defun bp/agent-sessions--folder-delete (folder)
+  "Delete FOLDER and move its sessions to No folder."
+  (let ((id (plist-get folder :id))
+        (db (bp/agent-sessions--db)))
+    (with-sqlite-transaction db
+      (sqlite-execute db "DELETE FROM session_folders WHERE folder_id = ?" (list id))
+      (sqlite-execute db "DELETE FROM folders WHERE id = ?" (list id)))
+    (let (removed)
+      (maphash (lambda (sid folder-id)
+                 (when (equal folder-id id) (push sid removed)))
+               bp/agent-sessions--folder-assignments)
+      (dolist (sid removed)
+        (remhash sid bp/agent-sessions--folder-assignments)))
+    (setq bp/agent-sessions--folders (delq folder bp/agent-sessions--folders))
+    (dolist (buf (buffer-list))
+      (when (equal (buffer-local-value 'bp/agent-session--folder-id buf) id)
+        (with-current-buffer buf
+          (setq-local bp/agent-session--folder-id nil))))))
+
 (defun bp/agent-sessions--note-find (keys)
   "Return (KEY . NOTE) for the first of KEYS carrying a note, or nil."
   (let ((table (bp/agent-sessions--notes-table)))
@@ -1706,12 +2152,19 @@ one note per identity it has had."
         (sqlite-execute db "DELETE FROM notes WHERE kind = ? AND key = ?"
                         (car keys))))))
 
-(defcustom bp/agent-sessions-states '("TODO" "BLOCKED" "DONE" "REVIEW" "LEARN")
+(defcustom bp/agent-sessions-states
+  '("TODO" "PLANNING" "PLAN-REVIEW" "IMPLEMENTING" "IMPL-REVIEW" "PR-OPEN"
+    "AUTOFIX" "REVIEW" "DONE" "BLOCKED" "LEARN")
   "Workflow states a session can be in, in the order `t' cycles them.
 `t' moves a session to the next one and off the end back to no state, so the
 order is the only thing that decides how many presses a given state costs.  No
 state is a state — a session nobody has triaged should not have to claim to be
-anything."
+anything.
+
+PLANNING through DONE follow the phases of the issue-workflow skill, in its
+order, so an agent running it can report where it is with `emacs-share
+state'.  The *-REVIEW states and PR-OPEN are its gates: the agent has stopped
+and the next move is the user's."
   :type '(repeat string))
 
 (defface bp/agent-session-state-todo '((t :inherit org-todo))
@@ -1722,6 +2175,33 @@ anything."
 
 (defface bp/agent-session-state-review '((t :inherit bold :foreground "#7aa2f7"))
   "Face for the REVIEW state: waiting on someone else to look.")
+
+(defface bp/agent-session-state-plan-review
+  '((t :inherit bp/agent-session-state-review))
+  "Face for the PLAN-REVIEW state: the plan is waiting on the user.")
+
+(defface bp/agent-session-state-impl-review
+  '((t :inherit bp/agent-session-state-review))
+  "Face for the IMPL-REVIEW state: the implementation is waiting on the user.")
+
+(defface bp/agent-session-state-pr-open
+  '((t :inherit bp/agent-session-state-review))
+  "Face for the PR-OPEN state: the PR is up and waiting on the user.")
+
+(defface bp/agent-session-state-working '((t :inherit shadow))
+  "Face shared by the states in which the agent, not the user, holds the work.")
+
+(defface bp/agent-session-state-planning
+  '((t :inherit bp/agent-session-state-working))
+  "Face for the PLANNING state.")
+
+(defface bp/agent-session-state-implementing
+  '((t :inherit bp/agent-session-state-working))
+  "Face for the IMPLEMENTING state.")
+
+(defface bp/agent-session-state-autofix
+  '((t :inherit bp/agent-session-state-working))
+  "Face for the AUTOFIX state.")
 
 (defface bp/agent-session-state-learn '((t :inherit bold :foreground "#bb9af7"))
   "Face for the LEARN state: finished, but there is something here to take away.")
@@ -1787,6 +2267,34 @@ under that id rather than one per identity it has had."
            (nth (1+ (seq-position states state)) states))
           (t (car states)))))
 
+;;;###autoload
+(defun bp/agent-sessions-share-state (session-id state &optional
+                                                 agent-session-id)
+  "Set the workflow state of the session in terminal SESSION-ID to STATE.
+The `emacs-share state' entry point: an agent reports where it is, writing the
+same per-session state `t' sets, so whichever of the two wrote last wins.
+STATE must be one of `bp/agent-sessions-states'; an empty STATE clears it.
+SESSION-ID and AGENT-SESSION-ID resolve as in `bp/agent-sessions-share-link'.
+Returns a printable status string, since emacsclient's value is the agent's
+only channel back."
+  (let ((session (bp/agent-sessions--session-for-share
+                  session-id agent-session-id))
+        (state (and state (not (string-empty-p state)) state)))
+    (cond
+     ((null session)
+      (if (and agent-session-id (not (string-empty-p agent-session-id)))
+          (format "No Emacs agent session registered for agent id %s"
+                  agent-session-id)
+        (format "No Emacs terminal registered for session id %s" session-id)))
+     ((and state (not (member state bp/agent-sessions-states)))
+      (format "Unknown state `%s'; expected one of %s"
+              state (string-join bp/agent-sessions-states ", ")))
+     (t
+      (bp/agent-sessions--state-set
+       (bp/agent-sessions--session-note-keys session) state)
+      (bp/agent-sessions--refresh-if-visible)
+      (if state (format "State: %s" state) "State cleared")))))
+
 (defface bp/agent-session-note
   '((t :inherit font-lock-comment-face))
   "Face for a note attached to a repo, worktree, or session row.")
@@ -1828,6 +2336,19 @@ re-edits the note point is sitting in."
        (let ((path (oref section value)))
          (cons (list (bp/agent-sessions--file-note-key path))
                (file-name-nondirectory (directory-file-name path)))))
+      ('bp/agent-session-link
+       (when-let* ((row (bp/agent-sessions--enclosing-section
+                         'bp/agent-session-row))
+                   (session (bp/agent-sessions--session-for-id
+                             (oref row value)))
+                   (link (seq-find
+                          (lambda (candidate)
+                            (equal (plist-get candidate :url)
+                                   (oref section value)))
+                          (bp/agent-sessions--session-links session))))
+         (cons (list (bp/agent-sessions--link-note-key
+                      (plist-get link :url)))
+               (or (plist-get link :label) (plist-get link :url)))))
       ('bp/agent-session-row
        (when-let* ((session (bp/agent-sessions--session-for-id
                              (oref section value)))
@@ -1875,12 +2396,12 @@ note by hand is tedious, since \\[kill-line] only kills the line point is on."
                     "Note cleared for %s."
                   "Note saved for %s.")
                 label)))
-    (_ (message "Point is not on a repo, worktree, or session."))))
+    (_ (message "Point is not on a repo, worktree, session, file, or link."))))
 
 ;;; Shared files ------------------------------------------------------------
 ;;
-;; An agent that wants the user to read something runs `emacs-share-file FILE
-;; ["why"]' (bin/emacs-share-file, on the PATH of every session terminal); the
+;; An agent that wants the user to read something runs `emacs-share file FILE
+;; ["why"]' (`bin/emacs-share-file' remains a compatibility symlink); the
 ;; file then hangs under that agent's row in the dashboard, highlighted until
 ;; the user opens it.  It exists because a terminal is a bad inbox: "look at
 ;; /tmp/plan.md" scrolls away, and is only seen at all if you are already in
@@ -1909,6 +2430,18 @@ note by hand is tedious, since \\[kill-line] only kills the line point is on."
 ;;   row may move when something meaningful changes, and a re-share is not that;
 ;;   a row jumping to the bottom of the list is the thing the user is trying to
 ;;   aim at moving out from under them.
+;;
+;; - **Every share snapshots the file before returning to the agent.**  The
+;;   cache retains the two most recently submitted contents for that session
+;;   and path, independent of Git.  This is deliberately done in the share
+;;   path rather than when `D' is pressed: by then the live file may have been
+;;   edited again, and would no longer be the version the agent handed over.
+
+(defcustom bp/agent-sessions-file-snapshot-directory
+  (expand-file-name ".cache/agent-sessions-file-snapshots/"
+                    user-emacs-directory)
+  "Directory containing the latest two submitted versions of shared files."
+  :type 'directory)
 
 (defvar bp/agent-sessions--shared-files nil
   "Hash table KEY -> list of shared-file plists, or nil before first load.
@@ -2015,6 +2548,96 @@ window between that and the next write (which collapses them)."
                      (plist-get file :updated-at)
                      (plist-get file :visited-at)))))
 
+(defun bp/agent-sessions--file-snapshot-row (keys path)
+  "Return the first snapshot row for PATH owned by one of KEYS.
+KEYS are ordered from most to least durable.  The result is a plist containing
+`:key', `:previous-path', `:current-path', and `:updated-at'."
+  (let ((db (bp/agent-sessions--db)))
+    (seq-some
+     (lambda (key)
+       (when-let ((row
+                   (car (sqlite-select
+                         db
+                         "SELECT previous_path, current_path, updated_at
+                            FROM shared_file_snapshots
+                           WHERE kind = ? AND key = ? AND path = ?"
+                         (append key (list path))))))
+         (list :key key
+               :previous-path (nth 0 row)
+               :current-path (nth 1 row)
+               :updated-at (nth 2 row))))
+     keys)))
+
+(defun bp/agent-sessions--file-snapshots-collapse (keys)
+  "Move snapshot rows stored under the less durable KEYS onto (car KEYS).
+An existing row under the primary key wins, matching the shared-file collapse
+rule.  Snapshot files themselves need not move because their paths are stored
+in the database."
+  (when-let ((primary (car keys)))
+    (let ((db (bp/agent-sessions--db)))
+      (dolist (key (cdr keys))
+        (sqlite-execute
+         db
+         "INSERT OR IGNORE INTO shared_file_snapshots
+            (kind, key, path, previous_path, current_path, updated_at)
+          SELECT ?, ?, path, previous_path, current_path, updated_at
+            FROM shared_file_snapshots WHERE kind = ? AND key = ?"
+         (append primary key))
+        (sqlite-execute
+         db "DELETE FROM shared_file_snapshots WHERE kind = ? AND key = ?"
+         key)))))
+
+(defun bp/agent-sessions--file-snapshot-cache-directory (key path)
+  "Return the private cache directory for the shared PATH owned by KEY."
+  (expand-file-name
+   (secure-hash 'sha256 (prin1-to-string (append key (list path))))
+   bp/agent-sessions-file-snapshot-directory))
+
+(defun bp/agent-sessions--snapshot-file (key path)
+  "Save PATH as the current submitted version owned by KEY.
+The formerly current copy becomes the previous copy.  Return the new snapshot
+row plist.  A missing cache file is treated like a first share, since a cache
+may be cleared independently of the database."
+  (let* ((existing (bp/agent-sessions--file-snapshot-row (list key) path))
+         (old-current (plist-get existing :current-path))
+         (directory (bp/agent-sessions--file-snapshot-cache-directory key path))
+         (basename (file-name-nondirectory path))
+         (previous (expand-file-name (concat "previous--" basename) directory))
+         (current (expand-file-name (concat "current--" basename) directory))
+         incoming)
+    (make-directory directory t)
+    (set-file-modes directory #o700)
+    (unwind-protect
+        (progn
+          ;; Copy the new contents before rotating the old pair.  If this
+          ;; fails, the last successful submission remains intact.
+          (setq incoming
+                (make-temp-file (expand-file-name ".incoming-" directory)))
+          (copy-file path incoming t)
+          (set-file-modes incoming #o600)
+          (if (and old-current (file-exists-p old-current))
+              (progn
+                (copy-file old-current previous t)
+                (set-file-modes previous #o600))
+            (setq previous nil))
+          (rename-file incoming current t)
+          (setq incoming nil)
+          (let ((now (bp/agent-sessions--now)))
+            (sqlite-execute
+             (bp/agent-sessions--db)
+             "INSERT INTO shared_file_snapshots
+                (kind, key, path, previous_path, current_path, updated_at)
+              VALUES (?, ?, ?, ?, ?, ?)
+              ON CONFLICT(kind, key, path) DO UPDATE
+                SET previous_path = excluded.previous_path,
+                    current_path  = excluded.current_path,
+                    updated_at    = excluded.updated_at"
+             (append key (list path previous current now)))
+            (list :key key :previous-path previous :current-path current
+                  :updated-at now)))
+      (when (and incoming (file-exists-p incoming))
+        (delete-file incoming)))))
+
 (defun bp/agent-sessions--files-collapse (keys)
   "Move file rows stored under the less durable KEYS onto (car KEYS).
 The same tidying `bp/agent-sessions--note-set' does, and for the same reason: a
@@ -2026,6 +2649,7 @@ the primary key wins, so this can never undo a newer share."
          (db (bp/agent-sessions--db))
          (kept (gethash primary table))
          (moved nil))
+    (bp/agent-sessions--file-snapshots-collapse keys)
     (dolist (key (cdr keys))
       (when-let ((files (gethash key table)))
         (dolist (f files)
@@ -2055,6 +2679,7 @@ at the original share so the row does not move."
     (unless keys
       (error "Session has no durable identity to attach a file to"))
     (bp/agent-sessions--files-collapse keys)
+    (bp/agent-sessions--snapshot-file (car keys) path)
     (let* ((table (bp/agent-sessions--shared-files-table))
            (primary (car keys))
            (files (gethash primary table))
@@ -2131,11 +2756,11 @@ Do not create a buffer for PATH, and never replace unsaved buffer changes."
 ;;;###autoload
 (defun bp/agent-sessions-share-file (session-id path &optional label)
   "Attach PATH to the agent session running in terminal SESSION-ID.
-The entry point `bin/emacs-share-file' calls over emacsclient, so SESSION-ID is
 the terminal's EMACS_AGENT_SESSION_ID — the id the shell has — and resolving it
 to whatever session is running there happens here, the same split the hook path
 makes.  If an unmodified buffer already visits PATH, refresh it from disk;
 modified buffers are left alone so sharing can never discard unsaved work.
+The `emacs-share file' entry point calls over emacsclient, so SESSION-ID is
 Returns a string for the caller to print: emacsclient is the agent's only
 channel back, so a failure has to be reported in the value, not signalled."
   (let ((session (bp/agent-sessions--session-for-id session-id)))
@@ -2149,6 +2774,205 @@ channel back, so a failure has to be reported in the value, not signalled."
       (bp/agent-sessions--share-file session path label)
       (bp/agent-sessions--refresh-if-visible)
       (format "Shared %s" (abbreviate-file-name (expand-file-name path)))))))
+
+;;; Shared links ------------------------------------------------------------
+
+(defconst bp/agent-sessions--link-kind-labels
+  '(("linear" . "Linear")
+    ("pr" . "PR"))
+  "Supported external link kinds and their dashboard labels.")
+
+(defvar bp/agent-sessions--shared-links nil
+  "Hash table KEY -> list of shared-link plists, or nil before first load.
+A KEY is the same durable session identity used by notes and shared files.
+Each plist is (:kind K :url U :label L :shared-at TS :updated-at TS
+:visited-at TS-or-nil).  A session can have multiple links of each kind;
+the data is backed by the `shared_links' table.")
+
+(defun bp/agent-sessions--shared-links-table ()
+  "Return the shared-links table, loading it from the database once."
+  (or bp/agent-sessions--shared-links
+      (setq bp/agent-sessions--shared-links
+            (let ((table (make-hash-table :test 'equal)))
+              (pcase-dolist
+                  (`(,owner-kind ,owner-key ,link-kind ,url ,label
+                                  ,shared ,updated ,visited)
+                   (sqlite-select
+                    (bp/agent-sessions--db)
+                    "SELECT owner_kind, owner_key, link_kind, url, label,
+                            shared_at, updated_at, visited_at
+                       FROM shared_links ORDER BY shared_at, link_kind"))
+                (let ((key (list owner-kind owner-key)))
+                  (puthash key
+                           (append (gethash key table)
+                                   (list (list :kind link-kind :url url
+                                               :label label :shared-at shared
+                                               :updated-at updated
+                                               :visited-at visited)))
+                           table)))
+              table))))
+
+(defun bp/agent-sessions--link-note-key (url)
+  "Note key for the shared external link at URL."
+  (list "link" url))
+
+(defun bp/agent-sessions--links-scope (session)
+  "Manual-order scope for SESSION's shared external links."
+  (list "links" (or (cadr (car (bp/agent-sessions--session-note-keys session)))
+                    "?")))
+
+(defun bp/agent-sessions--session-links (session)
+  "External links shared with SESSION, in display order."
+  (let ((table (bp/agent-sessions--shared-links-table))
+        links)
+    (dolist (key (bp/agent-sessions--session-note-keys session))
+      (setq links (append links (copy-sequence (gethash key table)))))
+    (bp/agent-sessions--apply-manual-order
+     (bp/agent-sessions--links-scope session)
+     (lambda (link) (plist-get link :url))
+     (sort links (lambda (a b) (< (plist-get a :shared-at)
+                                  (plist-get b :shared-at)))))))
+
+(defun bp/agent-sessions--shared-link-write (key link)
+  "Upsert LINK under durable session identity KEY in the database."
+  (sqlite-execute
+   (bp/agent-sessions--db)
+   "INSERT INTO shared_links
+      (owner_kind, owner_key, link_kind, url, label,
+       shared_at, updated_at, visited_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(owner_kind, owner_key, url) DO UPDATE
+      SET link_kind  = excluded.link_kind,
+          label      = excluded.label,
+          updated_at = excluded.updated_at,
+          visited_at = excluded.visited_at"
+   (append key (list (plist-get link :kind)
+                     (plist-get link :url)
+                     (plist-get link :label)
+                     (plist-get link :shared-at)
+                     (plist-get link :updated-at)
+                     (plist-get link :visited-at)))))
+
+(defun bp/agent-sessions--links-collapse (keys)
+  "Move links stored under the less durable KEYS onto (car KEYS)."
+  (let* ((table (bp/agent-sessions--shared-links-table))
+         (primary (car keys))
+         (db (bp/agent-sessions--db))
+         (kept (gethash primary table))
+         moved)
+    (dolist (key (cdr keys))
+      (when-let ((links (gethash key table)))
+        (dolist (link links)
+          (unless (seq-find
+                   (lambda (candidate)
+                     (equal (plist-get candidate :url)
+                            (plist-get link :url)))
+                   (append kept moved))
+            (push link moved)))
+        (remhash key table)
+        (sqlite-execute
+         db "DELETE FROM shared_links WHERE owner_kind = ? AND owner_key = ?"
+         key)))
+    (when moved
+      (setq moved (nreverse moved))
+      (puthash primary (append kept moved) table)
+      (dolist (link moved)
+        (bp/agent-sessions--shared-link-write primary link)))))
+
+(defun bp/agent-sessions--share-link (session kind url label)
+  "Attach KIND link URL with LABEL to SESSION.
+An identical registration is a no-op, including preserving its visited state.
+Changing the label updates that URL and marks it unvisited, while preserving
+its original display position."
+  (let ((keys (bp/agent-sessions--session-note-keys session))
+        (now (bp/agent-sessions--now)))
+    (unless keys
+      (error "Session has no durable identity to attach a link to"))
+    (bp/agent-sessions--links-collapse keys)
+    (let* ((table (bp/agent-sessions--shared-links-table))
+           (primary (car keys))
+           (links (gethash primary table))
+           (existing (seq-find
+                      (lambda (link) (equal (plist-get link :url) url))
+                      links))
+           (label (or (and label (not (string-empty-p label)) label)
+                      (and existing (plist-get existing :label)))))
+      (if (and existing
+               (equal kind (plist-get existing :kind))
+               (equal label (plist-get existing :label)))
+          existing
+        (let ((link (list :kind kind :url url :label label
+                          :shared-at (or (and existing
+                                               (plist-get existing :shared-at))
+                                         now)
+                          :updated-at now
+                          :visited-at nil)))
+          (puthash primary
+                   (if existing
+                       (mapcar (lambda (candidate)
+                                 (if (eq candidate existing) link candidate))
+                               links)
+                     (append links (list link)))
+                   table)
+          (bp/agent-sessions--shared-link-write primary link)
+          link)))))
+
+(defun bp/agent-sessions--detach-link (session url)
+  "Remove the link at URL from SESSION; return non-nil if attached."
+  (let ((table (bp/agent-sessions--shared-links-table))
+        (db (bp/agent-sessions--db))
+        removed)
+    (dolist (key (bp/agent-sessions--session-note-keys session))
+      (let ((links (gethash key table)))
+        (when (seq-find (lambda (link) (equal (plist-get link :url) url))
+                        links)
+          (puthash key
+                   (seq-remove
+                    (lambda (link) (equal (plist-get link :url) url))
+                    links)
+                   table)
+          (sqlite-execute
+           db
+           "DELETE FROM shared_links
+             WHERE owner_kind = ? AND owner_key = ? AND url = ?"
+           (append key (list url)))
+          (setq removed t))))
+    removed))
+
+(defun bp/agent-sessions--set-link-visited (match-fn visitedp)
+  "Set visited state of every shared link accepted by MATCH-FN."
+  (let ((db (bp/agent-sessions--db))
+        (stamp (and visitedp (bp/agent-sessions--now)))
+        changed)
+    (maphash
+     (lambda (key links)
+       (dolist (link links)
+         (when (and (funcall match-fn link)
+                    (not (eq (null (plist-get link :visited-at))
+                             (null stamp))))
+           (plist-put link :visited-at stamp)
+           (sqlite-execute
+            db
+            "UPDATE shared_links SET visited_at = ?
+              WHERE owner_kind = ? AND owner_key = ? AND url = ?"
+            (list stamp (car key) (cadr key) (plist-get link :url)))
+           (setq changed t))))
+     (bp/agent-sessions--shared-links-table))
+    changed))
+
+;;;###autoload
+  "Attach a typed external link to the session in terminal SESSION-ID.
+KIND is `linear' or `pr'; URL must be HTTP(S).  Re-registering the same value
+    (cond
+     ((null session)
+     ((not (assoc kind bp/agent-sessions--link-kind-labels))
+      (format "Unknown link kind `%s'; expected linear or pr" kind))
+     ((not (string-match-p "\\`https?://[^[:space:]]+\\'" url))
+      (format "Invalid link URL: %s" url))
+     (t
+      (bp/agent-sessions--share-link session kind url label)
+      (bp/agent-sessions--refresh-if-visible)
+      (format "Linked %s: %s" kind url)))))
 
 (defun bp/agent-sessions--file-at-point ()
   "Return (SESSION PATH FILE) for the shared-file row at point, or nil.
@@ -2168,6 +2992,35 @@ resolves to the file the note is about — the same courtesy
                 (seq-find (lambda (f) (equal (plist-get f :path) path))
                           (bp/agent-sessions--session-files session))))))))
 
+(defun bp/agent-sessions--link-at-point ()
+  "Return (SESSION KIND LINK) for the shared-link row at point, or nil.
+Point may be on the link row or inside its note."
+  (let ((section (magit-current-section)))
+    (when (and section (eq (oref section type) 'bp/agent-session-note))
+      (setq section (oref section parent)))
+    (when (and section (eq (oref section type) 'bp/agent-session-link))
+      (let* ((url (oref section value))
+             (row (bp/agent-sessions--enclosing-section 'bp/agent-session-row))
+             (session (and row (bp/agent-sessions--session-for-id
+                                (oref row value)))))
+        (when session
+          (list session url
+                (seq-find (lambda (link)
+                            (equal (plist-get link :url) url))
+                          (bp/agent-sessions--session-links session))))))))
+
+(defun bp/agent-sessions--open-link-at-point ()
+  "Open the shared external link at point and clear its highlight."
+  (pcase (bp/agent-sessions--link-at-point)
+    (`(,_session ,_kind ,link)
+     (let ((url (plist-get link :url)))
+       (when (bp/agent-sessions--set-link-visited
+              (lambda (candidate)
+                (equal (plist-get candidate :url) url))
+              t)
+         (bp/agent-sessions--refresh-if-visible))
+       (browse-url url)))))
+
 (defun bp/agent-sessions--open-file-at-point (display-fn)
   "Open the shared file at point with DISPLAY-FN, clearing its highlight.
 The refresh happens before DISPLAY-FN runs so the dashboard's point
@@ -2181,6 +3034,69 @@ restoration is not competing with whatever DISPLAY-FN does to the windows."
          (bp/agent-sessions--refresh-if-visible))
        (funcall display-fn (find-file-noselect path))))))
 
+(defun bp/agent-sessions-show-file-diff ()
+  "Show the latest committed diff for the shared file at point, then mark it read.
+The Magit revision buffer is limited to that file.  If the file is outside a
+Git repository or has no committed history, leave its unread state unchanged."
+  (interactive)
+  (pcase (bp/agent-sessions--file-at-point)
+    (`(,_session ,path ,_file)
+     (let* ((root (magit-toplevel (file-name-directory path)))
+            (relative (and root (file-relative-name path root)))
+            (default-directory (or root default-directory))
+            (commit (and root
+                         (magit-git-string "log" "-1" "--format=%H"
+                                           "--follow" "--" relative))))
+       (unless root
+         (user-error "File is not in a Git repository"))
+       (unless commit
+         (user-error "File has no committed diff"))
+       (magit-show-commit commit (car (magit-show-commit--arguments))
+                          (list relative))
+       (when (bp/agent-sessions--set-visited
+              (lambda (file) (equal (plist-get file :path) path)) t)
+         (bp/agent-sessions--refresh-if-visible))))
+    (_ (message "No shared file at point."))))
+
+(defun bp/agent-sessions-show-file-submission-diff ()
+  "Show the diff between the latest two submissions of the file at point.
+Unlike `bp/agent-sessions-show-file-diff', this compares cached copies made at
+share time and therefore works without Git and across uncommitted edits.  If
+the file predates snapshot support, save its current contents as the first
+snapshot instead.  Mark the file read only after a diff is successfully
+produced."
+  (interactive)
+  (pcase (bp/agent-sessions--file-at-point)
+    (`(,session ,path ,_file)
+     (let* ((keys (bp/agent-sessions--session-note-keys session))
+            (snapshot (bp/agent-sessions--file-snapshot-row keys path)))
+       (if (not snapshot)
+           (progn
+             (unless (file-exists-p path)
+               (user-error "File no longer exists: %s"
+                           (abbreviate-file-name path)))
+             (bp/agent-sessions--snapshot-file (car keys) path)
+             (message "Saved current file as its first submitted snapshot"))
+         (let ((previous (plist-get snapshot :previous-path))
+               (current (plist-get snapshot :current-path)))
+           (unless previous
+             (user-error "File has only one submitted version"))
+           (unless (and (file-exists-p previous) (file-exists-p current))
+             (user-error "Submitted-version cache is incomplete"))
+           (let* ((name (file-name-nondirectory path))
+                  (buffer-name (format "*Agent submission diff: %s*" name))
+                  (buffer (diff-no-select previous current "-u" t
+                                          (get-buffer-create buffer-name))))
+             (with-current-buffer buffer
+               (setq-local header-line-format
+                           (format "Submitted versions of %s"
+                                   (abbreviate-file-name path))))
+             (when (bp/agent-sessions--set-visited
+                    (lambda (file) (equal (plist-get file :path) path)) t)
+               (bp/agent-sessions--refresh-if-visible))
+             (pop-to-buffer buffer))))))
+    (_ (message "No shared file at point."))))
+
 (defface bp/agent-session-file-unvisited
   '((t :inherit bp/agent-session-needs-attention))
   "Face for a shared file not opened since the agent last shared it.
@@ -2191,6 +3107,448 @@ not make them learn two highlights for it.")
 (defface bp/agent-session-file
   '((t :inherit default))
   "Face for a shared file the user has already opened.")
+
+;;;; PR state
+;;
+;; A session that has shared exactly one GitHub PR shows that PR's state as two
+;; glyphs after its STATE column (lifecycle, then review); every PR link row
+;; ends with its own state in words.  The state is GitHub's, fetched by the
+;; dashboard and held only in memory: one background `gh api graphql' request
+;; covers every PR on the dashboard, on a timer that lives only while the
+;; dashboard buffer does.  The render path never starts a process; it records
+;; which PRs it drew and arms the timers.
+
+(defcustom bp/agent-sessions-pr-poll-interval 180
+  "Seconds between refreshes of PR state while every PR is settled.
+Settled means nothing is about to change on its own: open with checks done,
+draft, or failed to fetch.  See `bp/agent-sessions-pr-poll-interval-active'."
+  :type 'integer)
+
+(defcustom bp/agent-sessions-pr-poll-interval-active 20
+  "Seconds between refreshes of PR state while any PR is in motion.
+In motion means its checks are running or it is in the merge queue: states
+that end by themselves, usually within minutes."
+  :type 'integer)
+
+(defconst bp/agent-sessions--pr-active-lives '(checks queue)
+  "Lifecycle states that change without anyone acting, so are polled faster.")
+
+(defcustom bp/agent-sessions-pr-fetch-timeout 30
+  "Seconds before a GitHub request for PR state is abandoned."
+  :type 'integer)
+
+(defface bp/agent-session-pr-draft '((t :foreground "#8a8a8a" :weight bold))
+  "Face for a draft PR.")
+(defface bp/agent-session-pr-open '((t :foreground "#86dc2f" :weight bold))
+  "Face for an open PR with no checks running or failing.")
+(defface bp/agent-session-pr-checks '((t :foreground "#e0b44a" :weight bold))
+  "Face for a PR whose checks are still running.")
+(defface bp/agent-session-pr-failed '((t :foreground "#f05050" :weight bold))
+  "Face for a PR whose checks failed.")
+(defface bp/agent-session-pr-queue '((t :foreground "#4f97d7" :weight bold))
+  "Face for a PR in the merge queue.")
+(defface bp/agent-session-pr-merged '((t :foreground "#bc6ec5" :weight bold))
+  "Face for a merged PR.")
+(defface bp/agent-session-pr-closed '((t :foreground "#f05050" :weight bold))
+  "Face for a PR closed without merging.")
+(defface bp/agent-session-pr-review-requested
+  '((t :foreground "#7aa2f7" :weight bold))
+  "Face for a PR waiting on a reviewer who has been assigned.")
+(defface bp/agent-session-pr-approved '((t :foreground "#86dc2f" :weight bold))
+  "Face for an approved PR's review mark.")
+(defface bp/agent-session-pr-changes-requested
+  '((t :foreground "#ff8a3d" :weight bold))
+  "Face for a PR whose reviewer requested changes.")
+(defface bp/agent-session-pr-unknown '((t :inherit shadow))
+  "Face for a PR whose state has not been fetched yet.")
+(defface bp/agent-session-pr-error '((t :foreground "#f05050"))
+  "Face for a PR whose state could not be fetched.")
+
+(defconst bp/agent-sessions--pr-life-display
+  '((draft  "◌" "draft"          bp/agent-session-pr-draft)
+    (open   "○" "open"           bp/agent-session-pr-open)
+    (checks "◔" "checks running" bp/agent-session-pr-checks)
+    (failed "◔" "checks failed"  bp/agent-session-pr-failed)
+    (queue  "◕" "in merge queue" bp/agent-session-pr-queue)
+    (merged "◉" "merged"         bp/agent-session-pr-merged)
+    (closed "⊘" "closed"         bp/agent-session-pr-closed))
+  "Lifecycle state -> (GLYPH WORDS FACE).
+The circle fills as a PR moves forward; checks failing keeps the checks glyph
+and turns it red.")
+
+(defconst bp/agent-sessions--pr-review-display
+  '((requested         "◇" "reviewer assigned" bp/agent-session-pr-review-requested)
+    (approved          "✓" "approved"          bp/agent-session-pr-approved)
+    (changes-requested "✗" "changes requested" bp/agent-session-pr-changes-requested))
+  "Review state -> (GLYPH WORDS FACE).
+A reviewer being assigned leads to approved or changes requested; a PR with no
+reviewer and no decision shows nothing.")
+
+(defconst bp/agent-sessions--pr-marks-width 5
+  "Width of the PR glyph column: lifecycle, space, review, then two spaces.")
+
+(defvar bp/agent-sessions--pr-states (make-hash-table :test 'equal)
+  "Hash table PR URL -> (:life LIFE :review REVIEW) or (:error MESSAGE).
+Filled from GitHub and never persisted: GitHub is the source of truth and one
+request rebuilds it.  A URL with no entry has not been fetched yet.")
+
+(defvar bp/agent-sessions--pr-urls nil
+  "The PR URLs the last dashboard render drew; what a fetch asks GitHub about.")
+
+(defvar bp/agent-sessions--pr-process nil
+  "The `gh' process fetching PR state, or nil.  At most one runs at a time.")
+
+(defvar bp/agent-sessions--pr-poll-timer nil
+  "One-shot timer for the next PR state refresh, re-armed after each fetch.")
+
+(defvar bp/agent-sessions--pr-kick-timer nil
+  "One-shot timer fetching PRs a render drew but GitHub has not been asked about.")
+
+(defun bp/agent-sessions--pr-url-parts (url)
+  "Return (OWNER REPO NUMBER) for a GitHub pull request URL, or nil.
+OWNER and REPO are limited to the characters GitHub allows, which also keeps
+them safe to splice into a GraphQL string literal."
+  (when (string-match
+         "\\`https?://github\\.com/\\([A-Za-z0-9_.-]+\\)/\\([A-Za-z0-9_.-]+\\)/pull/\\([0-9]+\\)\\(?:[/?#]\\|\\'\\)"
+         url)
+    (list (match-string 1 url) (match-string 2 url)
+          (string-to-number (match-string 3 url)))))
+
+(defun bp/agent-sessions--pr-links (session)
+  "SESSION's shared PR links, in display order."
+  (seq-filter (lambda (link) (equal (plist-get link :kind) "pr"))
+              (bp/agent-sessions--session-links session)))
+
+(defun bp/agent-sessions--session-pr-link (session)
+  "SESSION's PR link when it has exactly one, else nil.
+With several PRs no single one speaks for the session, so its row shows none;
+each PR's own row still shows its state."
+  (let ((prs (bp/agent-sessions--pr-links session)))
+    (and prs (null (cdr prs)) (car prs))))
+
+(defun bp/agent-sessions--pr-urls-of (entries)
+  "Every PR URL linked from the sessions of dashboard ENTRIES, without repeats."
+  (delete-dups
+   (mapcan (lambda (entry)
+             (mapcar (lambda (link) (plist-get link :url))
+                     (bp/agent-sessions--pr-links (plist-get entry :session))))
+           entries)))
+
+(defun bp/agent-sessions--pr-state-from-node (node)
+  "The (:life LIFE :review REVIEW) state of GraphQL pullRequest NODE.
+The first matching lifecycle wins: a merged or closed PR is that whatever its
+checks say, a draft is a draft, and a PR in the merge queue is past its own
+checks even while the queue runs more."
+  (let* ((commit (plist-get (car (plist-get (plist-get node :commits) :nodes))
+                            :commit))
+         (checks (plist-get (plist-get commit :statusCheckRollup) :state)))
+    (list :life (pcase (plist-get node :state)
+                  ("MERGED" 'merged)
+                  ("CLOSED" 'closed)
+                  (_ (cond ((plist-get node :isDraft) 'draft)
+                           ((plist-get node :isInMergeQueue) 'queue)
+                           ((member checks '("PENDING" "EXPECTED")) 'checks)
+                           ((member checks '("FAILURE" "ERROR")) 'failed)
+                           (t 'open))))
+          ;; A decision outranks pending requests: GitHub keeps listing a
+          ;; reviewer who was asked after someone else already approved.
+          :review (pcase (plist-get node :reviewDecision)
+                    ("APPROVED" 'approved)
+                    ("CHANGES_REQUESTED" 'changes-requested)
+                    (_ (and (> (or (plist-get (plist-get node :reviewRequests)
+                                              :totalCount)
+                                   0)
+                               0)
+                            'requested))))))
+
+(defun bp/agent-sessions--pr-query (urls)
+  "A GraphQL query for every PR in URLS, aliased p0, p1, … in order."
+  (let ((i -1))
+    (concat
+     "query{"
+     (mapconcat
+      (lambda (url)
+        (pcase-let ((`(,owner ,repo ,number)
+                     (bp/agent-sessions--pr-url-parts url)))
+          (format "p%d:repository(owner:\"%s\",name:\"%s\"){pullRequest(number:%d){isDraft state reviewDecision reviewRequests(first:0){totalCount} isInMergeQueue commits(last:1){nodes{commit{statusCheckRollup{state}}}}}}"
+                  (setq i (1+ i)) owner repo number)))
+      urls " ")
+     "}")))
+
+(defun bp/agent-sessions--pr-apply-response (urls response)
+  "Record the state of each of URLS from RESPONSE, parsed GraphQL JSON.
+GitHub answers a request where one PR failed with the others' data plus an
+`errors' entry naming the failed alias, so one bad link never blanks the rest."
+  (let ((data (plist-get response :data))
+        (errors (plist-get response :errors))
+        (i 0))
+    (dolist (url urls)
+      (let* ((alias (format "p%d" i))
+             (pr (plist-get (plist-get data (intern (concat ":" alias)))
+                            :pullRequest)))
+        (puthash url
+                 (if pr
+                     (bp/agent-sessions--pr-state-from-node pr)
+                   (list :error
+                         (or (seq-some (lambda (err)
+                                         (and (equal (car (plist-get err :path))
+                                                     alias)
+                                              (plist-get err :message)))
+                                       errors)
+                             "PR not found")))
+                 bp/agent-sessions--pr-states))
+      (setq i (1+ i)))))
+
+(defun bp/agent-sessions--pr-record-failure (urls message)
+  "Record MESSAGE as the state of each of URLS that has no good state.
+A whole request failing (network, auth, rate limit) says nothing about any one
+PR, so a state GitHub already gave is kept until the next fetch succeeds."
+  (dolist (url urls)
+    (let ((state (gethash url bp/agent-sessions--pr-states)))
+      (when (or (null state) (plist-get state :error))
+        (puthash url (list :error message) bp/agent-sessions--pr-states)))))
+
+(defun bp/agent-sessions--pr-failure-message (proc stderr)
+  "Why the `gh' process PROC failed as a whole, given its STDERR text."
+  (cond ((process-get proc 'timed-out) "GitHub request timed out")
+        ((not (string-empty-p stderr))
+         (string-remove-prefix "gh: " (car (split-string stderr "\n"))))
+        (t (format "gh exited with status %d" (process-exit-status proc)))))
+
+(defun bp/agent-sessions--pr-sentinel (proc _event)
+  "Finish the `gh' fetch PROC once it has exited."
+  (unless (process-live-p proc)
+    (bp/agent-sessions--pr-finish proc)))
+
+(defun bp/agent-sessions--pr-timeout (proc)
+  "Abandon the `gh' fetch PROC if it is still running."
+  (when (process-live-p proc)
+    (process-put proc 'timed-out t)
+    (delete-process proc)))
+
+(defun bp/agent-sessions--pr-finish (proc)
+  "Record what the finished `gh' process PROC said about its URLs, then redraw.
+The URLs and stderr file ride on PROC's properties: this file is not
+lexically bound, so a sentinel cannot close over them."
+  (let* ((urls (process-get proc 'urls))
+         (stderr-file (process-get proc 'stderr-file))
+         (buffer (process-buffer proc))
+         (output (if (buffer-live-p buffer)
+                     (with-current-buffer buffer (buffer-string))
+                   ""))
+         (stderr (with-temp-buffer
+                   (ignore-errors (insert-file-contents stderr-file))
+                   (string-trim (buffer-string))))
+         (response (ignore-errors
+                     (json-parse-string output :object-type 'plist
+                                        :array-type 'list
+                                        :null-object nil :false-object nil))))
+    (when (buffer-live-p buffer) (kill-buffer buffer))
+    (ignore-errors (delete-file stderr-file))
+    (when (eq proc bp/agent-sessions--pr-process)
+      (setq bp/agent-sessions--pr-process nil))
+    ;; `gh' exits 1 when any PR failed but still prints the others' data.
+    (if (and (not (process-get proc 'timed-out)) (plist-get response :data))
+        (bp/agent-sessions--pr-apply-response urls response)
+      (bp/agent-sessions--pr-record-failure
+       urls (bp/agent-sessions--pr-failure-message proc stderr)))
+    ;; Before the redraw, so the next poll is timed by the states just learned
+    ;; rather than by whichever timer was armed before them.
+    (bp/agent-sessions--pr-schedule-poll)
+    (bp/agent-sessions--refresh-if-visible)))
+
+(defun bp/agent-sessions--pr-fetch (&optional force)
+  "Ask GitHub for the state of the dashboard's PRs in one background request.
+Merged and closed PRs cannot change, so they are skipped unless FORCE.  Does
+nothing while an earlier request is still running."
+  (let ((urls (seq-filter
+               (lambda (url)
+                 (and (bp/agent-sessions--pr-url-parts url)
+                      (or force
+                          (not (memq (plist-get (gethash
+                                                 url bp/agent-sessions--pr-states)
+                                                :life)
+                                     '(merged closed))))))
+               bp/agent-sessions--pr-urls))
+        (gh (executable-find "gh")))
+    (cond
+     ((or (null urls) (process-live-p bp/agent-sessions--pr-process)) nil)
+     ((null gh)
+      (bp/agent-sessions--pr-record-failure urls "gh not found")
+      (bp/agent-sessions--refresh-if-visible))
+     (t
+      (let* ((stderr-file (make-temp-file "agent-sessions-pr-"))
+             (proc
+              (make-process
+               :name "agent-sessions-pr"
+               :buffer (generate-new-buffer " *agent-sessions-pr*")
+               ;; stderr goes to a file so it cannot interleave with the JSON.
+               :command (list "sh" "-c"
+                              "exec \"$0\" api graphql -f query=\"$1\" 2>\"$2\""
+                              gh (bp/agent-sessions--pr-query urls) stderr-file)
+               :connection-type 'pipe
+               :noquery t)))
+        (process-put proc 'urls urls)
+        (process-put proc 'stderr-file stderr-file)
+        ;; Set after the properties, so the sentinel never sees a bare process.
+        (set-process-sentinel proc #'bp/agent-sessions--pr-sentinel)
+        (setq bp/agent-sessions--pr-process proc)
+        (run-with-timer bp/agent-sessions-pr-fetch-timeout nil
+                        #'bp/agent-sessions--pr-timeout proc))))))
+
+(defun bp/agent-sessions--pr-poll-delay ()
+  "Seconds until the next PR refresh, given what is known of the PRs shown.
+Short while any PR is in motion, long while all are settled."
+  (if (seq-some (lambda (url)
+                  (memq (plist-get (gethash url bp/agent-sessions--pr-states)
+                                   :life)
+                        bp/agent-sessions--pr-active-lives))
+                bp/agent-sessions--pr-urls)
+      bp/agent-sessions-pr-poll-interval-active
+    bp/agent-sessions-pr-poll-interval))
+
+(defun bp/agent-sessions--pr-schedule-poll ()
+  "Arm the next PR refresh, replacing any armed one.
+Nothing is armed while the dashboard is gone or shows no PR; the next render
+that draws one arms it again."
+  (when bp/agent-sessions--pr-poll-timer
+    (cancel-timer bp/agent-sessions--pr-poll-timer)
+    (setq bp/agent-sessions--pr-poll-timer nil))
+  (when (and bp/agent-sessions--pr-urls
+             (get-buffer bp/agent-sessions-buffer-name))
+    (setq bp/agent-sessions--pr-poll-timer
+          (run-with-timer (bp/agent-sessions--pr-poll-delay) nil
+                          #'bp/agent-sessions--pr-poll))))
+
+(defun bp/agent-sessions--pr-poll ()
+  "Refresh PR state; the fetch's completion arms the next poll.
+When no fetch starts (nothing to ask about, or one still running), the next
+poll is armed here instead, so the chain never silently ends while the
+dashboard shows PRs."
+  (setq bp/agent-sessions--pr-poll-timer nil)
+  (when (get-buffer bp/agent-sessions-buffer-name)
+    (bp/agent-sessions--pr-fetch)
+    (unless (process-live-p bp/agent-sessions--pr-process)
+      (bp/agent-sessions--pr-schedule-poll))))
+
+(defun bp/agent-sessions--pr-note-shown (urls)
+  "Record URLS as the PRs on the dashboard and see that they get fetched.
+Called by the render, so it only arms timers: the poll, and a near-immediate
+fetch when a URL has never been asked about, so a newly shared PR does not
+wait a whole poll interval.  A fetch redraws, and that redraw re-arms the
+fetch for any URL that arrived while one was running."
+  (setq bp/agent-sessions--pr-urls urls)
+  (when urls
+    ;; A running fetch arms the next poll when it finishes.
+    (unless (or bp/agent-sessions--pr-poll-timer
+                (process-live-p bp/agent-sessions--pr-process))
+      (bp/agent-sessions--pr-schedule-poll))
+    (when (and (not bp/agent-sessions--pr-kick-timer)
+               (not (process-live-p bp/agent-sessions--pr-process))
+               (seq-some (lambda (url)
+                           (and (bp/agent-sessions--pr-url-parts url)
+                                (not (gethash url bp/agent-sessions--pr-states))))
+                         urls))
+      (setq bp/agent-sessions--pr-kick-timer
+            (run-with-timer 0.5 nil
+                            (lambda ()
+                              (setq bp/agent-sessions--pr-kick-timer nil)
+                              (bp/agent-sessions--pr-fetch)))))))
+
+(defun bp/agent-sessions--pr-glyphs (url)
+  "The session-row glyphs for the PR at URL: lifecycle, space, review."
+  (let ((state (gethash url bp/agent-sessions--pr-states)))
+    (cond
+     ((not (bp/agent-sessions--pr-url-parts url)) "")
+     ((null state) (propertize "…" 'font-lock-face 'bp/agent-session-pr-unknown))
+     ((plist-get state :error)
+      (propertize "?" 'font-lock-face 'bp/agent-session-pr-error))
+     (t
+      (pcase-let ((`(,_ ,glyph ,_ ,face)
+                   (assq (plist-get state :life)
+                         bp/agent-sessions--pr-life-display))
+                  (review (assq (plist-get state :review)
+                                bp/agent-sessions--pr-review-display)))
+        (concat (propertize glyph 'font-lock-face face)
+                (if review
+                    (concat " " (propertize (nth 1 review)
+                                            'font-lock-face (nth 3 review)))
+                  "")))))))
+
+(defun bp/agent-sessions--pr-words (url)
+  "The PR row's state for URL in words, e.g. `checks running · approved'."
+  (let ((state (gethash url bp/agent-sessions--pr-states)))
+    (cond
+     ((not (bp/agent-sessions--pr-url-parts url))
+      (propertize "not a GitHub PR URL" 'font-lock-face 'bp/agent-session-pr-error))
+     ((null state)
+      (propertize "fetching…" 'font-lock-face 'bp/agent-session-pr-unknown))
+     ((plist-get state :error)
+      (propertize (plist-get state :error)
+                  'font-lock-face 'bp/agent-session-pr-error))
+     (t
+      (pcase-let ((`(,_ ,_ ,words ,face)
+                   (assq (plist-get state :life)
+                         bp/agent-sessions--pr-life-display))
+                  (review (assq (plist-get state :review)
+                                bp/agent-sessions--pr-review-display)))
+        (concat (propertize words 'font-lock-face face)
+                (if review
+                    (concat (propertize " · " 'font-lock-face 'shadow)
+                            (propertize (nth 2 review)
+                                        'font-lock-face (nth 3 review)))
+                  "")))))))
+
+(defun bp/agent-sessions--pr-marks (session)
+  "SESSION's PR glyph column, padded to `bp/agent-sessions--pr-column-width'."
+  (if (zerop bp/agent-sessions--pr-column-width)
+      ""
+    (let ((link (bp/agent-sessions--session-pr-link session)))
+      (bp/agent-locks--pad
+       (if link (bp/agent-sessions--pr-glyphs (plist-get link :url)) "")
+       bp/agent-sessions--pr-column-width))))
+
+(defface bp/agent-session-link-unvisited
+  '((t :inherit bp/agent-session-needs-attention))
+  "Face for an external link not opened since the agent registered it.")
+
+(defface bp/agent-session-link
+  '((t :inherit link))
+  "Face for an external link the user has already opened.")
+
+(defun bp/agent-sessions--insert-link (link indent)
+  "Insert a row for shared external LINK, indented by INDENT."
+  (let* ((kind (plist-get link :kind))
+         (url (plist-get link :url))
+         (unvisited (null (plist-get link :visited-at)))
+         (kind-label (or (cdr (assoc kind bp/agent-sessions--link-kind-labels))
+                         kind)))
+    (push (cons (line-beginning-position)
+                (if unvisited 'needs-attention 'idle))
+          bp/agent-sessions--row-status)
+    (magit-insert-section (bp/agent-session-link url t)
+      (let ((face (if unvisited
+                      'bp/agent-session-link-unvisited
+                    'bp/agent-session-link))
+            (words (and (equal kind "pr") (bp/agent-sessions--pr-words url))))
+        (magit-insert-heading
+          (concat
+           (propertize
+            (concat indent (if unvisited "● " "  ")
+                    (format "%-28s %s" kind-label
+                            (or (plist-get link :label) url))
+                    (if words "   " ""))
+            'font-lock-face face)
+           (if words (bp/agent-sessions--layer-faces words face) "")
+           (propertize "\n" 'font-lock-face face))))
+      (bp/agent-sessions--insert-note
+       (list (bp/agent-sessions--link-note-key url))
+       (concat indent "    ")))))
+
+(defun bp/agent-sessions--insert-links (session indent)
+  "Insert every external link shared with SESSION, indented by INDENT."
+  (dolist (link (bp/agent-sessions--session-links session))
+    (bp/agent-sessions--insert-link link indent)))
 
 (defun bp/agent-sessions--insert-file (file indent)
   "Insert a row for shared FILE, indented by INDENT.
@@ -2212,7 +3570,7 @@ same path under another session by magit's parent chain."
     (push (cons (line-beginning-position)
                 (if unvisited 'needs-attention 'idle))
           bp/agent-sessions--row-status)
-    (magit-insert-section (bp/agent-session-file path)
+    (magit-insert-section (bp/agent-session-file path t)
       (magit-insert-heading
        (propertize
         (concat indent (if unvisited "● " "  ")
@@ -2235,56 +3593,125 @@ same path under another session by magit's parent chain."
     (bp/agent-sessions--insert-file file indent)))
 
 (defun bp/agent-sessions--build-tree (entries)
-  "Group live ENTRIES into a list of repo plists for rendering.
-Each element is (:name NAME :root ROOT :worktrees (WORKTREE ...)).
-When `bp/agent-sessions-sort-by-activity' is set, every level is ordered
-most-recently-active first; otherwise the stable order of
-`bp/agent-sessions--sort-tree-stable' is used."
+  "Group live ENTRIES into repos, with worktrees in the non-folder view."
   (let ((repos
          (mapcar
           (lambda (rg)
             (let* ((rentries (cdr rg))
                    (session (plist-get (car rentries) :session))
-                   (root (plist-get session :repo-root))
-                   (session-groups
-                    (seq-group-by
-                     (lambda (e) (bp/agent-sessions--canonical-path
-                                  (plist-get (plist-get e :session) :worktree-path)))
-                     rentries)))
-              (list :name (or (plist-get session :repo) "?")
-                    :root root
-                    :worktrees (bp/agent-sessions--worktrees-for root session-groups))))
+                   (root (bp/agent-sessions--session-repo session)))
+              (append
+               (list :name (or (plist-get session :repo) "?")
+                     :root root :entries rentries)
+               (unless bp/agent-sessions-group-by-folder
+                 (list :worktrees
+                       (bp/agent-sessions--worktrees-for
+                        root
+                        (seq-group-by
+                         (lambda (e)
+                           (bp/agent-sessions--canonical-path
+                            (plist-get (plist-get e :session) :worktree-path)))
+                         rentries)))))))
           (seq-group-by
-           (lambda (e) (bp/agent-sessions--canonical-path
-                        (plist-get (plist-get e :session) :repo-root)))
+           (lambda (e) (bp/agent-sessions--session-repo
+                        (plist-get e :session)))
            entries))))
-    (if bp/agent-sessions-sort-by-activity
-        (bp/agent-sessions--sort-tree repos)
-      (bp/agent-sessions--sort-tree-stable repos))))
+    (if (not bp/agent-sessions-group-by-folder)
+        (if bp/agent-sessions-sort-by-activity
+            (bp/agent-sessions--sort-tree repos)
+          (bp/agent-sessions--sort-tree-stable repos))
+      (let ((sorted
+           (mapcar
+            (lambda (repo)
+              (let ((items (plist-get repo :entries)))
+                (plist-put repo :entries
+                           (if bp/agent-sessions-sort-by-activity
+                               (bp/agent-sessions--by-recency
+                                #'bp/agent-sessions--entry-time items)
+                             (bp/agent-sessions--apply-manual-order
+                              (bp/agent-sessions--sessions-scope
+                               (bp/agent-sessions--repo-key repo) "")
+                              #'bp/agent-sessions--entry-order-key
+                              (bp/agent-sessions--sort-entries items))))))
+            repos)))
+      (if bp/agent-sessions-sort-by-activity
+          (bp/agent-sessions--by-recency
+           (lambda (repo) (bp/agent-sessions--entries-time
+                           (plist-get repo :entries))) sorted)
+        (bp/agent-sessions--apply-manual-order
+         bp/agent-sessions--repos-scope #'bp/agent-sessions--repo-key
+         (sort sorted (lambda (a b) (string< (plist-get a :name)
+                                            (plist-get b :name))))))))))
 
 (defun bp/agent-sessions--insert-worktree (wt)
   (let ((entries (plist-get wt :entries)))
     (magit-insert-section (bp/agent-session-worktree
                            (list :label (plist-get wt :label)
                                  :path (plist-get wt :path)))
-      (magit-insert-heading (format "  %s" (plist-get wt :label)))
+      (magit-insert-heading (format "%s%s"
+                                    (if bp/agent-sessions-group-by-folder "    " "  ")
+                                    (plist-get wt :label)))
       (bp/agent-sessions--insert-note
-       (list (bp/agent-sessions--worktree-note-key wt)) "    ")
+       (list (bp/agent-sessions--worktree-note-key wt))
+       (if bp/agent-sessions-group-by-folder "      " "    "))
       (bp/agent-sessions--insert-entries entries))))
 
 (defun bp/agent-sessions--insert-repo (repo)
   (magit-insert-section (bp/agent-session-repo
                          (list :name (plist-get repo :name)
                                :root (plist-get repo :root)))
-    (magit-insert-heading (propertize (plist-get repo :name) 'face 'bold))
+    (magit-insert-heading
+      (propertize (plist-get repo :name) 'face 'bold))
     (bp/agent-sessions--insert-note
-     (list (bp/agent-sessions--repo-note-key repo)) "  ")
-    (dolist (wt (plist-get repo :worktrees))
-      (bp/agent-sessions--insert-worktree wt))
+     (list (bp/agent-sessions--repo-note-key repo))
+     "  ")
+    (if bp/agent-sessions-group-by-folder
+        (dolist (folder (bp/agent-sessions--apply-manual-order
+                         (bp/agent-sessions--folders-scope
+                          (bp/agent-sessions--repo-key repo))
+                         #'bp/agent-sessions--folder-key
+                         (append (sort (copy-sequence
+                                        (bp/agent-sessions--folders-for-repo
+                                         (bp/agent-sessions--repo-key repo)))
+                                       (lambda (a b)
+                                         (string-lessp (plist-get a :name)
+                                                       (plist-get b :name))))
+                                 (list (list :id nil :name "No folder")))))
+          (bp/agent-sessions--insert-folder folder (plist-get repo :entries)))
+      (dolist (wt (plist-get repo :worktrees))
+        (bp/agent-sessions--insert-worktree wt)))
     (insert "\n")))
+
+(defun bp/agent-sessions--folder-entries (folder entries)
+  "Return live ENTRIES assigned to FOLDER, including No folder."
+  (seq-filter (lambda (entry)
+                (equal (plist-get folder :id)
+                       (bp/agent-sessions--folder-for-session
+                        (plist-get entry :session))))
+              entries))
+
+(defun bp/agent-sessions--insert-folder (folder entries)
+  "Render FOLDER containing live ENTRIES within its repo."
+  (let* ((id (plist-get folder :id))
+         (members (bp/agent-sessions--folder-entries folder entries))
+         (repo-key (bp/agent-sessions--session-repo
+                    (plist-get (car entries) :session))))
+    (magit-insert-section (bp/agent-session-folder id)
+      (magit-insert-heading
+        (propertize (format "  %s (%d)"
+                            (or (plist-get folder :name) "No folder")
+                            (length members))
+                    'face 'bold))
+      (bp/agent-sessions--insert-entries
+       (if bp/agent-sessions-sort-by-activity
+           members
+         (bp/agent-sessions--apply-manual-order
+          (bp/agent-sessions--folder-sessions-scope repo-key id)
+          #'bp/agent-sessions--entry-order-key members))))))
 
 (defun bp/agent-sessions--refresh ()
   (interactive)
+  (bp/agent-sessions--load-folders)
   (let* ((inhibit-read-only t)
          (win (get-buffer-window (current-buffer)))
          (saved-point (if win (window-point win) (point)))
@@ -2310,12 +3737,29 @@ most-recently-active first; otherwise the stable order of
     (erase-buffer)
     (setq bp/agent-sessions--row-status nil)
     (magit-insert-section (bp/agent-sessions-root)
-      (let ((repos (bp/agent-sessions--build-tree (bp/agent-sessions--live-entries))))
-        (if (null repos)
-            (insert "No active sessions.\n")
-          (dolist (repo repos)
-            (bp/agent-sessions--insert-repo repo)))))
       (bp/agent-mailboxes--insert-section)
+      (let ((entries (bp/agent-sessions--live-entries)))
+        (setq bp/agent-sessions--worktree-column-width
+              (1+ (apply #'max 0
+                         (mapcar (lambda (entry)
+                                   (string-width
+                                    (bp/agent-sessions--session-worktree-name
+                                     (plist-get entry :session))))
+                                 entries))))
+        (setq bp/agent-sessions--pr-column-width
+              (if (seq-some (lambda (entry)
+                              (bp/agent-sessions--session-pr-link
+                               (plist-get entry :session)))
+                            entries)
+                  bp/agent-sessions--pr-marks-width
+                0))
+        (bp/agent-sessions--pr-note-shown
+         (bp/agent-sessions--pr-urls-of entries))
+        (let ((repos (bp/agent-sessions--build-tree entries)))
+          (if (null repos)
+              (insert "No active sessions.\n")
+            (dolist (repo repos)
+              (bp/agent-sessions--insert-repo repo))))))
     (setq bp/agent-sessions--row-status (nreverse bp/agent-sessions--row-status))
     ;; Freshly inserted sections carry the visibility magit cached for them
     ;; (e.g. a note folded with TAB) in their `hidden' slot, but nothing has
@@ -2324,6 +3768,13 @@ most-recently-active first; otherwise the stable order of
     ;; cache off so re-showing doesn't record the state it is restoring.
     (let ((magit-section-cache-visibility nil))
       (magit-section-show magit-root-section))
+    ;; The Shift+TAB cycle caches its visibility choices, as does a manual
+    ;; TAB on one session.  Reapplying the global level here would overwrite
+    ;; that per-session choice on every hook-driven refresh.
+    (when bp/agent-sessions--overview-level
+      (setq bp/agent-sessions--overview-level
+            (min bp/agent-sessions--overview-level
+                 (bp/agent-sessions--overview-max-level))))
     (let ((target (and ident (magit-get-section ident))))
       (if (not target)
           (goto-char (point-min))
@@ -2341,6 +3792,75 @@ most-recently-active first; otherwise the stable order of
       (set-window-point win (point))
       (when wstart
         (set-window-start win (min wstart (point-max)) t)))))
+
+(defvar-local bp/agent-sessions--overview-level nil
+  "Current Shift+TAB level, from 0 (repos only) to the deepest open level.")
+
+(defun bp/agent-sessions--overview-depth (section parent-depth)
+  "Return SECTION's hierarchy depth, inheriting it for auxiliary sections."
+  (pcase (oref section type)
+    ('bp/agent-session-row 2)
+    (_ parent-depth)))
+
+(defun bp/agent-sessions--overview-max-level ()
+  "Return the deepest hierarchy level in this dashboard's section tree."
+  (let ((maximum 0))
+    (cl-labels ((visit (section parent-depth)
+                  (let ((depth (bp/agent-sessions--overview-depth
+                                section parent-depth)))
+                    (setq maximum (max maximum depth))
+                    (dolist (child (oref section children))
+                      (visit child depth)))))
+      (visit magit-root-section -1))
+    maximum))
+
+(defun bp/agent-sessions--show-overview-level (level)
+  "Show dashboard hierarchy to LEVEL, opening everything at its maximum."
+  (let ((maximum (bp/agent-sessions--overview-max-level)))
+    (cl-labels ((set-visibility (section parent-depth)
+                (let ((depth (bp/agent-sessions--overview-depth
+                              section parent-depth)))
+                  (unless (eq section magit-root-section)
+                    (oset section hidden
+                          (and (< level maximum) (<= level depth)))
+                    (magit-section-maybe-cache-visibility section))
+                  (dolist (child (oref section children))
+                    (set-visibility child depth)))))
+      (set-visibility magit-root-section -1)))
+  (magit-section-show magit-root-section))
+
+(defun bp/agent-sessions--visible-overview-level ()
+  "Return the current uniform hierarchy level, or -1 for a mixed view."
+  (let ((maximum (bp/agent-sessions--overview-max-level)))
+    (cl-labels ((matches (section parent-depth level)
+                  (let* ((depth (bp/agent-sessions--overview-depth
+                                 section parent-depth))
+                         (expected-hidden
+                          (and (< level maximum) (<= level depth))))
+                    (and (or (eq section magit-root-section)
+                             (eq (not (null (oref section hidden)))
+                                 (not (null expected-hidden))))
+                         (or (and (not (eq section magit-root-section))
+                                  expected-hidden)
+                             (cl-every (lambda (child)
+                                         (matches child depth level))
+                                       (oref section children)))))))
+      (or (seq-find (lambda (level)
+                      (matches magit-root-section -1 level))
+                    (number-sequence 0 maximum))
+          -1))))
+
+(defun bp/agent-sessions-toggle-overview ()
+  "Cycle repos, groups, sessions, and attachments with Shift+TAB."
+  (interactive)
+  (unless magit-root-section
+    (user-error "No dashboard sections to toggle"))
+  (setq bp/agent-sessions--overview-level
+        (mod (1+ (or bp/agent-sessions--overview-level
+                     (bp/agent-sessions--visible-overview-level)))
+             (1+ (bp/agent-sessions--overview-max-level))))
+  (bp/agent-sessions--show-overview-level
+   bp/agent-sessions--overview-level))
 
 (defun bp/agent-sessions--reread-repo-info ()
   "Re-read repo/branch info from disk for every live session buffer.
@@ -2362,15 +3882,10 @@ current branch."
            ;; Only overwrite when the buffer is still in a repo; a session that
            ;; has cd'd out keeps its last-known labels rather than going blank.
            (when (plist-get info :repo-root)
-             (puthash id
-                      (plist-put
-                       (plist-put
-                        (plist-put
-                         (plist-put session :repo (plist-get info :repo))
-                         :repo-root (plist-get info :repo-root))
-                        :worktree (plist-get info :worktree))
-                       :worktree-path (plist-get info :worktree-path))
-                      bp/agent-sessions))))))
+             (dolist (field '(:repo :repo-root :worktree :worktree-name
+                              :branch :worktree-path))
+               (plist-put session field (plist-get info field)))
+             (puthash id session bp/agent-sessions))))))
    bp/agent-sessions))
 
 (defun bp/agent-sessions-refresh ()
@@ -2380,7 +3895,9 @@ invalidates the worktree cache and re-reads each session's repo/branch info."
   (interactive)
   (clrhash bp/agent-sessions--worktrees-cache)
   (bp/agent-sessions--reread-repo-info)
-  (bp/agent-sessions--refresh))
+  (bp/agent-sessions--refresh)
+  ;; After the render, which is what records the PRs on the dashboard.
+  (bp/agent-sessions--pr-fetch t))
 
 (defun bp/agent-sessions--refresh-if-visible ()
   (let ((buf (get-buffer bp/agent-sessions-buffer-name)))
@@ -2430,14 +3947,16 @@ looping behaviour everywhere else in Emacs is left alone."
 
 (defun bp/agent-sessions-jump ()
   "Act on the thing at point.
-On a session row, pop to its vterm buffer.  On a shared-file row, open the
-file — which is also what clears its highlight.  On a worktree or repo
-heading, open project.el's dispatch menu in that directory (see
-`bp/agent-sessions--switch-project')."
+On a session row, pop to its terminal.  Open a shared file or external link
 and clear its highlight.  On a pending mailbox, start an agent on it.  On a worktree or repo heading, open project.el's
+dispatch menu in that directory (see `bp/agent-sessions--switch-project')."
   (interactive)
-  (if (bp/agent-sessions--file-at-point)
-      (bp/agent-sessions--open-file-at-point #'pop-to-buffer)
+  (cond
+   ((bp/agent-sessions--link-at-point)
+    (bp/agent-sessions--open-link-at-point))
+   ((bp/agent-sessions--file-at-point)
+    (bp/agent-sessions--open-file-at-point #'pop-to-buffer))
+   (t
     (let ((section (magit-current-section)))
       (pcase (and section (oref section type))
         ('bp/agent-session-row
@@ -2451,25 +3970,60 @@ and clear its highlight.  On a pending mailbox, start an agent on it.  On a work
         ((or 'bp/agent-session-worktree 'bp/agent-session-repo)
          (let* ((value (oref section value))
                 (dir (or (plist-get value :path) (plist-get value :root))))
-         (if (and dir (file-directory-p dir))
-             (bp/agent-sessions--switch-project dir)
-           (message "No worktree directory at point."))))
-        (_ (message "Nothing to do here."))))))
+           (if (and dir (file-directory-p dir))
+               (bp/agent-sessions--switch-project dir)
+             (message "No worktree directory at point."))))
+        (_ (message "Nothing to do here.")))))))
 
 (defun bp/agent-sessions-display ()
-  "Display the session or shared file at point in another window.
-Point stays in the dashboard either way."
+  "Display or open the session attachment at point without selecting a terminal.
+Files and sessions use another window; external links open in the browser."
   (interactive)
   ;; inhibit-same-window: never reuse/replace the dashboard's own window.
-  (if (bp/agent-sessions--file-at-point)
-      (bp/agent-sessions--open-file-at-point
-       (lambda (buf) (display-buffer buf '(nil (inhibit-same-window . t)))))
+  (cond
+   ((bp/agent-sessions--link-at-point)
+    (bp/agent-sessions--open-link-at-point))
+   ((bp/agent-sessions--file-at-point)
+    (bp/agent-sessions--open-file-at-point
+     (lambda (buf) (display-buffer buf '(nil (inhibit-same-window . t))))))
+   (t
     (let* ((session (bp/agent-sessions--session-at-point))
            (buf (and session (plist-get session :buffer))))
       (if (buffer-live-p buf)
           (display-buffer buf '(nil (inhibit-same-window . t)))
-        (message "No session at point.")))))
+        (message "No session at point."))))))
 
+(defun bp/agent-sessions-display-or-browse ()
+  "Display the thing at point, browsing links and shared HTML files.
+For every other shared file or dashboard row, behave exactly like
+`bp/agent-sessions-display'."
+  (interactive)
+  (if (bp/agent-sessions--link-at-point)
+      (bp/agent-sessions--open-link-at-point)
+    (pcase (bp/agent-sessions--file-at-point)
+      (`(,_session ,path ,_file)
+       (if (not (string-equal (downcase (or (file-name-extension path) ""))
+                              "html"))
+           (bp/agent-sessions-display)
+         (if (not (file-exists-p path))
+             (message "File no longer exists: %s" (abbreviate-file-name path))
+           (when (bp/agent-sessions--set-visited
+                  (lambda (file) (equal (plist-get file :path) path)) t)
+             (bp/agent-sessions--refresh-if-visible))
+           (browse-url-of-file path))))
+      (_ (bp/agent-sessions-display)))))
+
+(defun bp/agent-sessions-copy-attachment ()
+  "Copy the shared file path or external URL at point to the kill ring."
+  (interactive)
+  (let ((value (or (when-let ((link (bp/agent-sessions--link-at-point)))
+                     (plist-get (nth 2 link) :url))
+                   (nth 1 (bp/agent-sessions--file-at-point)))))
+    (if value
+        (progn
+          (kill-new value)
+          (message "Copied %s" value))
+      (message "No shared file or link at point."))))
 
 (defun bp/agent-sessions--row-locations ()
   "Return (POSITION . ID) for each session row, in buffer order."
@@ -2534,28 +4088,78 @@ section point was on is precisely the one that no longer exists."
     (goto-char (oref target start))
     t))
 
+(defun bp/agent-sessions--next-row-ident-at-point ()
+  "Return the identity of the row on the next line below point, or nil.
+Skips lines still inside the current section and file notes, which are part
+of the file row above them: pressing `u' again there would act on that file."
+  (let ((current (magit-current-section)))
+    (save-excursion
+      (catch 'found
+        (while (and (zerop (forward-line 1)) (not (eobp)))
+          (let ((section (magit-current-section)))
+            (when (and section (not (eq section current))
+                       (not (eq (oref section type) 'bp/agent-session-note))
+                       (= (point) (save-excursion
+                                    (goto-char (oref section start))
+                                    (line-beginning-position))))
+              (throw 'found (magit-section-ident section)))))))))
+
 (defun bp/agent-sessions-kill ()
-  "Kill the session at point, or detach the shared file at point.
-On a session row this kills its terminal buffer and moves to a neighbouring
-row.  On a shared-file row it drops the file from that session's list and
-leaves the file on disk completely alone: this list is an inbox, and clearing
-an item out of it must never be able to destroy the thing it points at."
+On an empty folder heading, delete that folder.
+Detaching drops only the dashboard pointer; files on disk and external targets
   (interactive)
-  (pcase (bp/agent-sessions--file-at-point)
-    (`(,session ,path ,_file)
-     ;; Resolve the neighbour *before* detaching, while the row is still on
-     ;; screen to have neighbours at all.
+        ((let ((section (magit-current-section)))
+           (and section (eq (oref section type) 'bp/agent-session-folder)))
+         (bp/agent-sessions--delete-empty-folder-at-point))
+(defun bp/agent-sessions--delete-empty-folder-at-point ()
+  "Delete the folder whose heading is at point, if it shows no session.
+Emptiness is what the heading's count shows: live sessions.  A folder
+holding sessions is left alone; `F' deletes it after confirmation."
+  (bp/agent-sessions--load-folders)
+  (let* ((section (magit-current-section))
+         (folder (bp/agent-sessions--folder (oref section value))))
+    (cond
+     ((not folder) (message "No folder is a view, not a folder."))
+     ((seq-some (lambda (child)
+                  (eq (oref child type) 'bp/agent-session-row))
+                (oref section children))
+      (message "Folder %s has sessions; use F to delete it."
+               (plist-get folder :name)))
+     (t
+      (let ((ident (bp/agent-sessions--neighbour-ident section)))
+        (bp/agent-sessions--folder-delete folder)
+        (bp/agent-sessions--refresh)
+        (bp/agent-sessions--goto-ident ident)
+        (message "Deleted empty folder %s." (plist-get folder :name)))))))
+
+  (pcase (bp/agent-sessions--link-at-point)
+    (`(,session ,url ,link)
      (let ((ident (bp/agent-sessions--neighbour-ident
                    (bp/agent-sessions--enclosing-section
-                    'bp/agent-session-file))))
-       (if (bp/agent-sessions--detach-file session path)
+                    'bp/agent-session-link))))
+       (if (bp/agent-sessions--detach-link session url)
            (progn
              (bp/agent-sessions--refresh)
              (bp/agent-sessions--goto-ident ident)
-             (message "Detached %s (the file on disk is untouched)."
-                      (file-name-nondirectory (directory-file-name path))))
+             (message "Detached %s link."
+                      (or (plist-get link :label) (plist-get link :url))))
          (message "Not attached to this session."))))
-    (_ (bp/agent-sessions--kill-session))))
+    (_
+     (pcase (bp/agent-sessions--file-at-point)
+       (`(,session ,path ,_file)
+        ;; Resolve the neighbour *before* detaching, while the row is still on
+        ;; screen to have neighbours at all.
+        (let ((ident (bp/agent-sessions--neighbour-ident
+                      (bp/agent-sessions--enclosing-section
+                       'bp/agent-session-file))))
+          (if (bp/agent-sessions--detach-file session path)
+              (progn
+                (bp/agent-sessions--refresh)
+                (bp/agent-sessions--goto-ident ident)
+                (message "Detached %s (the file on disk is untouched)."
+                         (file-name-nondirectory (directory-file-name path))))
+            (message "Not attached to this session."))))
+       (_ (bp/agent-sessions--kill-session))))))
 
 (defun bp/agent-sessions--kill-session ()
   "Kill the session at point and move to a neighboring session row."
@@ -2575,36 +4179,68 @@ an item out of it must never be able to destroy the thing it points at."
           (bp/agent-sessions--goto-session-id nearby-id))))))
 
 (defun bp/agent-sessions-mark-unread (&optional unmark)
-  "Mark the session at point as unread — i.e. needing attention.
-Gives the row the same highlight, `●' marker, sort priority and `N'/`P'
-reachability a hook-reported needs-attention has, for sessions you want to
-come back to yourself.  With a prefix argument (UNMARK), clear the mark.
-The mark also clears on its own once you focus the session's buffer.
+  "Toggle the session at point between unread (needing attention) and read.
+Marking unread gives the row the same highlight, `●' marker, sort priority
+and `N'/`P' reachability a hook-reported needs-attention has, for sessions
+you want to come back to yourself.  On a row that already reads as unread,
+whether marked here or reported by its agent, this marks it read.  With a
+prefix argument (UNMARK), always mark read.  The mark also clears on its own
+once you focus the session's buffer.
 
-On a shared-file row this toggles the unopened highlight instead: `u' on a
-file you have opened lights it up again, and `u' on one you have not clears it
-without opening it — which is the whole point, for a file you have decided you
-do not need to read.  UNMARK always clears."
+On a shared-file or external-link row this toggles the unopened highlight
+instead.  UNMARK always clears.
+
+Afterwards point moves to the row that was on the next line, wherever the
+re-sort put it, so repeated presses walk down the dashboard."
   (interactive "P")
-  (pcase (bp/agent-sessions--file-at-point)
-    (`(,_session ,path ,file)
-     (let ((visited (or (and unmark t) (null (plist-get file :visited-at)))))
-       (bp/agent-sessions--set-visited
-        (lambda (f) (equal (plist-get f :path) path)) visited)
+  (let ((next-ident (bp/agent-sessions--next-row-ident-at-point)))
+    (bp/agent-sessions--toggle-read-at-point unmark)
+    (bp/agent-sessions--goto-ident next-ident)))
+
+(defun bp/agent-sessions--toggle-read-at-point (unmark)
+  "Toggle the read state of the row at point; see `bp/agent-sessions-mark-unread'."
+  (pcase (bp/agent-sessions--link-at-point)
+    (`(,_session ,_kind ,link)
+     (let ((visited (or (and unmark t) (null (plist-get link :visited-at))))
+           (url (plist-get link :url)))
+       (bp/agent-sessions--set-link-visited
+        (lambda (candidate) (equal (plist-get candidate :url) url)) visited)
        (bp/agent-sessions--refresh)
        (message (if visited "Marked as read." "Marked as unread."))))
-    (_ (bp/agent-sessions--mark-session-unread unmark))))
+    (_
+     (pcase (bp/agent-sessions--file-at-point)
+       (`(,_session ,path ,file)
+        (let ((visited (or (and unmark t)
+                           (null (plist-get file :visited-at)))))
+          (bp/agent-sessions--set-visited
+           (lambda (f) (equal (plist-get f :path) path))
+           visited)
+          (bp/agent-sessions--refresh)
+          (message (if visited "Marked as read." "Marked as unread."))))
+       (_ (bp/agent-sessions--mark-session-unread unmark))))))
 
 (defun bp/agent-sessions--mark-session-unread (unmark)
-  "Set or clear the unread mark on the session row at point."
+  "Toggle the session row at point between unread and read.
+A row reads as unread when it carries the manual mark or its agent reported
+needs-attention; marking it read clears both, just as focusing it does
+\(`bp/agent-session--clear-attention-on-focus').  UNMARK always marks read."
   (let* ((session (bp/agent-sessions--session-at-point))
          (buf (and session (plist-get session :buffer))))
     (if (not (buffer-live-p buf))
         (message "No session at point.")
-      (with-current-buffer buf
-        (setq-local bp/agent-session--marked-unread (not unmark)))
-      (bp/agent-sessions--refresh)
-      (message (if unmark "Unread mark cleared." "Marked as needing attention.")))))
+      (let* ((id (buffer-local-value 'bp/agent-session-id buf))
+             (entry (and id (gethash id bp/agent-sessions)))
+             (attention (and entry (eq (plist-get entry :status)
+                                       'needs-attention)))
+             (read (or unmark attention
+                       (buffer-local-value 'bp/agent-session--marked-unread
+                                           buf))))
+        (with-current-buffer buf
+          (setq-local bp/agent-session--marked-unread (not read)))
+        (when (and read attention)
+          (puthash id (plist-put entry :status 'stopped) bp/agent-sessions))
+        (bp/agent-sessions--refresh)
+        (message (if read "Marked as read." "Marked as unread."))))))
 
 (defun bp/agent-sessions-branch ()
   "Branch (fork) the agent session at point into a new session.
@@ -2677,11 +4313,67 @@ or `codex fork' by hand)."
             (bp/agent-sessions--refresh)
             (message "Marked as branched from %s" (cdr bf)))))))))
 
+(defun bp/agent-sessions-detach-parent ()
+  "Detach the child session at point from its recorded fork parent."
+  (interactive)
+  (let* ((session (bp/agent-sessions--session-at-point))
+         (parent (and session (plist-get session :branched-from)))
+         (buf (and session (plist-get session :buffer)))
+         (id (and (buffer-live-p buf)
+                  (buffer-local-value 'bp/agent-session-id buf)))
+         (real (and id (gethash id bp/agent-sessions))))
+    (cond
+     ((null session) (message "Point is not on a session row."))
+     ((null parent) (message "Session is not attached to a parent."))
+     ((not (buffer-live-p buf)) (message "Session has no live buffer."))
+     (t
+      (with-current-buffer buf
+        (setq-local bp/agent-session--branched-from nil)
+        (setq-local bp/agent-session--parent-detached-p t))
+      (when real
+        (puthash id (plist-put (copy-sequence real) :branched-from nil)
+                 bp/agent-sessions))
+      (bp/agent-sessions--refresh)
+      (message "Detached from %s." (cdr parent))))))
+
+(defun bp/agent-sessions-submission-diff-or-detach-parent ()
+  "Diff submitted file versions at point, or detach a session's fork parent.
+This keeps `D' contextual: file rows use the submitted-version history, while
+the existing session-row action remains available on every other row."
+  (interactive)
+  (if (bp/agent-sessions--file-at-point)
+      (bp/agent-sessions-show-file-submission-diff)
+    (bp/agent-sessions-detach-parent)))
+
+(defun bp/agent-sessions--set-title-override (buf title)
+  "Make TITLE the user-chosen title of session terminal BUF, nil to clear it.
+A title also renames BUF to `<worktree> - <title>' (just TITLE outside a
+worktree), so the buffer list and mode line say what the dashboard says.
+Clearing leaves the buffer name alone: it has no title to follow."
+  (with-current-buffer buf
+    (setq-local bp/agent-session-title-override title)
+    (when title
+      (bp/agent-sessions--rename-to-title buf title))))
+
+(defun bp/agent-sessions--rename-to-title (buf title)
+  "Rename session terminal BUF to `<worktree> - <title>' (TITLE outside a worktree)."
+  (let* ((wt (bp/agent-sessions--session-worktree-name
+              (bp/agent-sessions--buffer-repo-info buf)))
+         (name (if (member wt '(nil "" "?")) title (format "%s - %s" wt title))))
+    (with-current-buffer buf
+      ;; Agents re-send the same title often; a uniquified `NAME<2>' is
+      ;; already right, so don't churn it.
+      (unless (string-match-p (concat "\\`" (regexp-quote name) "\\(<[0-9]+>\\)?\\'")
+                              (buffer-name))
+        (rename-buffer name t)))))
+
 (defun bp/agent-sessions-edit-title ()
   "Edit the title of the session at point.
 The chosen title is stored as a user override on the session's buffer, so it
 takes precedence over — and survives — the agent's own OSC title updates.
-Clearing it (entering an empty string) restores the agent's live title."
+The buffer is renamed to `<worktree> - <title>' to match.  Clearing the title
+\(entering an empty string) restores the agent's live title and leaves the
+buffer name as it is."
   (interactive)
   (let* ((session (bp/agent-sessions--session-at-point))
          (buf (and session (plist-get session :buffer))))
@@ -2691,9 +4383,8 @@ Clearing it (entering an empty string) restores the agent's live title."
                         (or bp/agent-session-title-override
                             bp/agent-session-title)))
              (new (string-trim (read-string "Session title: " initial))))
-        (with-current-buffer buf
-          (setq-local bp/agent-session-title-override
-                      (unless (string-empty-p new) new)))
+        (bp/agent-sessions--set-title-override
+         buf (unless (string-empty-p new) new))
         (bp/agent-sessions--refresh)
         (message (if (string-empty-p new)
                      "Title override cleared."
@@ -2702,8 +4393,8 @@ Clearing it (entering an empty string) restores the agent's live title."
 (defun bp/agent-sessions-cycle-state ()
   "Move the session at point to the next workflow state.
 Cycles through `bp/agent-sessions-states' and off the end back to no state.
-With a prefix argument, pick a state directly instead — with five of them, a
-cycle is a poor way to reach a particular one."
+With a prefix argument, pick a state directly instead — with this many of
+them, a cycle is a poor way to reach a particular one."
   (interactive)
   (let* ((session (bp/agent-sessions--session-at-point))
          (keys (and session (bp/agent-sessions--session-note-keys session))))
@@ -2723,14 +4414,17 @@ cycle is a poor way to reach a particular one."
                    "State cleared."))))))
 
 (defun bp/agent-sessions--context-at-point ()
-  "Return (:path DIR :name NAME) for the worktree/repo enclosing point, or nil.
-Walks up from the section at point so it works whether point is on a
-worktree heading, a repo heading, or an individual session row."
+  "Return (:path DIR :name NAME) for the session or repo at point."
   (let ((section (magit-current-section)))
     (catch 'found
       (while section
         (let ((value (oref section value)))
           (pcase (oref section type)
+            ('bp/agent-session-row
+             (when-let* ((session (bp/agent-sessions--session-for-id value))
+                         (path (plist-get session :worktree-path)))
+               (throw 'found (list :path path
+                                   :name (plist-get session :worktree)))))
             ('bp/agent-session-worktree
              (throw 'found (list :path (plist-get value :path)
                                  :name (plist-get value :label))))
@@ -2739,6 +4433,74 @@ worktree heading, a repo heading, or an individual session row."
                                  :name (plist-get value :name))))))
         (setq section (oref section parent)))
       nil)))
+
+(defun bp/agent-sessions-toggle-folder-view ()
+  "Toggle between repo rows and repo/folder grouping."
+  (interactive)
+  (setq bp/agent-sessions-group-by-folder
+        (not bp/agent-sessions-group-by-folder))
+  (bp/agent-sessions--refresh)
+  (message "Grouping by %s"
+           (if bp/agent-sessions-group-by-folder "repo and folder" "repo")))
+
+(defun bp/agent-sessions-folder-action ()
+  "Move the session at point, manage a folder heading, or create a folder."
+  (interactive)
+  (bp/agent-sessions--load-folders)
+  (let* ((row (bp/agent-sessions--enclosing-section 'bp/agent-session-row))
+         (session (and row (bp/agent-sessions--session-for-id
+                            (oref row value))))
+         (section (magit-current-section))
+         (repo-section (bp/agent-sessions--enclosing-section
+                        'bp/agent-session-repo))
+         (repo (and repo-section
+                    (bp/agent-sessions--repo-key (oref repo-section value))))
+         (folder (and section
+                      (eq (oref section type) 'bp/agent-session-folder)
+                      (bp/agent-sessions--folder (oref section value)))))
+    (cond
+     (session
+      (let* ((row-id (oref row value))
+             (nearby (save-excursion
+                       (goto-char (oref row start))
+                       (bp/agent-sessions--nearby-session-id)))
+             (session-repo (bp/agent-sessions--session-repo session))
+             (folders (bp/agent-sessions--folders-for-repo session-repo))
+             (names (mapcar (lambda (item) (plist-get item :name)) folders))
+             (choice (completing-read
+                      "Move session to folder: "
+                      (append names '("No folder"))))
+             (destination
+              (cond ((string-equal-ignore-case choice "No folder") nil)
+                    ((string-empty-p (string-trim choice))
+                     (user-error "Enter a folder name"))
+                    (t (or (seq-find (lambda (item)
+                                       (string-equal-ignore-case
+                                        choice (plist-get item :name)))
+                                     folders)
+                           (bp/agent-sessions--folder-create choice session-repo))))))
+        (bp/agent-sessions--folder-set session (plist-get destination :id))
+        (bp/agent-sessions--refresh)
+        (or (and nearby (bp/agent-sessions--goto-session-id nearby))
+            (bp/agent-sessions--goto-session-id row-id))))
+     (folder
+      (pcase (completing-read
+              (format "%s: " (plist-get folder :name))
+              '("Rename folder" "Delete folder") nil t)
+        ("Rename folder"
+         (bp/agent-sessions--folder-rename
+          folder (read-string "Folder name: " (plist-get folder :name)))
+         (bp/agent-sessions--refresh))
+        ("Delete folder"
+         (when (yes-or-no-p
+                (format "Delete folder %s and unassign its sessions? "
+                        (plist-get folder :name)))
+           (bp/agent-sessions--folder-delete folder)
+           (bp/agent-sessions--refresh)))))
+     (t
+      (unless repo (user-error "Select a repo to create a folder"))
+      (bp/agent-sessions--folder-create (read-string "New folder name: ") repo)
+      (bp/agent-sessions--refresh)))))
 
 (defun bp/agent-sessions--terminal-open (dir bufname)
   "Open the configured terminal in DIR in another window; return the buffer.
@@ -2813,18 +4575,43 @@ displays its own point, not the buffer's."
           (set-window-point win (point)))))))
 
 (defun bp/agent-sessions-new-vterm ()
-  "Create a new vterm in the worktree at point, named after that worktree.
+  "Create a new vterm in the worktree at point.
 Leaves the dashboard's point on the new terminal's row, so the thing just
-created is what `k', `t', `e' and `n'/`p' act from.  A second `+' still opens
-a terminal in the same worktree, since `bp/agent-sessions--context-at-point'
-walks up from a session row to the worktree containing it."
+created is what `k', `t', `e' and `n'/`p' act from.  On a repo or folder
+heading, choose among that repo's worktrees."
   (interactive)
-  (let* ((ctx (bp/agent-sessions--context-at-point))
-         (dir (plist-get ctx :path)))
+  (let* ((row (bp/agent-sessions--enclosing-section 'bp/agent-session-row))
+         (ctx (bp/agent-sessions--context-at-point))
+         (folder-section (and bp/agent-sessions-group-by-folder
+                              (bp/agent-sessions--enclosing-section
+                               'bp/agent-session-folder)))
+         (folder-id (and folder-section (oref folder-section value)))
+         (repo-section (bp/agent-sessions--enclosing-section
+                        'bp/agent-session-repo))
+         (repo-root (and repo-section
+                         (plist-get (oref repo-section value) :root)))
+         (worktrees (and (not row) repo-root
+                         (bp/agent-sessions--all-worktrees repo-root)))
+         (selected (cond ((null worktrees) nil)
+                         ((= (length worktrees) 1) (car worktrees))
+                         (t (let* ((labels (mapcar (lambda (wt)
+                                                     (plist-get wt :label))
+                                                   worktrees))
+                                   (choice (completing-read "Worktree: " labels
+                                                            nil t)))
+                              (seq-find (lambda (wt)
+                                          (equal choice (plist-get wt :label)))
+                                        worktrees)))))
+         (dir (or (plist-get selected :path) (plist-get ctx :path)))
+         (name (or (plist-get selected :label) (plist-get ctx :name))))
     (if (or (null dir) (not (file-directory-p dir)))
         (message "No worktree at point.")
-      (bp/agent-sessions--goto-terminal-row
-       (bp/agent-sessions--create-terminal dir (plist-get ctx :name))))))
+      (let ((buf (bp/agent-sessions--create-terminal dir name)))
+        (when folder-id
+          (bp/agent-sessions--folder-set
+           (list :buffer buf :repo-root repo-root) folder-id)
+          (bp/agent-sessions--refresh-if-visible))
+        (bp/agent-sessions--goto-terminal-row buf)))))
 
 ;;;###autoload
 (defun bp/agent-session-switch-or-new ()
@@ -2868,18 +4655,34 @@ creating one."
        root (plist-get (bp/agent-session--repo-info root) :worktree)))))
 
 (defun bp/agent-sessions--rows ()
-  "Return (LINE-POS . STATUS) for each session and shared-file row, in order.
+  "Return (LINE-POS . STATUS) for each session and attachment row, in order.
 This is what the last render drew (`bp/agent-sessions--row-status'), never a
 fresh lookup: only the render path knows the displayed status."
   bp/agent-sessions--row-status)
 
+(defun bp/agent-sessions--hidden-file-row-p (row)
+  "Return non-nil when ROW belongs to a hidden file or external-link section."
+  (let ((position (car row)))
+    (and (invisible-p position)
+         (save-excursion
+           (goto-char position)
+           (let ((section (magit-current-section)))
+             (and section
+                  (memq (oref section type)
+                        '(bp/agent-session-file bp/agent-session-link))))))))
+
 (defun bp/agent-sessions--goto-row (direction predicate)
   "Move point to the next/previous row (DIRECTION is `next' or `prev').
-When PREDICATE is non-nil, only rows whose status satisfies it are considered."
+When PREDICATE is non-nil, only rows whose status satisfies it are considered.
+Hidden attachment rows are excluded from filtered navigation; hidden session
+rows remain candidates."
   (let* ((cur (line-beginning-position))
          (positions (mapcar #'car
                             (if predicate
-                                (seq-filter (lambda (r) (funcall predicate (cdr r)))
+                                (seq-filter (lambda (r)
+                                              (and (funcall predicate (cdr r))
+                                                   (not (bp/agent-sessions--hidden-file-row-p
+                                                         r))))
                                             (bp/agent-sessions--rows))
                               (bp/agent-sessions--rows))))
          (target (pcase direction
@@ -2916,12 +4719,12 @@ trade places constantly; the stable order is the default for that reason."
   (memq status '(needs-attention error)))
 
 (defun bp/agent-sessions-next-attention ()
-  "Move to the next session row that needs attention."
+  "Move to the next session or visible attachment that needs attention."
   (interactive)
   (bp/agent-sessions--goto-row 'next #'bp/agent-sessions--attention-p))
 
 (defun bp/agent-sessions-prev-attention ()
-  "Move to the previous session row that needs attention."
+  "Move to the previous session or visible attachment that needs attention."
   (interactive)
   (bp/agent-sessions--goto-row 'prev #'bp/agent-sessions--attention-p))
 
@@ -2956,22 +4759,54 @@ are exactly what the next render will order."
                (mapcar #'bp/agent-sessions--worktree-key
                        (plist-get repo :worktrees))
                (bp/agent-sessions--worktree-key (oref section value)))))
+      ('bp/agent-session-folder
+       (when repo
+         (let ((folders (bp/agent-sessions--apply-manual-order
+                         (bp/agent-sessions--folders-scope rkey)
+                         #'bp/agent-sessions--folder-key
+                         (append (sort (copy-sequence
+                                        (bp/agent-sessions--folders-for-repo rkey))
+                                       (lambda (a b)
+                                         (string-lessp (plist-get a :name)
+                                                       (plist-get b :name))))
+                                 (list (list :id nil :name "No folder"))))))
+           (list (bp/agent-sessions--folders-scope rkey)
+                 (mapcar #'bp/agent-sessions--folder-key folders)
+                 (format "%s" (or (oref section value) "none"))))))
       ('bp/agent-session-row
-       (let* ((wt-sec (bp/agent-sessions--enclosing-section
-                       'bp/agent-session-worktree))
-              (wkey (and wt-sec repo
-                         (bp/agent-sessions--worktree-key (oref wt-sec value))))
-              (wt (and wkey
-                       (seq-find (lambda (w)
-                                   (equal wkey
-                                          (bp/agent-sessions--worktree-key w)))
-                                 (plist-get repo :worktrees))))
-              (session (bp/agent-sessions--session-for-id (oref section value))))
-         (when (and wt session)
-           (list (bp/agent-sessions--sessions-scope rkey wkey)
-                 (mapcar #'bp/agent-sessions--entry-buffer-name
-                         (plist-get wt :entries))
-                 (bp/agent-sessions--session-buffer-name session)))))
+       (let ((session (bp/agent-sessions--session-for-id (oref section value))))
+         (when (and repo session)
+           (if bp/agent-sessions-group-by-folder
+               (let* ((folder-id (bp/agent-sessions--folder-for-session session))
+                      (folder (or (bp/agent-sessions--folder folder-id)
+                                  (list :id nil :name "No folder")))
+                      (members (bp/agent-sessions--folder-entries
+                                folder (plist-get repo :entries))))
+                 (list (bp/agent-sessions--folder-sessions-scope rkey folder-id)
+                       (mapcar #'bp/agent-sessions--entry-order-key
+                               (if bp/agent-sessions-sort-by-activity
+                                   members
+                                 (bp/agent-sessions--apply-manual-order
+                                  (bp/agent-sessions--folder-sessions-scope
+                                   rkey folder-id)
+                                  #'bp/agent-sessions--entry-order-key
+                                  members)))
+                       (bp/agent-sessions--session-order-key session)))
+             (let* ((wt-sec (bp/agent-sessions--enclosing-section
+                             'bp/agent-session-worktree))
+                    (wt-key (and wt-sec
+                                 (bp/agent-sessions--worktree-key
+                                  (oref wt-sec value))))
+                    (wt (seq-find
+                         (lambda (candidate)
+                           (equal wt-key (bp/agent-sessions--worktree-key
+                                          candidate)))
+                         (plist-get repo :worktrees))))
+               (when wt
+                 (list (bp/agent-sessions--sessions-scope rkey wt-key)
+                       (mapcar #'bp/agent-sessions--entry-order-key
+                               (plist-get wt :entries))
+                       (bp/agent-sessions--session-order-key session))))))))
       ('bp/agent-session-file
        (let* ((row (bp/agent-sessions--enclosing-section 'bp/agent-session-row))
               (session (and row (bp/agent-sessions--session-for-id
@@ -2980,6 +4815,15 @@ are exactly what the next render will order."
            (list (bp/agent-sessions--files-scope session)
                  (mapcar (lambda (f) (plist-get f :path))
                          (bp/agent-sessions--session-files session))
+                 (oref section value)))))
+      ('bp/agent-session-link
+       (let* ((row (bp/agent-sessions--enclosing-section 'bp/agent-session-row))
+              (session (and row (bp/agent-sessions--session-for-id
+                                 (oref row value)))))
+         (when session
+           (list (bp/agent-sessions--links-scope session)
+                 (mapcar (lambda (link) (plist-get link :url))
+                         (bp/agent-sessions--session-links session))
                  (oref section value))))))))
 
 (defun bp/agent-sessions--merge-order (saved visible)
@@ -3025,22 +4869,23 @@ already at the end it is being moved towards."
         t)))))
 
 (defun bp/agent-sessions--move (delta)
-  "Move the repo, worktree, or session row at point by DELTA within its group."
+  "Move the repo, folder, worktree, or session at point within its group."
   (if bp/agent-sessions-sort-by-activity
       (message "Manual order is ignored while sorting by activity (press `s').")
-    (pcase (bp/agent-sessions--group-at-point)
-      (`(,scope ,keys ,key)
-       (when (bp/agent-sessions--persist-move scope keys key delta)
-         (bp/agent-sessions--refresh)))
-      (_ (message "Nothing to reorder at point.")))))
+      (pcase (bp/agent-sessions--group-at-point)
+        (`(,scope ,keys ,key)
+         (when (bp/agent-sessions--persist-move scope keys key delta)
+           (bp/agent-sessions--refresh)))
+        (_ (message "Nothing to reorder at point.")))))
 
 (defun bp/agent-sessions-move-down ()
-  "Move the repo, worktree, or session at point one place down its group.
-Only the enclosing group is affected: a session moves among the sessions of
-its worktree, a worktree among its repo's worktrees, a repo among the repos.
+  "Move the repo, folder, worktree, or session down within its group.
+Only the enclosing group is affected: a session moves among sessions of its
+worktree or folder, and a folder or worktree moves within its repo.
 The chosen order is written to `bp/agent-sessions-db-file', so it survives
-both the session and Emacs itself; a session is remembered by its buffer name,
-so renaming one forgets its place.  Unavailable while sorting by activity
+both the session and Emacs itself; a session is remembered by its agent's
+session id, or by its terminal id when no agent has started in it, so a
+renamed buffer keeps its place.  Unavailable while sorting by activity
 \(`s'), which reorders by recency on every event.  `C-c C-o' clears it again."
   (interactive)
   (bp/agent-sessions--move 1))
@@ -3053,22 +4898,22 @@ See `bp/agent-sessions-move-down'."
 
 (defun bp/agent-sessions-clear-manual-order ()
   "Forget the manual order (`M-n' / `M-p') and return to the automatic one.
-With point inside a repo, worktree, or on a session row, clears just that
+With point inside a repo, folder, worktree, or on a session row, clears just that
 item's group; with a prefix argument, clears every group."
   (interactive)
   (let ((table (bp/agent-sessions--order-table)))
-    (if current-prefix-arg
-        (progn (clrhash table)
-               (bp/agent-sessions--order-delete-all)
-               (bp/agent-sessions--refresh)
-               (message "Manual order cleared everywhere."))
-      (pcase (bp/agent-sessions--group-at-point)
-        (`(,scope ,_ ,_)
-         (remhash scope table)
-         (bp/agent-sessions--order-delete-group scope)
-         (bp/agent-sessions--refresh)
-         (message "Manual order cleared for this group."))
-        (_ (message "Point is not in a reorderable group."))))))
+      (if current-prefix-arg
+          (progn (clrhash table)
+                 (bp/agent-sessions--order-delete-all)
+                 (bp/agent-sessions--refresh)
+                 (message "Manual order cleared everywhere."))
+        (pcase (bp/agent-sessions--group-at-point)
+          (`(,scope ,_ ,_)
+           (remhash scope table)
+           (bp/agent-sessions--order-delete-group scope)
+           (bp/agent-sessions--refresh)
+           (message "Manual order cleared for this group."))
+          (_ (message "Point is not in a reorderable group."))))))
 
 ;;;###autoload
 (defun bp/agent-session-rename-to-title ()
@@ -3143,8 +4988,9 @@ INITIAL-PROMPT is non-nil, submit it as the resumed session's first prompt."
 
 (defun bp/agent-sessions--buffer-for-agent-session (session-id)
   "Return the live buffer running the agent session SESSION-ID, or nil.
-SESSION-ID is the agent's own session id (a UUID) as recorded in
-`bp/agent-sessions' under :agent-session-id."
+Prefer an identity confirmed by an agent hook in `bp/agent-sessions'.  During
+startup, before Codex's first hook, also recognize the resume identity recorded
+on its terminal buffer in `bp/agent-session--resuming-session-id'."
   (catch 'found
     (maphash
      (lambda (_id session)
@@ -3153,6 +4999,14 @@ SESSION-ID is the agent's own session id (a UUID) as recorded in
            (when (buffer-live-p buf)
              (throw 'found buf)))))
      bp/agent-sessions)
+    (maphash
+     (lambda (_id buf)
+       (when (and (buffer-live-p buf)
+                  (equal (buffer-local-value
+                          'bp/agent-session--resuming-session-id buf)
+                         session-id))
+         (throw 'found buf)))
+     bp/agent-session-id->buffer)
     nil))
 
 ;;;###autoload
@@ -3214,18 +5068,32 @@ one anyway."
               ("crash" "Emacs died")
               (other (or other "?"))))))
 
+(defun bp/agent-sessions--restore-title (buf row)
+  "Restore session-log ROW's saved title as a user override on BUF.
+The log records the title that labelled the old terminal.  Making it an
+override preserves that label when the resumed agent emits fresh OSC titles."
+  (when (buffer-live-p buf)
+    (when-let ((title (plist-get row :title)))
+      (bp/agent-sessions--set-title-override buf title)
+      (bp/agent-sessions--refresh-if-visible)))
+  buf)
+
 (defun bp/agent-sessions--restore-row (row)
   "Resume the session described by ROW, or jump to it if it is already open."
-  (let ((wt (plist-get row :worktree))
-        (sid (plist-get row :agent-sid))
-        (type (intern (plist-get row :agent-type))))
+  (let* ((wt (plist-get row :worktree))
+         (sid (plist-get row :agent-sid))
+         (type (intern (plist-get row :agent-type)))
+         (live (bp/agent-sessions--buffer-for-agent-session sid)))
     (cond
-     ((bp/agent-sessions--buffer-for-agent-session sid)
-      (pop-to-buffer (bp/agent-sessions--buffer-for-agent-session sid))
+     (live
+      (bp/agent-sessions--restore-title live row)
+      (pop-to-buffer live)
       (message "That session is already open."))
      ((not (file-directory-p wt))
       (message "Worktree is gone: %s" wt))
-     (t (bp/agent-session-start wt type sid)))))
+     (t
+      (bp/agent-sessions--restore-title
+       (bp/agent-session-start wt type sid) row)))))
 
 ;;;###autoload
 (defun bp/agent-sessions-restore ()
@@ -3305,9 +5173,9 @@ is spawned."
             (setq n (1+ n))))
         (message "Restoring %d session(s)…" (length todo)))))))
 
-(defun bp/agent-sessions--store-link-for (session)
-  "Store an `elisp:' resume link for SESSION via `org-link-store-props'.
-Return non-nil on success, nil when SESSION lacks the info to build a link."
+(defun bp/agent-sessions--session-org-link (session)
+  "Return (LINK . DESCRIPTION) for an `agent-session:' resume link to SESSION.
+Return nil when SESSION lacks the info to build a link."
   (when session
     (let* ((path (or (plist-get session :worktree-path)
                      (let ((buf (plist-get session :buffer)))
@@ -3321,31 +5189,54 @@ Return non-nil on success, nil when SESSION lacks the info to build a link."
                             (magit-get-current-branch)))))
            (title (bp/agent-sessions--session-title session)))
       (when (and path sid)
-        (org-link-store-props
-         :type "agent-session"
-         :link (format "agent-session:%s::%s::%s"
-                       agent sid (file-name-as-directory path))
-         :description (if branch
-                          (format "%s %s %s" branch agent (or title sid))
-                        (format "%s %s" agent (or title sid))))
-        t))))
+        (cons (format "agent-session:%s::%s::%s"
+                      agent sid (file-name-as-directory path))
+              (if branch
+                  (format "%s %s %s" branch agent (or title sid))
+                (format "%s %s" agent (or title sid))))))))
+
+(defun bp/agent-sessions--file-org-link (path)
+  "Return (LINK . DESCRIPTION) for an Org `file:' link to PATH, or nil.
+A shared-file row is a pointer to a file, so the useful link is the ordinary
+one any other buffer would produce — not something that goes through this
+package.  The description is the file name alone, extension included: the row
+already sits under the session that shared it, and the path it came from is
+rarely what the surrounding prose wants to read."
   (when (and path (not (string-empty-p path)))
+    (cons (concat "file:" (abbreviate-file-name path))
+          (file-name-nondirectory (directory-file-name path)))))
+
+(defun bp/agent-sessions--external-org-link (link)
+  "Return (LINK . DESCRIPTION) for shared external LINK, or nil."
+  (let ((url (plist-get link :url)))
+    (when (and url (not (string-empty-p url)))
+      (cons url (or (plist-get link :label) url)))))
+
+(defun bp/agent-sessions--store-org-link (type link)
+  "Store LINK, a (LINK . DESCRIPTION) pair, as an Org link of TYPE.
+Return non-nil when LINK was stored."
+  (when link
+    (org-link-store-props :type type :link (car link) :description (cdr link))
     t))
 
+(defun bp/agent-sessions--store-link-for (session)
+  "Store an `agent-session:' resume link for SESSION via `org-link-store-props'.
+Return non-nil on success, nil when SESSION lacks the info to build a link."
+  (bp/agent-sessions--store-org-link
+   "agent-session" (bp/agent-sessions--session-org-link session)))
 
 (defun bp/agent-sessions--store-file-link (path)
-  "Store an Org `file:' link to PATH, described by its bare file name.
-Return non-nil on success.  A shared-file row is a pointer to a file, so the
-useful link is the ordinary one any other buffer would produce — not something
-that goes through this package.  The description is the file name alone,
-extension included: the row already sits under the session that shared it, and
-the path it came from is rarely what the surrounding prose wants to read."
-  (when (and path (not (string-empty-p path)))
-    (org-link-store-props
-     :type "file"
-     :link (concat "file:" (abbreviate-file-name path))
-     :description (file-name-nondirectory (directory-file-name path)))
-    t))
+  "Store an Org `file:' link to PATH.  Return non-nil on success."
+  (bp/agent-sessions--store-org-link
+   "file" (bp/agent-sessions--file-org-link path)))
+
+(defun bp/agent-sessions--store-external-link (link)
+  "Store shared external LINK as an ordinary HTTP(S) Org link."
+  (let ((url (plist-get link :url)))
+    (bp/agent-sessions--store-org-link
+     (if (and url (string-prefix-p "https://" url)) "https" "http")
+     (bp/agent-sessions--external-org-link link))))
+
 (defun bp/agent-sessions--parse-session-link (link)
   "Return (AGENT SESSION-ID WORKTREE) parsed from LINK, or nil.
 LINK may include the `agent-session:' prefix or only its Org handler payload."
@@ -3369,22 +5260,174 @@ the confirmation prompt Org shows before running arbitrary elisp."
 
 (defun bp/agent-sessions--org-store-link (&optional _interactive)
   "Store a link for the dashboard row at point, or for the session around point.
-A shared-file row stores a plain `file:' link to that file; a session row (or a
-terminal buffer with a live session, keyed by the buffer-local
-`bp/agent-session-id') stores an `agent-session:' link that resumes it.
-Registered as the `:store' handler for `org-store-link'."
-  (if-let* (((derived-mode-p 'bp/agent-sessions-mode))
-            (file (bp/agent-sessions--file-at-point)))
-      ;; A shared-file row links to the file, not to the session that shared
-      ;; it.  Checked first because a file row is nested *inside* a session
-      ;; row, so the session is what point would otherwise resolve to.
-      (bp/agent-sessions--store-file-link (nth 1 file))
+A shared file or external URL stores its ordinary link; a session row (or a
+terminal buffer with a live session) stores an `agent-session:' resume link."
+  (cond
+   ((and (derived-mode-p 'bp/agent-sessions-mode)
+         (bp/agent-sessions--link-at-point))
+    (bp/agent-sessions--store-external-link
+     (nth 2 (bp/agent-sessions--link-at-point))))
+   ((and (derived-mode-p 'bp/agent-sessions-mode)
+         (bp/agent-sessions--file-at-point))
+    ;; Attachments are nested inside a session row, so resolve them first.
+    (bp/agent-sessions--store-file-link
+     (nth 1 (bp/agent-sessions--file-at-point))))
+   (t
     (bp/agent-sessions--store-link-for
      (cond ((derived-mode-p 'bp/agent-sessions-mode)
             (bp/agent-sessions--session-at-point))
            (bp/agent-session-id
-            (gethash bp/agent-session-id bp/agent-sessions))))))
+            (gethash bp/agent-session-id bp/agent-sessions)))))))
 
+(defun bp/agent-sessions--org-entry (heading note-keys indent)
+  "Return an Org list item for HEADING with its note, indented by INDENT.
+HEADING is a (LINK . DESCRIPTION) pair, or a plain string for a heading with
+nothing to link to.  The note found under NOTE-KEYS becomes the item's body."
+  (concat indent "- "
+          (if (consp heading)
+              (org-link-make-string (car heading) (cdr heading))
+            heading)
+          "\n"
+          (when-let ((found (bp/agent-sessions--note-find note-keys)))
+            (mapconcat (lambda (line) (concat indent "  " line "\n"))
+                       (split-string (cdr found) "\n")
+                       ""))))
+
+(defun bp/agent-sessions--row-sections (sections)
+  "Return the session-row sections among SECTIONS."
+  (seq-filter (lambda (section)
+                (eq (oref section type) 'bp/agent-session-row))
+              sections))
+
+(defun bp/agent-sessions--row-parent (row rows)
+  "Return the section among ROWS that session ROW is nested under, or nil.
+A fork is rendered as a sibling row indented under its parent rather than
+inside it, so this recovers the nesting the way
+`bp/agent-sessions--insert-entries' decides it: the parent is another row
+carrying the session id ROW was branched from."
+  (when-let* ((session (bp/agent-sessions--session-for-id (oref row value)))
+              (psid (car (plist-get session :branched-from))))
+    (seq-find (lambda (other)
+                (and (not (eq other row))
+                     (equal psid (plist-get (bp/agent-sessions--session-for-id
+                                             (oref other value))
+                                            :agent-session-id))))
+              rows)))
+
+(defun bp/agent-sessions--org-tree (section indent &optional visited)
+  "Return dashboard SECTION and everything under it as an Org list.
+INDENT is the indentation of SECTION's own item.  A session contributes its
+links and files from the data they render from, so a folded row still copies
+whole, followed by the forks nested under it; repo, worktree and folder
+headings recurse through their child sections.  VISITED holds the rows
+already emitted, so a fork cycle cannot recurse forever or copy a row twice."
+  (let ((value (oref section value))
+        (child-indent (concat indent "  "))
+        (visited (or visited (make-hash-table :test 'eq))))
+    (pcase (oref section type)
+      ('bp/agent-session-row
+       (when-let ((session (and (not (gethash section visited))
+                                (bp/agent-sessions--session-for-id value))))
+         (puthash section t visited)
+         (concat
+          (bp/agent-sessions--org-entry
+           (or (bp/agent-sessions--session-org-link session)
+               (bp/agent-sessions--session-short-label session))
+           (bp/agent-sessions--session-note-keys session)
+           indent)
+          (mapconcat (lambda (link)
+                       (bp/agent-sessions--org-entry
+                        (bp/agent-sessions--external-org-link link)
+                        (list (bp/agent-sessions--link-note-key
+                               (plist-get link :url)))
+                        child-indent))
+                     (bp/agent-sessions--session-links session)
+                     "")
+          (mapconcat (lambda (file)
+                       (let ((path (plist-get file :path)))
+                         (bp/agent-sessions--org-entry
+                          (bp/agent-sessions--file-org-link path)
+                          (list (bp/agent-sessions--file-note-key path))
+                          child-indent)))
+                     (bp/agent-sessions--session-files session)
+                     "")
+          (let ((rows (when-let ((parent (oref section parent)))
+                        (bp/agent-sessions--row-sections
+                         (oref parent children)))))
+            (mapconcat (lambda (row)
+                         (when (eq (bp/agent-sessions--row-parent row rows)
+                                   section)
+                           (bp/agent-sessions--org-tree
+                            row child-indent visited)))
+                       rows
+                       "")))))
+      ('bp/agent-session-link
+       (when-let* ((row (oref section parent))
+                   (session (bp/agent-sessions--session-for-id
+                             (oref row value)))
+                   (link (seq-find (lambda (link)
+                                     (equal (plist-get link :url) value))
+                                   (bp/agent-sessions--session-links session))))
+         (bp/agent-sessions--org-entry
+          (bp/agent-sessions--external-org-link link)
+          (list (bp/agent-sessions--link-note-key value))
+          indent)))
+      ('bp/agent-session-file
+       (bp/agent-sessions--org-entry
+        (bp/agent-sessions--file-org-link value)
+        (list (bp/agent-sessions--file-note-key value))
+        indent))
+      ((and type (or 'bp/agent-session-repo 'bp/agent-session-worktree
+                     'bp/agent-session-folder))
+       (concat
+        (bp/agent-sessions--org-entry
+         (pcase type
+           ('bp/agent-session-repo (plist-get value :name))
+           ('bp/agent-session-worktree (plist-get value :label))
+           (_ (or (plist-get (bp/agent-sessions--folder value) :name)
+                  "No folder")))
+         (pcase type
+           ('bp/agent-session-repo
+            (list (bp/agent-sessions--repo-note-key value)))
+           ('bp/agent-session-worktree
+            (list (bp/agent-sessions--worktree-note-key value))))
+         indent)
+        (let* ((children (seq-remove
+                          (lambda (child)
+                            (eq (oref child type) 'bp/agent-session-note))
+                          (oref section children)))
+               (rows (bp/agent-sessions--row-sections children)))
+          (concat
+           ;; Forks are emitted under their parent, not where they sit here.
+           (mapconcat (lambda (child)
+                        (unless (and (memq child rows)
+                                     (bp/agent-sessions--row-parent child rows))
+                          (bp/agent-sessions--org-tree
+                           child child-indent visited)))
+                      children
+                      "")
+           ;; Safety net, as in `bp/agent-sessions--insert-entries': a fork
+           ;; cycle has no root to be reached from.
+           (mapconcat (lambda (row)
+                        (bp/agent-sessions--org-tree row child-indent visited))
+                      rows
+                      ""))))))))
+
+(defun bp/agent-sessions-copy-tree ()
+  "Copy the dashboard subtree at point to the kill ring as an Org list.
+Sessions become `agent-session:' links with their forks nested under them,
+shared links and files their ordinary Org links, and every note the indented
+body of the item it belongs to."
+  (interactive)
+  (let ((section (magit-current-section)))
+    (when (and section (eq (oref section type) 'bp/agent-session-note))
+      (setq section (oref section parent)))
+    (let ((tree (and section (bp/agent-sessions--org-tree section ""))))
+      (if (or (null tree) (string-empty-p tree))
+          (message "Nothing to copy at point.")
+        (kill-new tree)
+        (message "Copied %d Org list lines"
+                 (length (split-string tree "\n" t)))))))
 
 (defun bp/agent-sessions--sync-default-directory ()
   "Track the worktree/repo at point in `default-directory'.
@@ -3397,7 +5440,8 @@ This makes `C-x p' project commands (and anything else keyed off
 
 (define-derived-mode bp/agent-sessions-mode magit-section-mode "Agent-Sessions"
   "Major mode listing Claude/Codex sessions running in vterm, as a
-repo > worktree > session tree with foldable sections (TAB to fold/unfold)."
+repo > worktree > session tree, or repo > folder > session with `f'.
+Sections fold with TAB; Shift+TAB toggles overview; `F' manages folders."
   (add-hook 'post-command-hook
             #'bp/agent-sessions--sync-default-directory nil t))
 
@@ -4069,6 +6113,8 @@ command instead of sending it to an agent."
                                     (bp/agent-sessions--entry-created a))
                      t))
                   ((bp/agent-sessions--entry-created b) nil)
+                  (t (string< (bp/agent-sessions--entry-terminal-id a)
+                              (bp/agent-sessions--entry-terminal-id b))))))))
 
 (defun bp/agent-sessions--entry-shared-file (entry truename)
   "Return ENTRY's shared-file record for TRUENAME, or nil."
@@ -4269,7 +6315,7 @@ RULES
   `checkout', `rebase' or `stash' — unless the task says this worktree is
   yours.  The index and HEAD are shared by everyone in a worktree, so staging
   anything would clobber a co-tenant's work in progress.
-- `emacs-share-file FILE \"why\"' hands a file to the human in the dashboard.
+- `emacs-share file FILE \"why\"' hands a file to the human in the dashboard.
   That is for the human, and is not a substitute for your final report.
 
 === YOUR TASK ===
@@ -4480,6 +6526,9 @@ old customisation keeps working."
         (setq-local bp/agent-session--branched-from
                     (cons parent-sid
                           (bp/agent-sessions--session-short-label coordinator))))
+      (setq-local bp/agent-orchestration-coordinator coordinator-id))
+    (when (and title (not (string-empty-p title)))
+      (bp/agent-sessions--set-title-override buf title))))
 
 (defun bp/agent-orchestration-spawn (coordinator-id type worktree task
                                                     &optional title model from)
@@ -5110,17 +7159,30 @@ its backlog reaches it."
       buf)))
 
 (define-key bp/agent-sessions-mode-map (kbd "RET") #'bp/agent-sessions-jump)
+(define-key bp/agent-sessions-mode-map (kbd "d") #'bp/agent-sessions-show-file-diff)
 (define-key bp/agent-sessions-mode-map (kbd "v") #'bp/agent-sessions-display)
+(define-key bp/agent-sessions-mode-map (kbd "V") #'bp/agent-sessions-display-or-browse)
+(define-key bp/agent-sessions-mode-map (kbd "w") #'bp/agent-sessions-copy-attachment)
+(define-key bp/agent-sessions-mode-map (kbd "W") #'bp/agent-sessions-copy-tree)
 (define-key bp/agent-sessions-mode-map (kbd "k") #'bp/agent-sessions-kill)
 (define-key bp/agent-sessions-mode-map (kbd "b") #'bp/agent-sessions-branch)
 (define-key bp/agent-sessions-mode-map (kbd "B") #'bp/agent-sessions-mark-parent)
+(define-key bp/agent-sessions-mode-map (kbd "D")
+  #'bp/agent-sessions-submission-diff-or-detach-parent)
 (define-key bp/agent-sessions-mode-map (kbd "t") #'bp/agent-sessions-cycle-state)
 (define-key bp/agent-sessions-mode-map (kbd "SPC") #'bp/agent-sessions-edit-title)
 (define-key bp/agent-sessions-mode-map (kbd "u") #'bp/agent-sessions-mark-unread)
+(define-key bp/agent-sessions-mode-map (kbd "m") #'bp/agent-sessions-mark-unread)
 (define-key bp/agent-sessions-mode-map (kbd "e") #'bp/agent-sessions-edit-note)
 (define-key bp/agent-sessions-mode-map (kbd "R") #'bp/agent-sessions-restore)
 (define-key bp/agent-sessions-mode-map (kbd "g") #'bp/agent-sessions-refresh)
+(define-key bp/agent-sessions-mode-map (kbd "<backtab>")
+  #'bp/agent-sessions-toggle-overview)
+(define-key bp/agent-sessions-mode-map (kbd "<S-tab>")
+  #'bp/agent-sessions-toggle-overview)
 (define-key bp/agent-sessions-mode-map (kbd "s") #'bp/agent-sessions-toggle-sort)
+(define-key bp/agent-sessions-mode-map (kbd "f") #'bp/agent-sessions-toggle-folder-view)
+(define-key bp/agent-sessions-mode-map (kbd "F") #'bp/agent-sessions-folder-action)
 (define-key bp/agent-sessions-mode-map (kbd "+") #'bp/agent-sessions-new-vterm)
 (define-key bp/agent-sessions-mode-map (kbd "n") #'bp/agent-sessions-next)
 (define-key bp/agent-sessions-mode-map (kbd "p") #'bp/agent-sessions-prev)
