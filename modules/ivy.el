@@ -6,8 +6,16 @@
 
 (use-package swiper
   :ensure t
+  :bind (:map swiper-map
+	 ("M-c" . swiper-mc))
   :bind (("C-s" . swiper-isearch)
 	 ("C-r" . swiper-isearch-backward)))
+
+;; To use with multiple-cursors
+(use-package phi-search
+  :ensure t
+  :bind (("C-c C-s" . phi-search)
+	 ("C-c C-s" . phi-search-backward)))
 
 ;; Remembers history for M-x
 (use-package smex
