@@ -31,6 +31,10 @@ need_session() {
   command -v emacsclient >/dev/null 2>&1 || die "emacsclient not found"
 }
 
+# Codex tool shells carry the durable thread identity even when the shared
+# daemon retained another terminal's EMACS_AGENT_SESSION_ID.
+agent_session_id=${CODEX_THREAD_ID:-${CODEX_SESSION_ID:-}}
+
 # Escape a value for interpolation into an elisp string literal.
 esc() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
 
@@ -78,6 +82,7 @@ case "$mode" in
     esac
 
     need_session
+    output=$(call "(bp/agent-sessions-share-file \"$(esc "$EMACS_AGENT_SESSION_ID")\" \"$(esc "$absolute_path")\" \"$(esc "$label")\" \"$(esc "$agent_session_id")\")")
     case "$output" in
       Shared*) printf '%s\n' "$output" ;;
       *) die "$output" ;;
@@ -103,6 +108,7 @@ case "$mode" in
     label=${3:-}
 
     need_session
+    output=$(call "(bp/agent-sessions-share-link \"$(esc "$EMACS_AGENT_SESSION_ID")\" \"$(esc "$kind")\" \"$(esc "$url")\" \"$(esc "$label")\" \"$(esc "$agent_session_id")\")")
     case "$output" in
       Linked*) printf '%s\n' "$output" ;;
       *) die "$output" ;;

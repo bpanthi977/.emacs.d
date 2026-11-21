@@ -1,10 +1,10 @@
-;; Dashboard for Claude/Codex sessions running in vterm buffers.
+;; Dashboard for Claude/Codex/Pi sessions running in vterm buffers.
 ;;
 ;; Every vterm buffer gets a unique id injected into its shell environment
 ;; (EMACS_AGENT_SESSION_ID) at creation time, with no special launcher command
-;; needed. Hook scripts for Claude Code / Codex forward their event payloads
-;; to `bp/agent-hook-notify' via emacsclient, keyed by that id, so sessions
-;; sharing a worktree still resolve to the right buffer.
+;; needed. Hook scripts for Claude Code / Codex, and a Pi extension, forward
+;; their event payloads to `bp/agent-hook-notify' via emacsclient, keyed by
+;; that id, so sessions sharing a worktree still resolve to the right buffer.
 
 (require 'cl-lib)
 (require 'seq)
@@ -166,7 +166,8 @@ Toggle with `s' \(`bp/agent-sessions-toggle-sort').")
 The other view displays repo → worktree → session.  Toggle with `f'.")
 
 (defconst bp/agent-session-status-alist
-  '((claude . ((Stop . needs-attention)
+  '((claude . ((SessionStart . stopped)
+               (Stop . needs-attention)
                (StopFailure . error)
                (PermissionRequest . needs-attention)
                (TeammateIdle . needs-attention)
@@ -174,13 +175,23 @@ The other view displays repo → worktree → session.  Toggle with `f'.")
     (codex . ((Stop . needs-attention)
               (PermissionRequest . needs-attention)
               (UserPromptSubmit . running)
-              (agent-turn-complete . needs-attention))))
+              (agent-turn-complete . needs-attention)))
+    (pi . ((SessionStart . stopped)
+           (Stop . needs-attention)
+           (StopFailure . error)
+           (UserPromptSubmit . running))))
   "Per-agent hook/notify event name -> status.
 Events not listed here (PreToolUse, PostToolUse, SubagentStart/Stop, etc.)
 leave a session's existing status unchanged rather than resetting it — hook
 invocations are independent async processes with no delivery ordering
 guarantee, so an informational event can arrive after Stop/PermissionRequest
-and must not clobber the needs-attention state those set.")
+and must not clobber the needs-attention state those set.  SessionStart maps
+to `stopped', never `running': pi and Claude fire it when the TUI opens at an
+idle prompt (and Claude on --resume), so a brand-new session would otherwise
+fall through to the `running' default in `bp/agent-hook-notify' and read as
+mid-turn while sitting at its prompt.  No entry for Codex — its SessionStart
+fires lazily on the first prompt, in the same instant as UserPromptSubmit, so
+mapping it would risk clobbering `running' under unordered delivery.")
 
 (defun bp/agent-session--status-for (agent-type event-name)
   "Return the status EVENT-NAME maps to, or nil if it shouldn't change status."
@@ -466,15 +477,96 @@ the body names the agent type, state, and its terminal title (task summary)."
              (if (eq status 'error) "error" "needs attention")
              title))))
 
+(defun bp/agent-sessions--hook-buffer (transport-id agent-type payload)
+  "Resolve a hook PAYLOAD to its terminal buffer.
+TRANSPORT-ID is the `EMACS_AGENT_SESSION_ID' inherited by the hook process.
+Normally it names the terminal directly, and for any agent but Codex that is
+taken as authoritative.  A shared agent daemon can retain an
+older terminal's environment, however, so prefer an already-known agent
+session id and reject a direct buffer that belongs to a different session.
+As a final fallback, return the unique unresolved AGENT-TYPE terminal whose
+directory matches PAYLOAD's `cwd'; return nil rather than guess if ambiguous."
+  (let* ((agent-sid (or (and payload (gethash "session_id" payload))
+                        (and payload (gethash "conversation_id" payload))
+                        (and payload (gethash "thread_id" payload))))
+         (cwd (and payload (gethash "cwd" payload)))
+         (canonical-cwd (and cwd (ignore-errors
+                                   (bp/agent-sessions--canonical-path cwd))))
+         (direct (gethash transport-id bp/agent-session-id->buffer))
+         (known
+          (and agent-sid
+               (catch 'found
+                 (maphash
+                  (lambda (_id session)
+                    (when (equal agent-sid
+                                 (plist-get session :agent-session-id))
+                      (let ((buf (plist-get session :buffer)))
+                        (when (buffer-live-p buf)
+                          (throw 'found buf)))))
+                  bp/agent-sessions)
+                 nil))))
+    (or known
+        (and (buffer-live-p direct)
+             ;; Only Codex's shared daemon can carry another terminal's id.
+             ;; Every other agent's hook is a child of the agent in DIRECT,
+             ;; whose new id after `/clear' must not get its events dropped.
+             (not (equal agent-type "codex"))
+             direct)
+        (and (buffer-live-p direct)
+             (let ((existing (gethash transport-id bp/agent-sessions)))
+               (and (or (null agent-sid)
+                        (null (plist-get existing :agent-session-id))
+                        (equal agent-sid
+                               (plist-get existing :agent-session-id)))
+                    (or (null canonical-cwd)
+                        (equal canonical-cwd
+                               (ignore-errors
+                                 (bp/agent-sessions--canonical-path
+                                  (buffer-local-value 'default-directory
+                                                      direct)))))
+                    direct)))
+        (and canonical-cwd
+             (let (candidates)
+               (maphash
+                (lambda (id buf)
+                  (when (buffer-live-p buf)
+                    (let ((existing (gethash id bp/agent-sessions)))
+                      (when (and
+                             ;; A terminal already owned by another durable
+                             ;; session cannot be this hook's origin.
+                             (or (null (plist-get existing :agent-session-id))
+                                 (equal agent-sid
+                                        (plist-get existing :agent-session-id)))
+                             (equal canonical-cwd
+                                    (ignore-errors
+                                      (bp/agent-sessions--canonical-path
+                                       (buffer-local-value 'default-directory
+                                                           buf))))
+                             (equal agent-type
+                                    (or (plist-get existing :agent-type)
+                                        (bp/agent-sessions--foreground-command
+                                         buf))))
+                        (push buf candidates)))))
+                bp/agent-session-id->buffer)
+               (and (= (length candidates) 1) (car candidates)))))))
+
 (defun bp/agent-hook-notify (session-id agent-type payload-file)
-  "Entry point called via emacsclient from the Claude/Codex hook scripts."
-  (let* ((buf (gethash session-id bp/agent-session-id->buffer))
-         (payload (unwind-protect
+  "Entry point called via emacsclient from the Claude/Codex hook scripts.
+SESSION-ID is the terminal id inherited by the hook process.  The payload's
+agent session id and working directory can reroute a stale daemon environment
+to the terminal that actually owns the event."
+  (let* ((payload (unwind-protect
                       (ignore-errors
                         (json-parse-string (with-temp-buffer
                                               (insert-file-contents payload-file)
                                               (buffer-string))))
                     (ignore-errors (delete-file payload-file))))
+         (buf (bp/agent-sessions--hook-buffer session-id agent-type payload))
+         ;; From here onward SESSION-ID must mean the actual terminal being
+         ;; updated, not the possibly stale environment value the hook used.
+         (session-id (or (and (buffer-live-p buf)
+                              (buffer-local-value 'bp/agent-session-id buf))
+                         session-id))
          (event-name (or (and payload (gethash "hook_event_name" payload))
                          (and payload (gethash "type" payload))
                          "unknown"))
@@ -493,15 +585,26 @@ the body names the agent type, state, and its terminal title (task summary)."
          ;; Path to this session's transcript (Claude includes it on every
          ;; hook, notably SessionStart). Used to auto-detect fork parentage.
          (transcript-path (or (and payload (gethash "transcript_path" payload))
-    (when (buffer-live-p buf)
                               (and existing (plist-get existing :transcript-path))))
          ;; Claude leaves the submitted text rendered in its composer while a
          ;; turn starts and sometimes after it stops.  Remember the hook's
          ;; authoritative value so that retained text is not mistaken for a
          ;; new human draft.  Other events preserve the last submitted value.
          (submitted-prompt
+          (or (and (equal event-name "UserPromptSubmit")
                    payload
                    (gethash "user_prompt" payload))
+              (and existing (plist-get existing :submitted-prompt))))
+         ;; `/clear' ends one conversation and starts another in the same
+         ;; terminal, and delivery is unordered, so the old one's `SessionEnd'
+         ;; can land after the new one has taken over.  Applied, it would
+         ;; close the new conversation's log row and put the old id back.
+         (stale-end (and (equal event-name "SessionEnd")
+                         payload existing
+                         (let ((sid (gethash "session_id" payload))
+                               (current (plist-get existing :agent-session-id)))
+                           (and sid current (not (equal sid current)))))))
+    (when (and (buffer-live-p buf) (not stale-end))
       (let* ((info (bp/agent-session--repo-info (buffer-local-value 'default-directory buf)))
              ;; Parentage, in priority order: what a previous event already
              ;; recorded; the marker a fresh `b'-branch left on the buffer; or,
@@ -691,6 +794,21 @@ agent hook yet, or nil if no live buffer is registered for ID."
         (and (buffer-live-p buf)
              (bp/agent-sessions--terminal-session buf)))))
 
+(defun bp/agent-sessions--session-for-agent-id (agent-session-id)
+  "Return the live session whose durable id is AGENT-SESSION-ID.
+Unlike a terminal id, this identity belongs to the Claude or Codex session and
+therefore remains trustworthy when a shared agent daemon has retained an older
+terminal's environment."
+  (catch 'found
+    (maphash
+     (lambda (_id session)
+       (when (and (equal agent-session-id
+                         (plist-get session :agent-session-id))
+                  (buffer-live-p (plist-get session :buffer)))
+         (throw 'found session)))
+     bp/agent-sessions)
+    nil))
+
 (defun bp/agent-sessions-terminal-id-for-agent (agent-session-id)
   "Return the terminal id of the live session whose durable id is AGENT-SESSION-ID.
 Returns \"\" when no live session has that id.  `emacs-agent' calls this over
@@ -707,6 +825,15 @@ terminal that started it, not of the session issuing the command."
          bp/agent-sessions)
         nil)
       ""))
+
+(defun bp/agent-sessions--session-for-share (terminal-id agent-session-id)
+  "Resolve a share command's TERMINAL-ID and AGENT-SESSION-ID.
+Prefer a supplied durable agent identity.  If it is unknown, return nil rather
+than fall back to TERMINAL-ID: a stale daemon environment can name a different
+live terminal, and attaching work to that session would be worse than failing."
+  (if (and agent-session-id (not (string-empty-p agent-session-id)))
+      (bp/agent-sessions--session-for-agent-id agent-session-id)
+    (bp/agent-sessions--session-for-id terminal-id)))
 
 (defun bp/agent-sessions--session-title (session)
   "The title for SESSION's buffer: the user override if any, else the OSC title."
@@ -813,8 +940,32 @@ contained in the child's; the largest such match is the immediate parent."
             (cons (plist-get best :agent-session-id)
                   (bp/agent-sessions--session-short-label best))))))))
 
+(defun bp/agent-sessions--tpgid-readable-p (buf)
+  "Non-nil when BUF's terminal platform reports a foreground process group.
+Platforms whose `process-attributes' omits `tpgid' make every
+`bp/agent-sessions--foreground-command' call return nil, so there a nil means
+`unknown', not `shell in front' — and `running' must not be demoted on it."
+  (and (buffer-live-p buf)
        (let* ((pid (bp/agent-sessions--terminal-pid buf))
               (attrs (and pid (ignore-errors (process-attributes pid)))))
+         (and attrs (assq 'tpgid attrs)))))
+
+(defun bp/agent-sessions--reconcile-status (session buf)
+  "SESSION with `running' demoted to `stopped' when BUF's terminal is idle.
+Status only becomes `running' from a hook event, and only a later event moves
+it off — so an agent killed mid-turn (no `session_shutdown' / `SessionEnd'
+fires) freezes there forever.  Demote only when the platform can name a
+foreground group and it is empty: the shell then owns the terminal, so no turn
+can be in progress.  An idle pi still holds the foreground with its TUI, which
+is why the SessionStart mapping in `bp/agent-session-status-alist' — not this
+— covers the idle-at-prompt case.  Returns a copy; the registry stays the
+hook's record, exactly as `bp/agent-sessions--unread-status' does."
+  (if (and (eq (plist-get session :status) 'running)
+           (bp/agent-sessions--tpgid-readable-p buf)
+           (not (bp/agent-sessions--foreground-command buf)))
+      (plist-put (copy-sequence session) :status 'stopped)
+    session))
+
 (defun bp/agent-sessions--unread-status (session buf)
   "SESSION with its status forced to `needs-attention' if BUF is marked unread.
 Returns a *copy* — the registry plist must not be mutated, or the mark would
@@ -840,7 +991,9 @@ buffer killed without running local hooks)."
        (let ((buf (plist-get session :buffer)))
          (if (buffer-live-p buf)
              (push (list :id id
-                         :session (bp/agent-sessions--unread-status session buf)
+                         :session (bp/agent-sessions--unread-status
+                                   (bp/agent-sessions--reconcile-status session buf)
+                                   buf)
                          :title (or (buffer-local-value 'bp/agent-session-title-override buf)
                                     (buffer-local-value 'bp/agent-session-title buf)))
                    entries)
@@ -1496,28 +1649,70 @@ caller goes through here rather than touching `bp/agent-sessions--db'."
                       ON CONFLICT(key) DO UPDATE SET value = excluded.value"
                   (list key (format "%s" value))))
 
+(defun bp/agent-sessions--emacs-alive-p (emacs-sid)
+  "Non-nil when the Emacs that minted terminal id EMACS-SID is still running.
+Terminal ids are \"PID-COUNTER\", so the pid is read off the front.  A live
+process with that pid counts only if it is an Emacs, which keeps a reused pid
+from shielding a dead Emacs's rows forever."
+  (let ((pid (string-to-number emacs-sid)))
+    (or (= pid (emacs-pid))
+        (let ((comm (alist-get 'comm (and (> pid 0)
+                                          (process-attributes pid)))))
+          (and comm (string-match-p "emacs" (downcase comm)))))))
+
 (defun bp/agent-sessions--db-reap (db)
   "Close session rows that a previous Emacs left open by dying.
-This is the whole crash-detection scheme, and it works because there is only
-ever one Emacs: a freshly started one has no sessions of its own yet, so any
-row still marked open must belong to an Emacs that never ran its
-`kill-emacs-hook'.  The heartbeat in `meta' dates the death; without one we
-fall back to when the session opened."
+This is the whole crash-detection scheme: a row still marked open belongs to
+an Emacs that never ran its `kill-emacs-hook' — unless that Emacs is still
+running.  Rows whose Emacs is alive are left alone, because any second Emacs
+that opens this file (a batch test run, most of all) would otherwise close a
+live Emacs's sessions as crashed.  Its terminals never reopen a closed row,
+so those sessions would drop out of the log for good: restore-previous would
+miss them, and killing them later could not be recorded.  The heartbeat in
+`meta' dates the death; without one we fall back to when the session opened."
   (let ((seen (bp/agent-sessions--meta-get db "last_seen")))
-    (sqlite-execute db
-                    "UPDATE sessions
-                        SET closed_at = COALESCE(?, opened_at),
-                            close_reason = 'crash'
-                      WHERE closed_at IS NULL"
-                    (list (and seen (string-to-number seen))))))
+    (dolist (row (sqlite-select db "SELECT DISTINCT emacs_sid FROM sessions
+                                     WHERE closed_at IS NULL"))
+      (unless (bp/agent-sessions--emacs-alive-p (car row))
+        (sqlite-execute db
+                        "UPDATE sessions
+                            SET closed_at = COALESCE(?, opened_at),
+                                close_reason = 'crash'
+                          WHERE closed_at IS NULL AND emacs_sid = ?"
+                        (list (and seen (string-to-number seen))
+                              (car row)))))))
 
 (defun bp/agent-sessions--db-heartbeat ()
   "Record that Emacs was alive just now, so a crash can be dated.
-Deliberately a no-op until the database has been opened for some other
+Also reasserts that its running sessions are, see
+`bp/agent-sessions--log-reopen-live'.  Deliberately a no-op until the database has been opened for some other
 reason — an Emacs with no agent sessions has nothing to date."
   (when (sqlitep bp/agent-sessions--db)
     (bp/agent-sessions--meta-set bp/agent-sessions--db
-                                 "last_seen" (bp/agent-sessions--now))))
+                                 "last_seen" (bp/agent-sessions--now))
+
+(defun bp/agent-sessions--log-reopen-live (db)
+  "Reopen any log row in DB that a terminal still running here points at.
+A terminal's current row is meant to be open for as long as the terminal is:
+every path that ends a session here also forgets the row.  So a closed row
+that a live terminal still holds was closed by someone else — a second Emacs
+reaping it as a crash, as the pre-`--emacs-alive-p' reap did — and left
+alone it would miss this Emacs's `emacs-exit' batch and drop out of
+restore-previous for good.  Run with the heartbeat, which `kill-emacs-hook'
+also stamps, so the rows are healed before that batch is written."
+  (let (rows)
+    (maphash (lambda (_id buf)
+               (when-let ((row (and (buffer-live-p buf)
+                                    (buffer-local-value
+                                     'bp/agent-session--log-row buf))))
+                 (push row rows)))
+             bp/agent-session-id->buffer)
+    (when rows
+      (sqlite-execute
+       db (format "UPDATE sessions SET closed_at = NULL, close_reason = NULL
+                    WHERE closed_at IS NOT NULL AND id IN (%s)"
+                  (mapconcat (lambda (_) "?") rows ", "))
+       rows))))
 
 ;;; Session log -------------------------------------------------------------
 ;;
@@ -2754,19 +2949,25 @@ Do not create a buffer for PATH, and never replace unsaved buffer changes."
         (revert-buffer t t)))))
 
 ;;;###autoload
-(defun bp/agent-sessions-share-file (session-id path &optional label)
+(defun bp/agent-sessions-share-file (session-id path &optional label
+                                                agent-session-id)
   "Attach PATH to the agent session running in terminal SESSION-ID.
-the terminal's EMACS_AGENT_SESSION_ID — the id the shell has — and resolving it
-to whatever session is running there happens here, the same split the hook path
-makes.  If an unmodified buffer already visits PATH, refresh it from disk;
-modified buffers are left alone so sharing can never discard unsaved work.
 The `emacs-share file' entry point calls over emacsclient, so SESSION-ID is
+the terminal's EMACS_AGENT_SESSION_ID — the id the shell has.  When
+AGENT-SESSION-ID is supplied, it is the agent's durable thread identity and
+takes precedence because a shared daemon can retain another terminal's id.
+If an unmodified buffer already visits PATH, refresh it from disk; modified
+buffers are left alone so sharing can never discard unsaved work.
 Returns a string for the caller to print: emacsclient is the agent's only
 channel back, so a failure has to be reported in the value, not signalled."
-  (let ((session (bp/agent-sessions--session-for-id session-id)))
+  (let ((session (bp/agent-sessions--session-for-share
+                  session-id agent-session-id)))
     (cond
      ((null session)
-      (format "No Emacs terminal registered for session id %s" session-id))
+      (if (and agent-session-id (not (string-empty-p agent-session-id)))
+          (format "No Emacs agent session registered for agent id %s"
+                  agent-session-id)
+        (format "No Emacs terminal registered for session id %s" session-id)))
      ((not (file-exists-p path))
       (format "No such file: %s" path))
      (t
@@ -2961,10 +3162,21 @@ its original display position."
     changed))
 
 ;;;###autoload
+(defun bp/agent-sessions-share-link (session-id kind url &optional label
+                                                agent-session-id)
   "Attach a typed external link to the session in terminal SESSION-ID.
 KIND is `linear' or `pr'; URL must be HTTP(S).  Re-registering the same value
+is idempotent.  AGENT-SESSION-ID, when supplied, is the durable agent thread
+identity and takes precedence over SESSION-ID.  Returns a printable status
+string for `emacs-share link'."
+  (let ((session (bp/agent-sessions--session-for-share
+                  session-id agent-session-id)))
     (cond
      ((null session)
+      (if (and agent-session-id (not (string-empty-p agent-session-id)))
+          (format "No Emacs agent session registered for agent id %s"
+                  agent-session-id)
+        (format "No Emacs terminal registered for session id %s" session-id)))
      ((not (assoc kind bp/agent-sessions--link-kind-labels))
       (format "Unknown link kind `%s'; expected linear or pr" kind))
      ((not (string-match-p "\\`https?://[^[:space:]]+\\'" url))
@@ -4929,14 +5141,16 @@ as the editable default so it can be tweaked before confirming."
 
 (defcustom bp/agent-session-resume-commands
   '((claude . "claude --resume %s")
-    (codex  . "codex resume %s"))
+    (codex  . "codex resume %s")
+    (pi     . "pi --session %s"))
   "Alist mapping AGENT-TYPE symbol to a shell command that resumes a session.
 The %s is replaced with the agent's own session id."
   :type '(alist :key-type symbol :value-type string))
 
 (defcustom bp/agent-session-branch-commands
   '((claude . "claude --resume %s --fork-session")
-    (codex  . "codex fork %s"))
+    (codex  . "codex fork %s")
+    (pi     . "pi --fork %s"))
   "Alist mapping AGENT-TYPE symbol to a shell command that branches a session.
 Branching forks the conversation into a new session that shares the parent's
 history but gets its own session id (`claude --fork-session' / `codex fork').
@@ -4984,6 +5198,11 @@ INITIAL-PROMPT is non-nil, submit it as the resumed session's first prompt."
               bp/agent-session-resume-commands nil initial-prompt)))
     (when (buffer-live-p buf)
       (with-current-buffer buf
+        (setq-local bp/agent-session--resuming-session-id session-id))
+      ;; Log the identity now rather than at the first hook: Codex fires none
+      ;; until its first prompt, so a resumed session left idle would
+      ;; otherwise stay an anonymous row that no restore can offer back.
+      (bp/agent-sessions--log-update buf (format "%s" agent-type) session-id))
     buf))
 
 (defun bp/agent-sessions--buffer-for-agent-session (session-id)
@@ -5078,6 +5297,18 @@ override preserves that label when the resumed agent emits fresh OSC titles."
       (bp/agent-sessions--refresh-if-visible)))
   buf)
 
+(defun bp/agent-sessions--log-resumable-p (row)
+  "Non-nil unless session-log ROW is a Claude session with nothing to resume.
+Claude reports its session id at `SessionStart', as soon as its TUI opens, but
+writes the transcript `--resume' reads only once a message is sent.  A session
+opened and never prompted is logged all the same, and resuming it fails with
+\"No conversation found\"."
+  (or (not (equal (plist-get row :agent-type) "claude"))
+      (file-expand-wildcards
+       (expand-file-name (format "projects/*/%s.jsonl"
+                                 (plist-get row :agent-sid))
+                         (or (getenv "CLAUDE_CONFIG_DIR") "~/.claude")))))
+
 (defun bp/agent-sessions--restore-row (row)
   "Resume the session described by ROW, or jump to it if it is already open."
   (let* ((wt (plist-get row :worktree))
@@ -5091,6 +5322,8 @@ override preserves that label when the resumed agent emits fresh OSC titles."
       (message "That session is already open."))
      ((not (file-directory-p wt))
       (message "Worktree is gone: %s" wt))
+     ((not (bp/agent-sessions--log-resumable-p row))
+      (message "Never prompted, nothing to resume: %s" sid))
      (t
       (bp/agent-sessions--restore-title
        (bp/agent-session-start wt type sid) row)))))
@@ -5140,12 +5373,14 @@ is spawned."
          (gone (seq-filter (lambda (r)
                              (not (file-directory-p (plist-get r :worktree))))
                            rows))
-         (todo (seq-difference rows (append live gone))))
+         (empty (seq-remove #'bp/agent-sessions--log-resumable-p
+                            (seq-difference rows (append live gone))))
+         (todo (seq-difference rows (append live gone empty))))
     (cond
      ((null rows) (message "No sessions were lost — nothing to restore."))
      ((null todo)
-      (message "Nothing to restore: %d already open, %d worktree(s) gone."
-               (length live) (length gone)))
+      (message "Nothing to restore: %d already open, %d worktree(s) gone, %d never prompted."
+               (length live) (length gone) (length empty)))
      (t
       (with-output-to-temp-buffer "*Agent Sessions Restore*"
         (princ (format "Sessions from the last Emacs (%s):\n\n"
@@ -5156,7 +5391,10 @@ is spawned."
           (princ (format "\nAlready open, will be skipped: %d\n" (length live))))
         (dolist (r gone)
           (princ (format "\nWorktree gone, cannot restore: %s\n"
-                         (plist-get r :worktree)))))
+                         (plist-get r :worktree))))
+        (when empty
+          (princ (format "\nNever prompted, nothing to resume: %d\n"
+                         (length empty)))))
       (when (yes-or-no-p (format "Restore %d session(s)? " (length todo)))
         ;; Staggered: each spawns a terminal and types into it, and firing them
         ;; all in one go leaves the shells racing their own startup.
@@ -5470,6 +5708,8 @@ Sections fold with TAB; Shift+TAB toggles overview; `F' manages folders."
 
 (defcustom bp/agent-orchestration-launch-commands
   '((claude . "claude %m \"$(cat %b)\"")
+    (codex  . "codex %m \"$(cat %b)\"")
+    (pi     . "pi %m \"$(cat %b)\""))
   "Shell command per agent type that starts a worker on a task brief.
 Rendered with `format-spec':
 
@@ -5491,6 +5731,8 @@ that type is refused rather than quietly run on the default model."
 
 (defcustom bp/agent-orchestration-model-flags
   '((claude . "--model %s")
+    (codex  . "--model %s")
+    (pi     . "--model %s"))
   "How each agent type spells \"run on this model\", with %s for the model name.
 This is what `%m' in `bp/agent-orchestration-launch-commands' expands to when a
 spawn names a model.  A type with no entry here takes no model, and a spawn
@@ -6092,6 +6334,8 @@ command instead of sending it to an agent."
                           (bp/agent-sessions--foreground-command buf))))
     (and foreground
          (not (equal (plist-get session :last-event) "SessionEnd"))
+         (or (member agent '("claude" "codex" "pi"))
+             (member (downcase foreground) '("claude" "codex" "pi"))))))
 
 (defun bp/agent-sessions--prompt-entry-viewed-at (entry)
   "Return when ENTRY's terminal was most recently selected, or nil."
@@ -7210,6 +7454,13 @@ its backlog reaches it."
   "Codex hooks file that `bp/agent-sessions-install' wires."
   :type 'file)
 
+(defcustom bp/agent-sessions-pi-extension-file
+  (expand-file-name "~/.pi/agent/extensions/agent-sessions-pi-hook.ts")
+  "Where `bp/agent-sessions-install' installs the Pi event forwarder.
+Pi has no hooks.json — extensions are plain files in this directory — so
+installation is a copy, and uninstallation a delete."
+  :type 'file)
+
 (defcustom bp/agent-sessions-claude-hook-events
   '("SessionStart" "SessionEnd" "UserPromptSubmit" "Stop" "StopFailure"
     "SubagentStop" "TeammateIdle"
@@ -7230,6 +7481,7 @@ noticed when the terminal dies or another session starts in it."
 
 (defconst bp/agent-sessions--claude-hook-script "agent-sessions-claude-hook.sh")
 (defconst bp/agent-sessions--codex-hook-script "agent-sessions-codex-hook.sh")
+(defconst bp/agent-sessions--pi-hook-script "agent-sessions-pi-hook.ts")
 
 (defun bp/agent-sessions--read-json (file)
   "Parse FILE as JSON into hash-tables + lists, or an empty object if absent.
@@ -7335,25 +7587,43 @@ Returns t if FILE was changed."
         (bp/agent-sessions--write-json file root)
         t))))
 
+(defun bp/agent-sessions--wire-pi (script)
+  "Install the Pi extension SCRIPT into `bp/agent-sessions-pi-extension-file'.
+Pi has no hooks config to edit; extensions are whole files in
+`~/.pi/agent/extensions/', so wiring is a fresh copy — re-running after
+editing the source self-heals."
+  (make-directory (file-name-directory bp/agent-sessions-pi-extension-file) t)
+  (copy-file script bp/agent-sessions-pi-extension-file t))
+
+(defun bp/agent-sessions--unwire-pi ()
+  "Remove the installed Pi extension.  Returns t if anything was removed."
+  (let ((file bp/agent-sessions-pi-extension-file))
+    (when (file-exists-p file)
+      (delete-file file)
+      t)))
+
 ;;;###autoload
 (defun bp/agent-sessions-install (&optional force)
-  "Wire this package's hooks into Claude Code and Codex.
-So a `claude'/`codex' run in any Emacs terminal reports to the dashboard,
+  "Wire this package's hooks into Claude Code, Codex, and Pi.
+So a `claude'/`codex'/`pi' run in any Emacs terminal reports to the dashboard,
 without depending on any external tool (e.g. orca).  Idempotent — re-run any
 time: after installing a second agent, moving this package, changing the hook
 event lists, or removing orca.  Only touches hook entries pointing at this
 package's own forwarder scripts; other hooks are left as-is.
 
-Wires Claude when `~/.claude' exists and Codex when `~/.codex' exists; with a
-prefix arg (FORCE) wires both regardless, creating the config as needed.  Also
-starts the Emacs server, which the hooks need to reach us."
+Wires Claude when `~/.claude' exists, Codex when `~/.codex' exists, and Pi
+when `~/.pi' exists; with a prefix arg (FORCE) wires all regardless,
+creating the config as needed.  Also starts the Emacs server, which the
+hooks need to reach us."
   (interactive "P")
   (let ((claude-script (expand-file-name bp/agent-sessions--claude-hook-script
                                          bp/agent-sessions--dir))
         (codex-script (expand-file-name bp/agent-sessions--codex-hook-script
                                         bp/agent-sessions--dir))
+        (pi-script (expand-file-name bp/agent-sessions--pi-hook-script
+                                     bp/agent-sessions--dir))
         done)
-    (dolist (s (list claude-script codex-script))
+    (dolist (s (list claude-script codex-script pi-script))
       (if (file-exists-p s)
           (set-file-modes s #o755)
         (error "agent-sessions: missing hook script %s" s)))
@@ -7367,15 +7637,18 @@ starts the Emacs server, which the hooks need to reach us."
       (bp/agent-sessions--wire bp/agent-sessions-codex-hooks-file
                                bp/agent-sessions-codex-hook-events codex-script)
       (push "Codex" done))
+    (when (or force (file-directory-p "~/.pi"))
+      (bp/agent-sessions--wire-pi pi-script)
+      (push "Pi" done))
     (unless (server-running-p) (server-start))
     (if done
         (message "agent-sessions: wired %s (server running)"
                  (string-join (nreverse done) " + "))
-      (message "agent-sessions: neither ~/.claude nor ~/.codex found; use `C-u M-x bp/agent-sessions-install' to force"))))
+      (message "agent-sessions: neither ~/.claude, ~/.codex, nor ~/.pi found; use `C-u M-x bp/agent-sessions-install' to force"))))
 
 ;;;###autoload
 (defun bp/agent-sessions-uninstall ()
-  "Remove this package's hooks from Claude Code and Codex config.
+  "Remove this package's hooks from Claude Code, Codex, and Pi config.
 Leaves every other hook (orca's, yours) intact, and leaves the forwarder
 scripts on disk.  Safe to run whether or not `bp/agent-sessions-install' ran."
   (interactive)
@@ -7387,7 +7660,9 @@ scripts on disk.  Safe to run whether or not `bp/agent-sessions-install' ran."
                              (and (bp/agent-sessions--unwire
                                    bp/agent-sessions-codex-hooks-file
                                    bp/agent-sessions--codex-hook-script)
-                                  "Codex")))))
+                                  "Codex")
+                             (and (bp/agent-sessions--unwire-pi)
+                                  "Pi")))))
     (message (if changed
                  (format "agent-sessions: unhooked from %s" (string-join changed " + "))
                "agent-sessions: nothing to remove"))))

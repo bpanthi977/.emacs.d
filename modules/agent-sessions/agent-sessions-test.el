@@ -7,6 +7,214 @@
   (list :id (concat "test-" subject) :from "sender" :from-label "sender"
         :type type :subject subject :body "" :files "" :report "" :read nil))
 
+(defmacro bp/agent-sessions-test--with-temp-db (&rest body)
+  "Run BODY with an isolated agent-sessions database."
+  (declare (indent 0) (debug t))
+  `(let* ((db-file (make-temp-file "agent-sessions-test-"))
+          (snapshot-directory
+           (make-temp-file "agent-sessions-snapshots-test-" t))
+          (bp/agent-sessions-db-file db-file)
+          (bp/agent-sessions-file-snapshot-directory snapshot-directory)
+          (bp/agent-sessions--db nil)
+          (bp/agent-sessions--shared-files nil)
+          (bp/agent-sessions--shared-paths nil)
+          (bp/agent-sessions--shared-links nil))
+     (unwind-protect
+         (progn ,@body)
+       (when (sqlitep bp/agent-sessions--db)
+         (sqlite-close bp/agent-sessions--db))
+       (dolist (path (list db-file (concat db-file "-wal")
+                           (concat db-file "-shm")))
+         (when (file-exists-p path)
+           (delete-file path)))
+       (delete-directory snapshot-directory t))))
+
+(ert-deftest bp/agent-hook-routes-stale-daemon-id-to-unresolved-terminal ()
+  (bp/agent-sessions-test--with-temp-db
+   (let* ((directory (make-temp-file "agent-hook-worktree-" t))
+          (target (generate-new-buffer " *agent-hook-target*"))
+          (other (generate-new-buffer " *agent-hook-other*"))
+          (payload-file (make-temp-file "agent-hook-payload-"))
+          (bp/agent-session-id->buffer (make-hash-table :test 'equal))
+          (bp/agent-sessions (make-hash-table :test 'equal))
+          (bp/agent-session-notify-on-attention nil)
+          logged)
+     (unwind-protect
+         (progn
+           (with-current-buffer target
+             (setq-local bp/agent-session-id "actual-terminal")
+             (setq default-directory (file-name-as-directory directory)))
+           (with-current-buffer other
+             (setq-local bp/agent-session-id "other-terminal")
+             (setq default-directory (file-name-as-directory directory)))
+           (puthash "actual-terminal" target bp/agent-session-id->buffer)
+           (puthash "other-terminal" other bp/agent-session-id->buffer)
+           ;; A terminal in the same worktree already owned by another thread
+           ;; must not make routing ambiguous.
+           (puthash "other-terminal"
+                    (list :buffer other :agent-type "codex"
+                          :agent-session-id "other-thread")
+                    bp/agent-sessions)
+           (with-temp-file payload-file
+             (insert
+              (json-serialize
+               (let ((payload (make-hash-table :test 'equal)))
+                 (puthash "hook_event_name" "Stop" payload)
+                 (puthash "session_id" "actual-thread" payload)
+                 (puthash "cwd" directory payload)
+                 payload))))
+           (cl-letf (((symbol-function 'bp/agent-sessions--foreground-command)
+                      (lambda (buf)
+			(and (eq buf target) "codex")))
+                     ((symbol-function 'bp/agent-session--repo-info)
+                      (lambda (_)
+			(list :repo "repo" :repo-root directory
+                              :worktree "worktree"
+                              :worktree-path directory)))
+                     ((symbol-function 'bp/agent-sessions--log-update)
+                      (lambda (buf type sid)
+			(setq logged (list buf type sid))))
+                     ((symbol-function 'bp/agent-orchestration--hydrate) #'ignore)
+                     ((symbol-function 'bp/agent-orchestration-deliver) #'ignore)
+                     ((symbol-function 'bp/agent-sessions--refresh-if-visible)
+                      #'ignore))
+             ;; The inherited daemon id no longer names any live terminal.
+             (bp/agent-hook-notify "stale-terminal" "codex" payload-file))
+           (let ((session (gethash "actual-terminal" bp/agent-sessions)))
+             (should (equal "actual-thread"
+                            (plist-get session :agent-session-id)))
+             (should (eq target (plist-get session :buffer)))
+             (should (eq 'needs-attention (plist-get session :status))))
+           (should-not (gethash "stale-terminal" bp/agent-sessions))
+           (should (equal (list target "codex" "actual-thread") logged)))
+       (when (file-exists-p payload-file)
+         (delete-file payload-file))
+       (kill-buffer target)
+       (kill-buffer other)
+       (delete-directory directory t)))))
+
+(ert-deftest bp/agent-hook-follows-claude-clear-to-new-conversation ()
+  (bp/agent-sessions-test--with-temp-db
+   (let* ((directory (make-temp-file "agent-hook-clear-" t))
+          (term (generate-new-buffer " *agent-hook-clear*"))
+          (bp/agent-session-id->buffer (make-hash-table :test 'equal))
+          (bp/agent-sessions (make-hash-table :test 'equal))
+          (bp/agent-session-notify-on-attention nil))
+     (cl-flet ((deliver (event sid)
+                 (let ((file (make-temp-file "agent-hook-payload-")))
+                   (with-temp-file file
+                     (insert (json-serialize
+                              (let ((p (make-hash-table :test 'equal)))
+                                (puthash "hook_event_name" event p)
+                                (puthash "session_id" sid p)
+                                (puthash "cwd" directory p)
+                                p))))
+                   (bp/agent-hook-notify "1-1" "claude" file)))
+               (rows ()
+                 (sqlite-select (bp/agent-sessions--db)
+                                "SELECT agent_sid, close_reason FROM sessions
+                                  ORDER BY id")))
+       (unwind-protect
+           (cl-letf (((symbol-function 'bp/agent-session--repo-info)
+                      (lambda (_) (list :repo "repo" :repo-root directory
+                                        :worktree "wt"
+                                        :worktree-path directory)))
+                     ((symbol-function 'bp/agent-sessions--detect-parent)
+                      #'ignore)
+                     ((symbol-function 'bp/agent-orchestration--hydrate) #'ignore)
+                     ((symbol-function 'bp/agent-orchestration-deliver) #'ignore)
+                     ((symbol-function 'bp/agent-sessions--refresh-if-visible)
+                      #'ignore))
+             (with-current-buffer term
+               (setq-local bp/agent-session-id "1-1")
+               (setq default-directory (file-name-as-directory directory)))
+             (puthash "1-1" term bp/agent-session-id->buffer)
+             (bp/agent-sessions--log-open term)
+             (deliver "SessionStart" "old")
+             ;; `/clear', with the old conversation's end delivered last.
+             (deliver "SessionStart" "new")
+             (deliver "SessionEnd" "old")
+             (should (equal "new" (plist-get (gethash "1-1" bp/agent-sessions)
+                                             :agent-session-id)))
+             (should (equal '(("old" "superseded") ("new" nil)) (rows))))
+         (kill-buffer term)
+         (delete-directory directory t))))))
+
+(ert-deftest bp/agent-sessions-share-file-prefers-durable-agent-id ()
+  (let* ((source (make-temp-file "agent-share-routing-"))
+         (target-buffer (generate-new-buffer " *agent-share-target*"))
+         (wrong-buffer (generate-new-buffer " *agent-share-wrong*"))
+         (target-session (list :buffer target-buffer
+                               :agent-session-id "target-thread"))
+         (wrong-session (list :buffer wrong-buffer
+                              :agent-session-id "wrong-thread"))
+         (bp/agent-sessions (make-hash-table :test 'equal))
+         shared-with)
+    (unwind-protect
+        (progn
+          ;; The daemon's inherited terminal id is live, but belongs to a
+          ;; different session.  The durable agent id must win.
+          (puthash "actual-terminal" target-session bp/agent-sessions)
+          (puthash "stale-terminal" wrong-session bp/agent-sessions)
+          (cl-letf (((symbol-function 'bp/agent-sessions--share-file)
+                     (lambda (session _path _label)
+                       (setq shared-with session)))
+                    ((symbol-function
+                      'bp/agent-sessions--revert-shared-file-buffer)
+                     #'ignore)
+                    ((symbol-function 'bp/agent-sessions--refresh-if-visible)
+                     #'ignore))
+            (should
+             (string-prefix-p
+              "Shared "
+              (bp/agent-sessions-share-file
+               "stale-terminal" source "handoff" "target-thread")))
+            (should (eq shared-with target-session))
+            (setq shared-with nil)
+            (should
+             (equal
+              "No Emacs agent session registered for agent id missing-thread"
+              (bp/agent-sessions-share-file
+               "stale-terminal" source "handoff" "missing-thread")))
+            (should-not shared-with)))
+      (delete-file source)
+      (kill-buffer target-buffer)
+      (kill-buffer wrong-buffer))))
+
+(ert-deftest bp/agent-sessions-emacs-share-passes-codex-thread-id ()
+  (let* ((directory (make-temp-file "agent-share-cli-" t))
+         (source (expand-file-name "handoff.md" directory))
+         (capture (expand-file-name "expression" directory))
+         (fake-client (expand-file-name "emacsclient" directory))
+         (script (expand-file-name "bin/emacs-share"
+                                   (file-name-directory
+                                    (locate-library "agent-sessions"))))
+         (process-environment (copy-sequence process-environment)))
+    (unwind-protect
+        (progn
+          (with-temp-file source (insert "handoff\n"))
+          (with-temp-file fake-client
+            (insert "#!/bin/sh\n"
+                    "printf '%s' \"$2\" > \"$EMACS_SHARE_TEST_CAPTURE\"\n"
+                    "printf '\"Shared test\"\\n'\n"))
+          (set-file-modes fake-client #o755)
+          (setenv "PATH" (concat directory path-separator (getenv "PATH")))
+          (setenv "EMACS_AGENT_SESSION_ID" "stale-terminal")
+          (setenv "CODEX_SESSION_ID" "older-codex-id")
+          (setenv "CODEX_THREAD_ID" "current-thread")
+          (setenv "EMACS_SHARE_TEST_CAPTURE" capture)
+          (should (= 0 (call-process script nil nil nil "file" source)))
+          (let ((expression (with-temp-buffer
+                              (insert-file-contents capture)
+                              (buffer-string))))
+            (should (string-match-p
+                     (concat (regexp-quote
+                              "handoff.md\" \"\" \"current-thread\")")
+                             "\\'")
+                     expression))
+            (should-not (string-match-p "older-codex-id" expression))))
+      (delete-directory directory t))))
+
 (ert-deftest bp/agent-sessions-session-row-omits-raw-hook-event ()
   (with-temp-buffer
     (bp/agent-sessions-mode)
@@ -793,6 +1001,105 @@ old screen.  Mail used to wait there until the human submitted a prompt."
                      (sqlite-select db "SELECT visited_at FROM shared_links
                        WHERE url = 'https://linear.app/issue/ABC-1'"))))))
 
+(ert-deftest bp/agent-sessions-reap-spares-live-emacs ()
+  (bp/agent-sessions-test--with-temp-db
+    (let ((db (bp/agent-sessions--db))
+          (live (format "%d-1" (emacs-pid)))
+          ;; Above any pid the kernel hands out, so never a running process.
+          (dead "999999999-1"))
+      (dolist (sid (list live dead))
+        (sqlite-execute db "INSERT INTO sessions (emacs_sid, worktree, opened_at)
+                            VALUES (?, '/tmp', 100)"
+                        (list sid)))
+      (bp/agent-sessions--meta-set db "last_seen" 200)
+      ;; What a second Emacs opening the file does: the live one's row must
+      ;; stay open, and only the dead one's is closed as a crash.
+      (bp/agent-sessions--db-reap db)
+      (should (equal '((nil nil))
+                     (sqlite-select db "SELECT closed_at, close_reason
+                                          FROM sessions WHERE emacs_sid = ?"
+                                    (list live))))
+      (should (equal '((200 "crash"))
+                     (sqlite-select db "SELECT closed_at, close_reason
+                                          FROM sessions WHERE emacs_sid = ?"
+                                    (list dead)))))))
+
+(ert-deftest bp/agent-sessions-exit-recloses-rows-wrongly-reaped ()
+  (bp/agent-sessions-test--with-temp-db
+    (let* ((db (bp/agent-sessions--db))
+           (term (generate-new-buffer " *agent-log-term*"))
+           (bp/agent-session-id->buffer (make-hash-table :test 'equal))
+           held other)
+      (unwind-protect
+          (progn
+            ;; Both rows closed as a crash by another Emacs; only the first
+            ;; is still the current row of a terminal running here.
+            (dolist (_ '(1 2))
+              (sqlite-execute db "INSERT INTO sessions
+                                    (emacs_sid, worktree, opened_at,
+                                     closed_at, close_reason)
+                                  VALUES ('1-1', '/tmp', 100, 150, 'crash')"))
+            (setq held 1 other 2)
+            (with-current-buffer term
+              (setq-local bp/agent-session--log-row held))
+            (puthash "1-1" term bp/agent-session-id->buffer)
+            (bp/agent-sessions--log-close-all)
+            (should (equal "emacs-exit"
+                           (caar (sqlite-select db "SELECT close_reason
+                                                     FROM sessions WHERE id = ?"
+                                                (list held)))))
+            (should (equal '((150 "crash"))
+                           (sqlite-select db "SELECT closed_at, close_reason
+                                               FROM sessions WHERE id = ?"
+                                          (list other)))))
+        (kill-buffer term)))))
+
+(ert-deftest bp/agent-session-start-logs-resumed-identity ()
+  (bp/agent-sessions-test--with-temp-db
+    (let ((bp/agent-session-id->buffer (make-hash-table :test 'equal))
+          term)
+      (unwind-protect
+          (cl-letf (((symbol-function 'bp/agent-session--repo-info)
+                     (lambda (_) (list :worktree "wt" :worktree-path "/tmp")))
+                    ((symbol-function 'bp/agent-session--spawn)
+                     (lambda (&rest _)
+                       (setq term (generate-new-buffer " *agent-log-resume*"))
+                       (with-current-buffer term
+                         (setq-local bp/agent-session-id "1-1"))
+                       (bp/agent-sessions--log-open term)
+                       term)))
+            ;; No hook fires: an idle resumed Codex must still be restorable.
+            (bp/agent-session-start "/tmp" 'codex "thread-1")
+            (should (equal '(("codex" "thread-1"))
+                           (sqlite-select (bp/agent-sessions--db)
+                                          "SELECT agent_type, agent_sid
+                                             FROM sessions")))
+            (should (equal "thread-1"
+                           (plist-get (car (bp/agent-sessions--log-rows
+                                            "closed_at IS NULL"))
+                                      :agent-sid))))
+        (when (buffer-live-p term)
+          (kill-buffer term))))))
+
+(ert-deftest bp/agent-sessions-never-prompted-claude-is-not-resumable ()
+  (let* ((config (make-temp-file "agent-claude-config-" t))
+         (process-environment (cons (concat "CLAUDE_CONFIG_DIR=" config)
+                                    process-environment)))
+    (unwind-protect
+        (progn
+          (make-directory (expand-file-name "projects/-wt" config) t)
+          (write-region "" nil (expand-file-name "projects/-wt/used.jsonl"
+                                                 config))
+          (should (bp/agent-sessions--log-resumable-p
+                   (list :agent-type "claude" :agent-sid "used")))
+          ;; Logged at `SessionStart', but no message was ever sent.
+          (should-not (bp/agent-sessions--log-resumable-p
+                       (list :agent-type "claude" :agent-sid "unused")))
+          ;; Only Claude defers its transcript; others are taken at their word.
+          (should (bp/agent-sessions--log-resumable-p
+                   (list :agent-type "codex" :agent-sid "unused"))))
+      (delete-directory config t))))
+
 (ert-deftest bp/agent-sessions-mark-unread-moves-to-the-next-row ()
   (with-temp-buffer
     (bp/agent-sessions-mode)
@@ -981,6 +1288,58 @@ old screen.  Mail used to wait there until the human submitted a prompt."
                    '("TODO" "PLANNING" "PLAN-REVIEW" "IMPLEMENTING"
                      "IMPL-REVIEW" "PR-OPEN" "AUTOFIX" "REVIEW" "DONE"
                      "BLOCKED" "LEARN" nil)))))
+
+(ert-deftest bp/agent-sessions--pi-session-start-is-not-running ()
+  ;; Pi fires session_start when its TUI opens at an idle prompt, so a fresh
+  ;; session must land on `stopped', not fall through to the `running' default
+  ;; in `bp/agent-hook-notify' — that is the frozen-running-at-nothing bug.
+  (should (eq 'stopped (bp/agent-session--status-for "pi" "SessionStart")))
+  (should (eq 'stopped (bp/agent-session--status-for "claude" "SessionStart")))
+  ;; Codex fires its SessionStart lazily on the first prompt, the same instant
+  ;; as UserPromptSubmit — an unordered SessionStart must be able to clobber
+  ;; `running', so Codex gets no mapping at all.
+  (should (null (bp/agent-session--status-for "codex" "SessionStart"))))
+
+(ert-deftest bp/agent-sessions--reconcile-status-demotes-only-provably-idle ()
+  (let* ((buffer (generate-new-buffer " *pi-reconcile-test*"))
+       (session (list :status 'running :agent-type "pi" :buffer buffer)))
+    (unwind-protect
+        (cl-letf (((symbol-function 'bp/agent-sessions--tpgid-readable-p)
+                   (lambda (_) t)))
+          ;; Nothing in the foreground: the shell owns the pty, so pi cannot be
+          ;; mid-turn — the killed-mid-turn freeze must read as stopped.
+          (cl-letf (((symbol-function 'bp/agent-sessions--foreground-command)
+                     (lambda (_) nil)))
+            (let ((reconciled (bp/agent-sessions--reconcile-status session buffer)))
+              (should (eq 'stopped (plist-get reconciled :status)))
+              ;; Display-time only: the registry plist must survive untouched,
+              ;; the way `bp/agent-sessions--unread-status' works.
+              (should (eq 'running (plist-get session :status)))))
+          ;; pi idling at its own prompt still holds the foreground with its
+          ;; TUI — no demotion; the SessionStart mapping covers that case.
+          (cl-letf (((symbol-function 'bp/agent-sessions--foreground-command)
+                     (lambda (_) "pi")))
+            (should (eq 'running
+                        (plist-get (bp/agent-sessions--reconcile-status
+                                    session buffer)
+                                   :status)))))
+      (kill-buffer buffer))))
+
+(ert-deftest bp/agent-sessions--reconcile-status-needs-tpgid-to-demote ()
+  ;; On a platform whose process-attributes omits tpgid, a nil foreground says
+  ;; "unknown", not "shell in front" — running must survive untouched.
+  (let* ((buffer (generate-new-buffer " *pi-reconcile-tpgid-test*"))
+       (session (list :status 'running :agent-type "pi" :buffer buffer)))
+    (unwind-protect
+        (cl-letf (((symbol-function 'bp/agent-sessions--tpgid-readable-p)
+                   (lambda (_) nil))
+                  ((symbol-function 'bp/agent-sessions--foreground-command)
+                   (lambda (_) nil)))
+          (should (eq 'running
+                      (plist-get (bp/agent-sessions--reconcile-status
+                                  session buffer)
+                                 :status))))
+      (kill-buffer buffer))))
 
 (ert-deftest bp/agent-sessions-copy-tree-as-org-list ()
   (bp/agent-sessions-test--with-temp-db

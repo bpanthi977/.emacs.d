@@ -10,6 +10,9 @@ code says *what* it does; this file records *why*, so the intent survives edits.
   (`~/.orca/agent-hooks/claude-hook.sh`, wired via `~/.claude/settings.json`).
   (see "Shared files") and `emacs-agent` (see "Orchestration"). On every session
   terminal's PATH.
+  Pi needs neither: its extension is TypeScript in-process, so
+  `agent-sessions-pi-hook.ts` is the forwarder itself, copied into
+  `~/.pi/agent/extensions/` by `bp/agent-sessions-install`.
 - `bin/` — commands agents run *inside* a session terminal: `emacs-share`
 - `skills/orca/` — the `/orca` skill an agent loads to learn orchestration, and
   the two guides `emacs-agent guide` serves.
@@ -86,6 +89,18 @@ columns default to `''` rather than `NULL` — SQLite treats `NULL`s as distinct
 under a primary key, so a `NULL` scope would silently turn every upsert into a
 duplicate insert.
 
+**A session that reports under a Claude event name rides every existing path.**
+Pi has no hooks.json — extensions are whole files — so its forwarder translates
+its own events (`agent_end` → `Stop`, `before_agent_start` → `UserPromptSubmit`,
+`session_shutdown` → `SessionEnd`) into the vocabulary the status table already
+keys on, and delivers them through the same `bp/agent-hook-notify` channel. That
+is why `bp/agent-session-status-alist` grows a two-line `pi` entry instead of a
+parallel pipeline: an agent that speaks the common event language gets attention
+tracking, the session log, and restore for free, and cannot drift out of sync
+with them. What pi deliberately does not get: fork parentage (Claude-only,
+transcript-based) and native queueing (no known-safe composer moment, so
+mail to a pi agent stays unread for `emacs-agent wait`).
+
 **How a session ended is inferred from which hook fired, not from a flag.**
 Emacs runs `kill-emacs-hook` on exit but does *not* run `kill-buffer-hook` for
 live buffers at that point (verified, not assumed). That asymmetry is the whole
@@ -101,15 +116,33 @@ so it and `C-x k` land in the same place.
 | `crash` | nothing — found open at the next startup | Emacs died |
 
 `R` offers the first three ("you ended it"), restore-previous the last two
-("it was taken from you"). **Crash detection assumes a single Emacs**: a
-starting Emacs has no sessions yet, so any row still open must belong to a dead
-one. A second Emacs would reap the first's live rows — they would read as
-restorable while still running. Nothing corrupts, and that was the accepted
-price for dropping an instances table; if that assumption ever stops holding,
-that is the thing to revisit. Because a crash runs no code, close *times* come
-from a periodic heartbeat in `meta` — the last moment Emacs is known to have
-been alive.
+("it was taken from you"). **Crash detection asks whether the owning Emacs is
+still running.** A row left open belongs to a dead Emacs only if the pid at the
+front of its terminal id (`PID-COUNTER`) no longer names a running Emacs. The
+first version assumed a single Emacs and reaped every open row, and a second
+Emacs did open the file: a batch test run, from one test that wrote to the
+real log. Every such run closed the live Emacs's sessions as `crash`. Their
+terminals never reopen a closed row, so those sessions dropped out of the log
+for good. restore-previous later missed them, and killing one could no longer
+be recorded, so `R` offered sessions back that had been closed by hand. The
+check costs one `process-attributes` per open Emacs, still with no instances
+table. Because a crash runs no code, close *times* come from a periodic
+heartbeat in `meta` — the last moment Emacs is known to have been alive.
 
+**A live terminal's row is open, whoever closed it.** The fix above prevents
+new wrong closes. It cannot repair a row that is already closed, and one
+Emacs's terminals kept closed rows for two days because of that: at exit,
+restore-previous offered 8 of 15 sessions. Every path that ends a session here
+also forgets the terminal's row, so a closed row that a live terminal still
+holds can only be someone else's mistake. The heartbeat therefore reopens such
+rows, and because `kill-emacs-hook` stamps the heartbeat too, they are healed
+before the `emacs-exit` batch is written. For the same reason,
+`bp/agent-session-start` logs the type and id it resumed instead of waiting for
+the first hook. Codex fires no hook until its first prompt, and an idle resumed
+Codex left an anonymous row that no restore could offer. Claude is the opposite
+case: it logs an id at `SessionStart` that has no transcript until the first
+message. Restore therefore checks for the transcript, and skips a session that
+was never prompted instead of opening a terminal that fails.
 
 **A reorder writes two rows, not the group.** `M-n`/`M-p` are adjacent
 transpositions, and `--merge-order` turns one into a list differing from the
@@ -127,6 +160,36 @@ informational event can land *after* a `Stop`. The status map therefore only
 promotes known events and leaves everything else untouched — status must never
 be clobbered back to "running" by a straggler. This is the single most
 important invariant when editing the status logic.
+
+**A terminal's agent id can change under it, and only Codex's hooks may be
+misaddressed.** Claude's `/clear` ends one conversation and starts another, with
+a new id, in the same terminal. Routing that rejected a terminal whose registered
+id differed from the payload's (written for Codex's shared daemon, which can
+carry another terminal's `EMACS_AGENT_SESSION_ID`) dropped every later hook from
+such a terminal. The new conversation never reached the log, and restore lost
+it. A Claude or pi hook is a child of the agent in its terminal, so its terminal
+id is trusted, and the identity check applies to Codex alone. The straggler rule
+above covers the other half of `/clear`: the old conversation's `SessionEnd` can
+arrive after the new one's `SessionStart`, and is dropped when its id is no
+longer the terminal's. Applied, it would close the new conversation's row and
+mark the new id as ended.
+
+**`running` means mid-turn, and two guards keep it that way.**
+`SessionStart` maps to `stopped` for pi and Claude — both fire it when the TUI
+opens at an idle prompt (Claude also on `--resume`), so without the mapping a
+fresh session fell through to the `running` default in `bp/agent-hook-notify`
+and read as mid-turn while sitting at its prompt. Codex deliberately gets no
+mapping: its `SessionStart` fires lazily on the first prompt, in the same
+instant as `UserPromptSubmit`, so mapping it could clobber `running` under
+unordered delivery. The other hole is an agent killed mid-turn — no shutdown
+hook fires, so the status freezes at `running` forever.
+`bp/agent-sessions--reconcile-status` demotes that to `stopped` at display
+time when the terminal can name a foreground group (`tpgid` present in
+`process-attributes`) and the group is empty — the shell then owns the pty, so
+no turn can be in progress. An idle pi still holds the foreground with its
+TUI, which is why the SessionStart mapping exists at all. Demotion is
+display-time only, on a copy, exactly like the unread mark — the registry
+stays the hook's record.
 
 **Notifications fire on the transition into attention, once.** A session that
 sits waiting must not re-announce on every subsequent event. If you add states,
