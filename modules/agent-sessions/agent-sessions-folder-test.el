@@ -104,7 +104,7 @@
                  (entry (list :id "render" :session session :title "Task")))
             (bp/agent-sessions--folder-set session (plist-get folder :id))
             (with-current-buffer dashboard
-              (bp/agent-sessions-mode)
+              (bp/agent-sessions-dashboard-mode)
               (cl-letf (((symbol-function 'bp/agent-sessions--live-entries)
                          (lambda () (list entry))))
                 (let ((bp/agent-sessions-group-by-folder t))
@@ -163,7 +163,7 @@
                  (entry (list :id "kill-folder" :session session :title "Task")))
             (bp/agent-sessions--folder-set session (plist-get full :id))
             (with-current-buffer dashboard
-              (bp/agent-sessions-mode)
+              (bp/agent-sessions-dashboard-mode)
               (cl-letf (((symbol-function 'bp/agent-sessions--live-entries)
                          (lambda () (list entry))))
                 (let ((bp/agent-sessions-group-by-folder t))
@@ -204,7 +204,7 @@
                                           :worktree-path root)))))
       (unwind-protect
           (with-current-buffer dashboard
-            (bp/agent-sessions-mode)
+            (bp/agent-sessions-dashboard-mode)
             (let ((bp/agent-sessions-group-by-folder t))
               (cl-letf (((symbol-function 'bp/agent-sessions--live-entries)
                          (lambda () entries)))
@@ -247,7 +247,7 @@
             (bp/agent-sessions--folder-set a-session (plist-get one :id))
             (bp/agent-sessions--folder-set b-session (plist-get one :id))
             (with-current-buffer dashboard
-              (bp/agent-sessions-mode)
+              (bp/agent-sessions-dashboard-mode)
               (let ((bp/agent-sessions-group-by-folder t))
                 (cl-letf (((symbol-function 'bp/agent-sessions--live-entries)
                            (lambda () entries)))
@@ -287,7 +287,7 @@
 
 (ert-deftest bp/folders-shift-tab-cycles-hierarchy-depth ()
   (with-temp-buffer
-    (bp/agent-sessions-mode)
+    (bp/agent-sessions-dashboard-mode)
     (let ((inhibit-read-only t))
       (magit-insert-section (bp/agent-sessions-root)
         (magit-insert-section (bp/agent-session-repo '(:name "repo"))
@@ -309,9 +309,9 @@
                       (goto-char (point-min))
                       (search-forward heading)
                       (not (invisible-p (1- (point)))))))
-        (should (eq (lookup-key bp/agent-sessions-mode-map (kbd "<backtab>"))
+        (should (eq (lookup-key bp/agent-sessions-dashboard-mode-map (kbd "<backtab>"))
                     #'bp/agent-sessions-toggle-overview))
-        (should (eq (lookup-key bp/agent-sessions-mode-map (kbd "<S-tab>"))
+        (should (eq (lookup-key bp/agent-sessions-dashboard-mode-map (kbd "<S-tab>"))
                     #'bp/agent-sessions-toggle-overview))
         (bp/agent-sessions--show-overview-level 0)
         (should (oref repo hidden))
@@ -342,7 +342,7 @@
 
 (ert-deftest bp/folders-shift-tab-skips-absent-attachment-level ()
   (with-temp-buffer
-    (bp/agent-sessions-mode)
+    (bp/agent-sessions-dashboard-mode)
     (let ((inhibit-read-only t))
       (magit-insert-section (bp/agent-sessions-root)
         (magit-insert-section (bp/agent-session-repo '(:name "repo"))
@@ -379,7 +379,7 @@
            (entry (list :id "visible" :title "Task" :session session)))
       (unwind-protect
           (with-current-buffer dashboard
-            (bp/agent-sessions-mode)
+            (bp/agent-sessions-dashboard-mode)
             (let ((bp/agent-sessions-group-by-folder nil))
               (cl-letf (((symbol-function 'bp/agent-sessions--live-entries)
                          (lambda () (list entry)))
@@ -419,7 +419,7 @@
           (progn
             (puthash "action" session bp/agent-sessions)
             (with-current-buffer dashboard
-              (bp/agent-sessions-mode)
+              (bp/agent-sessions-dashboard-mode)
               (let ((inhibit-read-only t))
                 (magit-insert-section (bp/agent-sessions-root)
                   (magit-insert-section (bp/agent-session-row "action")

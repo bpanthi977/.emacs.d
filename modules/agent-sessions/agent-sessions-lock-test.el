@@ -289,7 +289,7 @@ name, and then succeeds."
     (should-not (bp/agent-locks--reload))
     (with-temp-buffer
       (let ((bp/agent-sessions-buffer-name (buffer-name)))
-        (bp/agent-sessions-mode)
+        (bp/agent-sessions-dashboard-mode)
         (bp/agent-sessions--refresh)
         ;; Neither A nor B has a session row here, so both show in the
         ;; section, each naming who it is.

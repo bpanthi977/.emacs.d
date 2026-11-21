@@ -239,7 +239,7 @@ with `bp/agent-sessions-states'.  `state --help' is help, not a state."
 
 (ert-deftest bp/agent-sessions-session-row-omits-raw-hook-event ()
   (with-temp-buffer
-    (bp/agent-sessions-mode)
+    (bp/agent-sessions-dashboard-mode)
     (let ((inhibit-read-only t)
           (bp/agent-sessions--row-status nil)
           (entry (list :id "terminal"
@@ -981,7 +981,7 @@ old screen.  Mail used to wait there until the human submitted a prompt."
        session "pr" "https://github.com/org/repo/pull/2" "PR 2")
       (should (= 4 (length (bp/agent-sessions--session-links session))))
       (with-temp-buffer
-        (bp/agent-sessions-mode)
+        (bp/agent-sessions-dashboard-mode)
         (let ((inhibit-read-only t)
               (bp/agent-sessions--row-status nil))
           (bp/agent-sessions--insert-links session "  ")
@@ -1124,7 +1124,7 @@ old screen.  Mail used to wait there until the human submitted a prompt."
 
 (ert-deftest bp/agent-sessions-mark-unread-moves-to-the-next-row ()
   (with-temp-buffer
-    (bp/agent-sessions-mode)
+    (bp/agent-sessions-dashboard-mode)
     (let ((inhibit-read-only t)
           (file (list :path "/tmp/agent-file-1" :visited-at nil)))
       (magit-insert-section (bp/agent-sessions-root)
@@ -1161,8 +1161,8 @@ old screen.  Mail used to wait there until the human submitted a prompt."
         (bp/agent-sessions-mark-unread)
         (should (equal "/tmp/agent-file-3"
                        (oref (magit-current-section) value))))
-      (should (eq (lookup-key bp/agent-sessions-mode-map (kbd "m"))
-                  (lookup-key bp/agent-sessions-mode-map (kbd "u")))))))
+      (should (eq (lookup-key bp/agent-sessions-dashboard-mode-map (kbd "m"))
+                  (lookup-key bp/agent-sessions-dashboard-mode-map (kbd "u")))))))
 
 (ert-deftest bp/agent-sessions-mark-unread-toggles-a-session-row ()
   (let ((buf (generate-new-buffer " *agent-session-toggle*"))
@@ -1254,7 +1254,7 @@ old screen.  Mail used to wait there until the human submitted a prompt."
       (setq link nil)
       (bp/agent-sessions-copy-attachment)
       (should (equal "https://example.com/pr/1" (car kill-ring))))
-    (should (eq (lookup-key bp/agent-sessions-mode-map (kbd "w"))
+    (should (eq (lookup-key bp/agent-sessions-dashboard-mode-map (kbd "w"))
                 #'bp/agent-sessions-copy-attachment))))
 
 (ert-deftest bp/agent-sessions-share-state-sets-and-clears ()
@@ -1610,6 +1610,105 @@ The colors are what a live ghostel rendered for `ESC[2m' on this theme."
   (bp/agent-sessions-test--with-titled-terminal buf
     (bp/agent-orchestration--mark-worker buf "coord" (list) "Write tests")
     (should (equal (buffer-name buf) "project_3 - Write tests"))))
+
+;;; Global mode and package defaults
+
+(defmacro bp/agent-sessions-test-with-mode-state (&rest body)
+  "Run BODY with the mode's global side effects isolated and undone."
+  (declare (indent 0))
+  `(let ((project-switch-commands (copy-tree project-switch-commands))
+         (project-prefix-map (copy-keymap project-prefix-map))
+         (bp/agent-sessions--heartbeat-timer nil)
+         (bp/agent-sessions--passthrough-added nil)
+         (after-load-functions after-load-functions)
+         (buffer-list-update-hook buffer-list-update-hook)
+         (kill-emacs-hook kill-emacs-hook))
+     (cl-letf (((symbol-function 'server-start) #'ignore)
+               ((symbol-function 'server-running-p) (lambda (&rest _) t)))
+       (unwind-protect (progn ,@body)
+         (bp/agent-sessions-mode -1)))))
+
+(ert-deftest bp/agent-sessions-mode-installs-and-removes-its-wiring ()
+  (bp/agent-sessions-test-with-mode-state
+    (bp/agent-sessions-mode 1)
+    (should (memq #'bp/agent-sessions--after-load after-load-functions))
+    (should (memq #'bp/agent-session--clear-attention-on-focus
+                  buffer-list-update-hook))
+    (should (memq #'bp/agent-sessions--log-close-all kill-emacs-hook))
+    (should (timerp bp/agent-sessions--heartbeat-timer))
+    (should (eq (lookup-key project-prefix-map (kbd "a"))
+                #'bp/agent-session-switch-or-new))
+    (should (member bp/agent-sessions--project-switch-command
+                    project-switch-commands))
+    (bp/agent-sessions-mode -1)
+    (should-not (memq #'bp/agent-sessions--after-load after-load-functions))
+    (should-not (memq #'bp/agent-session--clear-attention-on-focus
+                      buffer-list-update-hook))
+    (should-not (memq #'bp/agent-sessions--log-close-all kill-emacs-hook))
+    (should-not bp/agent-sessions--heartbeat-timer)
+    (should-not (lookup-key project-prefix-map (kbd "a")))
+    (should-not (member bp/agent-sessions--project-switch-command
+                        project-switch-commands))))
+
+(ert-deftest bp/agent-sessions-mode-leaves-a-function-switch-menu-alone ()
+  (bp/agent-sessions-test-with-mode-state
+    (setq project-switch-commands #'project-prefix-or-any-command)
+    (bp/agent-sessions-mode 1)
+    (should (eq project-switch-commands #'project-prefix-or-any-command))
+    (bp/agent-sessions-mode -1)
+    (should (eq project-switch-commands #'project-prefix-or-any-command))))
+
+(ert-deftest bp/agent-sessions-eat-key-spells-meta-as-escape ()
+  (should (equal (bp/agent-sessions--eat-key "M-m") [?\e ?m]))
+  (should (equal (bp/agent-sessions--eat-key "C-c") [?\C-c]))
+  (should (equal (bp/agent-sessions--eat-key "M-m a") [?\e ?m ?a])))
+
+(defvar bp/agent-sessions-test--exceptions nil
+  "Stand-in for a terminal package's passthrough list.")
+
+(ert-deftest bp/agent-sessions-passthrough-adds-and-removes-only-its-keys ()
+  (let ((bp/agent-sessions--passthrough-lists
+         '((fake bp/agent-sessions-test--exceptions . identity)))
+        (bp/agent-sessions--passthrough-added nil)
+        (bp/agent-sessions-test--exceptions '("C-c" "M-x"))
+        (bp/agent-sessions-terminal-passthrough-keys '("M-m" "M-x")))
+    (bp/agent-sessions--apply-passthrough 'fake)
+    (should (equal bp/agent-sessions-test--exceptions '("M-m" "C-c" "M-x")))
+    ;; Applying again (a package reloaded) adds nothing twice.
+    (bp/agent-sessions--apply-passthrough 'fake)
+    (should (equal bp/agent-sessions-test--exceptions '("M-m" "C-c" "M-x")))
+    ;; "M-x" was already there, so it is the user's and stays.
+    (bp/agent-sessions--remove-passthrough)
+    (should (equal bp/agent-sessions-test--exceptions '("C-c" "M-x")))))
+
+(ert-deftest bp/agent-sessions-passthrough-reaches-eat ()
+  (require 'eat)
+  (let ((saved eat-semi-char-non-bound-keys)
+        (bp/agent-sessions--passthrough-added nil)
+        (bp/agent-sessions-terminal-passthrough-keys '("M-m")))
+    (unwind-protect
+        (progn
+          (bp/agent-sessions--apply-passthrough 'eat)
+          (should (member [?\e ?m] eat-semi-char-non-bound-keys))
+          (bp/agent-sessions--remove-passthrough)
+          (should (equal eat-semi-char-non-bound-keys saved)))
+      (customize-set-variable 'eat-semi-char-non-bound-keys saved))))
+
+(ert-deftest bp/agent-sessions-terminal-auto-picks-the-first-installed ()
+  (let ((bp/agent-sessions-terminal 'auto))
+    (cl-letf (((symbol-function 'locate-library)
+               (lambda (lib &rest _) (member lib '("vterm" "eat")))))
+      (should (eq (bp/agent-sessions--terminal-backend) 'vterm)))
+    (cl-letf (((symbol-function 'locate-library) (lambda (&rest _) nil)))
+      (should-error (bp/agent-sessions--terminal-backend) :type 'user-error)))
+  (let ((bp/agent-sessions-terminal 'eat))
+    (should (eq (bp/agent-sessions--terminal-backend) 'eat))))
+
+(ert-deftest bp/agent-sessions-terminal-mode-binds-org-link-insertion ()
+  (with-temp-buffer
+    (bp/agent-sessions-terminal-mode 1)
+    (should (eq (key-binding (kbd "C-c C-l"))
+                #'bp/agent-session-insert-org-link))))
 
 (provide 'agent-sessions-test)
 ;;; agent-sessions-test.el ends here

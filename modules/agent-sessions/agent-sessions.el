@@ -24,6 +24,16 @@
 ;; that would notice it missing — long after this file loaded cleanly.
 (require 'format-spec)
 
+(defgroup agent-sessions nil
+  "Dashboard and tools for coding agents running in Emacs terminals."
+  :group 'tools
+  :prefix "bp/agent-sessions-")
+
+;; Other packages' variables this file binds or sets buffer-locally; declared
+;; special so that works whether or not those packages are loaded.
+(defvar ivy-sort-functions-alist)
+(defvar ghostel-notification-functions)
+
 (defconst bp/agent-sessions--dir
   (file-name-directory (or load-file-name buffer-file-name
                            (locate-library "agent-sessions") default-directory))
@@ -137,20 +147,41 @@ message addressed through an older terminal can find this live replacement.")
 
 (defconst bp/agent-sessions-buffer-name "*Agent Sessions*")
 
-(defcustom bp/agent-sessions-terminal 'vterm
+(defcustom bp/agent-sessions-terminal 'auto
   "Terminal emulator backend used for new agent session terminals.
-One of `vterm', `eat' or `ghostel'.  Only the selected package needs to be
+One of `vterm', `eat' or `ghostel', or `auto' to use the first of ghostel,
+vterm and eat that is installed.  Only the selected package needs to be
 installed; it is loaded lazily the first time a session terminal is created.
 Terminals of the other backends opened by hand are still tracked."
-  :type '(choice (const :tag "vterm" vterm)
+  :type '(choice (const :tag "First installed" auto)
+                 (const :tag "vterm" vterm)
                  (const :tag "eat" eat)
                  (const :tag "ghostel" ghostel)))
 
 (defcustom bp/agent-sessions-show-all-worktrees nil
-  "Legacy option retained for compatibility.
-Worktrees are now a session column; `+' on a repo or folder offers all of its
-worktrees, including those with no session."
+  "When non-nil, list every git worktree of a repo in the repo view.
+Worktrees with no session are listed too, so `+' can start one there.
+Otherwise only worktrees that have a session are shown.  The folder view
+lists sessions only either way."
   :type 'boolean)
+
+(defun bp/agent-sessions--terminal-backend ()
+  "The terminal backend new session terminals use.
+Resolves `bp/agent-sessions-terminal', looking `auto' up each time so a
+backend installed after this package loaded is picked up."
+  (if (eq bp/agent-sessions-terminal 'auto)
+      (intern (or (seq-find #'locate-library '("ghostel" "vterm" "eat"))
+                  (user-error "agent-sessions: install ghostel, vterm or eat")))
+    bp/agent-sessions-terminal))
+
+(defcustom bp/agent-sessions-terminal-passthrough-keys nil
+  "Keys that terminals pass through to Emacs instead of the program.
+Each is a `kbd' string such as \"M-m\", typically a personal prefix key.
+Applied to whichever of vterm, eat and ghostel is loaded, through that
+package's own exception list, while `bp/agent-sessions-dashboard-mode' is on.  Since
+those lists are global, the keys pass through in every terminal of that
+package, not just session terminals."
+  :type '(repeat string))
 
 (defcustom bp/agent-session-notify-on-attention t
   "When non-nil, show a desktop notification when a session needs attention.
@@ -286,6 +317,23 @@ Populates the cache on first use; `bp/agent-sessions-refresh' clears it."
     (remhash bp/agent-session-id bp/agent-orchestration--mail)
     (bp/agent-sessions--refresh-if-visible)))
 
+(defvar bp/agent-sessions-terminal-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "C-c C-l") #'bp/agent-session-insert-org-link)
+    map)
+  "Keymap active in agent session terminals.
+A minor mode map, so it takes precedence over the terminal's own major mode
+map (ghostel binds `C-c C-l' to its line mode).")
+
+(define-minor-mode bp/agent-sessions-terminal-mode
+  "Minor mode for terminals tracked by agent-sessions.
+Enabled when a session terminal is created; it only provides
+`bp/agent-sessions-terminal-mode-map'.
+
+\{bp/agent-sessions-terminal-mode-map}"
+  :lighter nil
+  :keymap bp/agent-sessions-terminal-mode-map)
+
 (defun bp/agent-sessions--vterm-advice (orig-fun pop-to-buf-fun &optional arg)
   (let* ((id (format "%d-%d" (emacs-pid) (cl-incf bp/agent-session-counter)))
          (vterm-environment (append (bp/agent-sessions--terminal-environment id)
@@ -296,7 +344,8 @@ Populates the cache on first use; `bp/agent-sessions-refresh' clears it."
       (with-current-buffer buf
         (setq-local bp/agent-session-id id)
         (setq-local bp/agent-session--created-at (current-time))
-        (add-hook 'kill-buffer-hook #'bp/agent-session--cleanup nil t))
+        (add-hook 'kill-buffer-hook #'bp/agent-session--cleanup nil t)
+        (bp/agent-sessions-terminal-mode 1))
       (bp/agent-sessions--log-open buf)
       (bp/agent-sessions--refresh-if-visible))
     buf))
@@ -367,7 +416,8 @@ registers the resulting buffer."
       (with-current-buffer buf
         (setq-local bp/agent-session-id id)
         (setq-local bp/agent-session--created-at (current-time))
-        (add-hook 'kill-buffer-hook #'bp/agent-session--cleanup nil t))
+        (add-hook 'kill-buffer-hook #'bp/agent-session--cleanup nil t)
+        (bp/agent-sessions-terminal-mode 1))
       (bp/agent-sessions--log-open buf)
       (bp/agent-sessions--refresh-if-visible))
     buf))
@@ -394,6 +444,11 @@ registers the resulting buffer."
       (setq-local bp/agent-session-id id)
       (setq-local bp/agent-session--created-at (current-time))
       (add-hook 'kill-buffer-hook #'bp/agent-session--cleanup nil t)
+      (bp/agent-sessions-terminal-mode 1)
+      ;; This package announces when an agent needs attention; ghostel's own
+      ;; status and OSC 9 notifications would announce the same turn again.
+      (when bp/agent-session-notify-on-attention
+        (setq-local ghostel-notification-functions nil))
       (bp/agent-sessions--log-open buf)
       (bp/agent-sessions--refresh-if-visible))))
 
@@ -4816,7 +4871,7 @@ them, a cycle is a poor way to reach a particular one."
   "Open the configured terminal in DIR in another window; return the buffer.
 BUFNAME is the desired buffer name.  Loads the backend package lazily."
   (let ((default-directory (file-name-as-directory dir)))
-    (pcase bp/agent-sessions-terminal
+    (pcase (bp/agent-sessions--terminal-backend)
       ('vterm (require 'vterm) (vterm-other-window bufname))
       ('eat (require 'eat)
             (let ((eat-buffer-name bufname))
@@ -4824,8 +4879,7 @@ BUFNAME is the desired buffer name.  Loads the backend package lazily."
               (eat-other-window nil t)))
       ('ghostel (require 'ghostel)
                 (ghostel-create bufname '(nil (inhibit-same-window . t))))
-      (_ (error "Unknown `bp/agent-sessions-terminal': %S"
-                bp/agent-sessions-terminal)))))
+      (backend (error "Unknown `bp/agent-sessions-terminal': %S" backend)))))
 
 (defun bp/agent-sessions--terminal-send (buf string)
   "Send STRING followed by Enter to the terminal in BUF."
@@ -4865,7 +4919,7 @@ BUFNAME is the desired buffer name.  Loads the backend package lazily."
 NAME defaults to DIR's basename (typically the worktree name).  The backend
 is `bp/agent-sessions-terminal'."
   (let* ((base (or name (file-name-nondirectory (directory-file-name dir))))
-         (bufname (format "%s-%s" base bp/agent-sessions-terminal)))
+         (bufname (format "%s-%s" base (bp/agent-sessions--terminal-backend))))
     (bp/agent-sessions--terminal-open dir bufname)))
 
 (defun bp/agent-sessions--goto-terminal-row (buf)
@@ -5599,18 +5653,18 @@ the confirmation prompt Org shows before running arbitrary elisp."
 A shared file or external URL stores its ordinary link; a session row (or a
 terminal buffer with a live session) stores an `agent-session:' resume link."
   (cond
-   ((and (derived-mode-p 'bp/agent-sessions-mode)
+   ((and (derived-mode-p 'bp/agent-sessions-dashboard-mode)
          (bp/agent-sessions--link-at-point))
     (bp/agent-sessions--store-external-link
      (nth 2 (bp/agent-sessions--link-at-point))))
-   ((and (derived-mode-p 'bp/agent-sessions-mode)
+   ((and (derived-mode-p 'bp/agent-sessions-dashboard-mode)
          (bp/agent-sessions--file-at-point))
     ;; Attachments are nested inside a session row, so resolve them first.
     (bp/agent-sessions--store-file-link
      (nth 1 (bp/agent-sessions--file-at-point))))
    (t
     (bp/agent-sessions--store-link-for
-     (cond ((derived-mode-p 'bp/agent-sessions-mode)
+     (cond ((derived-mode-p 'bp/agent-sessions-dashboard-mode)
             (bp/agent-sessions--session-at-point))
            (bp/agent-session-id
             (gethash bp/agent-session-id bp/agent-sessions)))))))
@@ -5774,7 +5828,7 @@ This makes `C-x p' project commands (and anything else keyed off
     (when (and dir (file-directory-p dir))
       (setq default-directory (file-name-as-directory dir)))))
 
-(define-derived-mode bp/agent-sessions-mode magit-section-mode "Agent-Sessions"
+(define-derived-mode bp/agent-sessions-dashboard-mode magit-section-mode "Agent-Sessions"
   "Major mode listing Claude/Codex sessions running in vterm, as a
 repo > worktree > session tree, or repo > folder > session with `f'.
 Sections fold with TAB; Shift+TAB toggles overview; `F' manages folders."
@@ -5787,7 +5841,7 @@ Sections fold with TAB; Shift+TAB toggles overview; `F' manages folders."
 ;; keeps that old parent forever — which cost us TAB: `tabulated-list-mode-map'
 ;; inherits `button-buffer-map', whose `forward-button' shadowed
 ;; `magit-section-toggle' ("No button").  Re-point it on every load.
-(set-keymap-parent bp/agent-sessions-mode-map magit-section-mode-map)
+(set-keymap-parent bp/agent-sessions-dashboard-mode-map magit-section-mode-map)
 
 
 ;;; Orchestration ------------------------------------------------------------
@@ -6537,6 +6591,10 @@ most-recently-viewed order."
            ;; standard completion metadata.
            (completion-extra-properties
             '(:display-sort-function identity :cycle-sort-function identity))
+           ;; Ivy ignores that metadata and sorts by its own table.
+           (ivy-sort-functions-alist
+            (cons (list this-command)
+                  (bound-and-true-p ivy-sort-functions-alist)))
            (choice (completing-read "Send region to agent: "
                                     (mapcar #'car candidates) nil t nil nil
                                     (caar candidates)))
@@ -7866,39 +7924,39 @@ its backlog reaches it."
         (bp/agent-sessions--refresh-if-visible))
       buf)))
 
-(define-key bp/agent-sessions-mode-map (kbd "RET") #'bp/agent-sessions-jump)
-(define-key bp/agent-sessions-mode-map (kbd "d") #'bp/agent-sessions-show-file-diff)
-(define-key bp/agent-sessions-mode-map (kbd "v") #'bp/agent-sessions-display)
-(define-key bp/agent-sessions-mode-map (kbd "V") #'bp/agent-sessions-display-or-browse)
-(define-key bp/agent-sessions-mode-map (kbd "w") #'bp/agent-sessions-copy-attachment)
-(define-key bp/agent-sessions-mode-map (kbd "W") #'bp/agent-sessions-copy-tree)
-(define-key bp/agent-sessions-mode-map (kbd "k") #'bp/agent-sessions-kill)
-(define-key bp/agent-sessions-mode-map (kbd "b") #'bp/agent-sessions-branch)
-(define-key bp/agent-sessions-mode-map (kbd "B") #'bp/agent-sessions-mark-parent)
-(define-key bp/agent-sessions-mode-map (kbd "D")
+(define-key bp/agent-sessions-dashboard-mode-map (kbd "RET") #'bp/agent-sessions-jump)
+(define-key bp/agent-sessions-dashboard-mode-map (kbd "d") #'bp/agent-sessions-show-file-diff)
+(define-key bp/agent-sessions-dashboard-mode-map (kbd "v") #'bp/agent-sessions-display)
+(define-key bp/agent-sessions-dashboard-mode-map (kbd "V") #'bp/agent-sessions-display-or-browse)
+(define-key bp/agent-sessions-dashboard-mode-map (kbd "w") #'bp/agent-sessions-copy-attachment)
+(define-key bp/agent-sessions-dashboard-mode-map (kbd "W") #'bp/agent-sessions-copy-tree)
+(define-key bp/agent-sessions-dashboard-mode-map (kbd "k") #'bp/agent-sessions-kill)
+(define-key bp/agent-sessions-dashboard-mode-map (kbd "b") #'bp/agent-sessions-branch)
+(define-key bp/agent-sessions-dashboard-mode-map (kbd "B") #'bp/agent-sessions-mark-parent)
+(define-key bp/agent-sessions-dashboard-mode-map (kbd "D")
   #'bp/agent-sessions-submission-diff-or-detach-parent)
-(define-key bp/agent-sessions-mode-map (kbd "t") #'bp/agent-sessions-cycle-state)
-(define-key bp/agent-sessions-mode-map (kbd "SPC") #'bp/agent-sessions-edit-title)
-(define-key bp/agent-sessions-mode-map (kbd "u") #'bp/agent-sessions-mark-unread)
-(define-key bp/agent-sessions-mode-map (kbd "m") #'bp/agent-sessions-mark-unread)
-(define-key bp/agent-sessions-mode-map (kbd "e") #'bp/agent-sessions-edit-note)
-(define-key bp/agent-sessions-mode-map (kbd "R") #'bp/agent-sessions-restore)
-(define-key bp/agent-sessions-mode-map (kbd "g") #'bp/agent-sessions-refresh)
-(define-key bp/agent-sessions-mode-map (kbd "<backtab>")
+(define-key bp/agent-sessions-dashboard-mode-map (kbd "t") #'bp/agent-sessions-cycle-state)
+(define-key bp/agent-sessions-dashboard-mode-map (kbd "SPC") #'bp/agent-sessions-edit-title)
+(define-key bp/agent-sessions-dashboard-mode-map (kbd "u") #'bp/agent-sessions-mark-unread)
+(define-key bp/agent-sessions-dashboard-mode-map (kbd "m") #'bp/agent-sessions-mark-unread)
+(define-key bp/agent-sessions-dashboard-mode-map (kbd "e") #'bp/agent-sessions-edit-note)
+(define-key bp/agent-sessions-dashboard-mode-map (kbd "R") #'bp/agent-sessions-restore)
+(define-key bp/agent-sessions-dashboard-mode-map (kbd "g") #'bp/agent-sessions-refresh)
+(define-key bp/agent-sessions-dashboard-mode-map (kbd "<backtab>")
   #'bp/agent-sessions-toggle-overview)
-(define-key bp/agent-sessions-mode-map (kbd "<S-tab>")
+(define-key bp/agent-sessions-dashboard-mode-map (kbd "<S-tab>")
   #'bp/agent-sessions-toggle-overview)
-(define-key bp/agent-sessions-mode-map (kbd "s") #'bp/agent-sessions-toggle-sort)
-(define-key bp/agent-sessions-mode-map (kbd "f") #'bp/agent-sessions-toggle-folder-view)
-(define-key bp/agent-sessions-mode-map (kbd "F") #'bp/agent-sessions-folder-action)
-(define-key bp/agent-sessions-mode-map (kbd "+") #'bp/agent-sessions-new-vterm)
-(define-key bp/agent-sessions-mode-map (kbd "n") #'bp/agent-sessions-next)
-(define-key bp/agent-sessions-mode-map (kbd "p") #'bp/agent-sessions-prev)
-(define-key bp/agent-sessions-mode-map (kbd "N") #'bp/agent-sessions-next-attention)
-(define-key bp/agent-sessions-mode-map (kbd "P") #'bp/agent-sessions-prev-attention)
-(define-key bp/agent-sessions-mode-map (kbd "M-n") #'bp/agent-sessions-move-down)
-(define-key bp/agent-sessions-mode-map (kbd "M-p") #'bp/agent-sessions-move-up)
-(define-key bp/agent-sessions-mode-map (kbd "C-c C-o") #'bp/agent-sessions-clear-manual-order)
+(define-key bp/agent-sessions-dashboard-mode-map (kbd "s") #'bp/agent-sessions-toggle-sort)
+(define-key bp/agent-sessions-dashboard-mode-map (kbd "f") #'bp/agent-sessions-toggle-folder-view)
+(define-key bp/agent-sessions-dashboard-mode-map (kbd "F") #'bp/agent-sessions-folder-action)
+(define-key bp/agent-sessions-dashboard-mode-map (kbd "+") #'bp/agent-sessions-new-vterm)
+(define-key bp/agent-sessions-dashboard-mode-map (kbd "n") #'bp/agent-sessions-next)
+(define-key bp/agent-sessions-dashboard-mode-map (kbd "p") #'bp/agent-sessions-prev)
+(define-key bp/agent-sessions-dashboard-mode-map (kbd "N") #'bp/agent-sessions-next-attention)
+(define-key bp/agent-sessions-dashboard-mode-map (kbd "P") #'bp/agent-sessions-prev-attention)
+(define-key bp/agent-sessions-dashboard-mode-map (kbd "M-n") #'bp/agent-sessions-move-down)
+(define-key bp/agent-sessions-dashboard-mode-map (kbd "M-p") #'bp/agent-sessions-move-up)
+(define-key bp/agent-sessions-dashboard-mode-map (kbd "C-c C-o") #'bp/agent-sessions-clear-manual-order)
 
 ;;; Wiring our hooks into Claude Code / Codex ------------------------------
 ;;
@@ -8131,57 +8189,161 @@ scripts on disk.  Safe to run whether or not `bp/agent-sessions-install' ran."
                  (format "agent-sessions: unhooked from %s" (string-join changed " + "))
                "agent-sessions: nothing to remove"))))
 
+;; Each entry is (FEATURE VARIABLE . ENCODE): the terminal package, its list of
+;; keys that bypass the terminal, and how it spells a `kbd' string.
+(defconst bp/agent-sessions--passthrough-lists
+  '((vterm vterm-keymap-exceptions . identity)
+    (ghostel ghostel-keymap-exceptions . identity)
+    (eat eat-semi-char-non-bound-keys . bp/agent-sessions--eat-key))
+  "Where each terminal backend keeps the keys it lets through to Emacs.")
+
+(defvar bp/agent-sessions--passthrough-added nil
+  "Alist of (VARIABLE . KEYS): passthrough keys this package added.
+So turning `bp/agent-sessions-mode' off removes only what it put there.")
+
+(defun bp/agent-sessions--eat-key (key)
+  "KEY, a `kbd' string, as eat spells it: a vector with M-x as ESC x."
+  (vconcat (mapcan (lambda (event)
+                     (if (and (integerp event) (/= 0 (logand event ?\M-\0)))
+                         (list ?\e (logand event (lognot ?\M-\0)))
+                       (list event)))
+                   (append (kbd key) nil))))
+
+(defun bp/agent-sessions--custom-set (var value)
+  "Set the user option VAR to VALUE through its `:set' function.
+Unlike `customize-set-variable', this does not mark VAR as customized, so a
+later `customize-save-customized' does not write our keys into the user's
+custom file."
+  (funcall (or (get var 'custom-set) #'set-default) var value))
+
+(defun bp/agent-sessions--apply-passthrough (feature)
+  "Add `bp/agent-sessions-terminal-passthrough-keys' to FEATURE's exceptions.
+The variable is set through its `:set' function, since the packages rebuild
+their keymaps there."
+  (pcase-let* ((`(,var . ,encode)
+                (alist-get feature bp/agent-sessions--passthrough-lists))
+               (keys (mapcar encode bp/agent-sessions-terminal-passthrough-keys))
+               (missing (seq-remove (lambda (k) (member k (symbol-value var)))
+                                    keys)))
+    (when missing
+      (setf (alist-get var bp/agent-sessions--passthrough-added)
+            (append missing (alist-get var bp/agent-sessions--passthrough-added)))
+      (bp/agent-sessions--custom-set var (append missing (symbol-value var))))))
+
+(defun bp/agent-sessions--remove-passthrough ()
+  "Remove the passthrough keys this package added."
+  (pcase-dolist (`(,var . ,keys) bp/agent-sessions--passthrough-added)
+    (when (boundp var)
+      (bp/agent-sessions--custom-set var (seq-difference (symbol-value var) keys))))
+  (setq bp/agent-sessions--passthrough-added nil))
+
+(defun bp/agent-sessions--after-load (file)
+  "Wire agent-sessions into a terminal package or Org once FILE loads.
+On `after-load-functions' while `bp/agent-sessions-mode' is on, so a package
+loaded later is wired too, and turning the mode off stops it."
+  (let ((feature (intern (file-name-base file))))
+    (when (featurep feature)
+      (bp/agent-sessions--wire-feature feature))))
+
+(defun bp/agent-sessions--wire-feature (feature)
+  "Install agent-sessions' advice and settings for the loaded FEATURE."
+  (pcase feature
+    ;; vterm: inject EMACS_AGENT_SESSION_ID and capture the terminal title.
+    ('vterm
+     (advice-add 'vterm--internal :around #'bp/agent-sessions--vterm-advice)
+     (advice-add 'vterm--set-title :before #'bp/agent-sessions--capture-title)
+     (bp/agent-sessions--apply-passthrough 'vterm))
+    ;; eat: the same id injection and title capture.
+    ('eat
+     (advice-add 'eat--1 :around #'bp/agent-sessions--eat-advice)
+     (advice-add 'eat--t-set-title :after #'bp/agent-sessions--eat-capture-title)
+     (bp/agent-sessions--apply-passthrough 'eat))
+    ;; ghostel: the id injection has a hook; the title capture still needs
+    ;; advice.
+    ('ghostel
+     (add-hook 'ghostel-pre-spawn-hook #'bp/agent-sessions--ghostel-pre-spawn)
+     (advice-add 'ghostel--set-title :after
+                 #'bp/agent-sessions--ghostel-capture-title)
+     (bp/agent-sessions--apply-passthrough 'ghostel))
+    ;; `agent-session:' Org links that resume/jump to a session.
+    ('ol
+     (org-link-set-parameters "agent-session"
+                              :follow #'bp/agent-sessions--org-follow-link
+                              :store #'bp/agent-sessions--org-store-link))))
+
+(defconst bp/agent-sessions--project-switch-command
+  '(bp/agent-session-switch-or-new "Agent Session")
+  "The entry this package adds to `project-switch-commands'.")
+
 ;;;###autoload
-(defun bp/agent-session-setup ()
-  "Install all side effects this package makes on systems outside itself.
-Namely: the vterm/eat/ghostel hooks and advice (session-id injection +
-terminal-title capture),
-the focus hook that clears the needs-attention highlight, the `agent-session'
-Org link type, the `C-x p a' project binding, and starting the Emacs server
-\(hook scripts reach us via emacsclient).  Idempotent; call from init/config."
-  ;; vterm: inject EMACS_AGENT_SESSION_ID and capture the terminal title.
-  (with-eval-after-load 'vterm
-    (unless (advice-member-p #'bp/agent-sessions--vterm-advice 'vterm--internal)
-      (advice-add 'vterm--internal :around #'bp/agent-sessions--vterm-advice))
-    (unless (advice-member-p #'bp/agent-sessions--capture-title 'vterm--set-title)
-      (advice-add 'vterm--set-title :before #'bp/agent-sessions--capture-title)))
-  ;; eat: the same id injection and title capture.
-  (with-eval-after-load 'eat
-    (unless (advice-member-p #'bp/agent-sessions--eat-advice 'eat--1)
-      (advice-add 'eat--1 :around #'bp/agent-sessions--eat-advice))
-    (unless (advice-member-p #'bp/agent-sessions--eat-capture-title 'eat--t-set-title)
-      (advice-add 'eat--t-set-title :after #'bp/agent-sessions--eat-capture-title)))
-  ;; ghostel: the id injection has a hook; the title capture still needs advice.
-  (with-eval-after-load 'ghostel
-    (add-hook 'ghostel-pre-spawn-hook #'bp/agent-sessions--ghostel-pre-spawn)
-    (unless (advice-member-p #'bp/agent-sessions--ghostel-capture-title
-                             'ghostel--set-title)
-      (advice-add 'ghostel--set-title :after
-                  #'bp/agent-sessions--ghostel-capture-title)))
-  ;; Clear a session's needs-attention highlight once the user focuses it.
-  (add-hook 'buffer-list-update-hook #'bp/agent-session--clear-attention-on-focus)
-  ;; Record that sessions still running at exit were *not* closed by the user.
-  ;; This is the half of the close-detection scheme that runs when Emacs goes
-  ;; away in an orderly fashion; `kill-buffer-hook' covers the other half, and
-  ;; the fact that Emacs runs one but not the other is what distinguishes them.
-  (add-hook 'kill-emacs-hook #'bp/agent-sessions--log-close-all)
-  ;; A periodic heartbeat so a session lost to a *crash* can still be dated:
-  ;; nothing runs at that point, so the last time we know Emacs was alive is
-  ;; the best available answer.
-  (unless bp/agent-sessions--heartbeat-timer
-    (setq bp/agent-sessions--heartbeat-timer
-          (run-with-timer 60 60 #'bp/agent-sessions--db-heartbeat)))
-  ;; `agent-session:' Org links that resume/jump to a session.
-  (with-eval-after-load 'ol
-    (org-link-set-parameters "agent-session"
-                             :follow #'bp/agent-sessions--org-follow-link
-                             :store #'bp/agent-sessions--org-store-link))
-  ;; C-x p a: switch between / create agent sessions for the current project.
-  (with-eval-after-load 'project
-    (define-key project-prefix-map (kbd "a") #'bp/agent-session-switch-or-new))
-  ;; Hook scripts forward events via emacsclient, so the server must be up.
-  (unless (server-running-p)
-    (server-start)))
+(define-minor-mode bp/agent-sessions-mode
+  "Track agent sessions in vterm, eat and ghostel terminals.
+Turning it on installs everything this package changes outside itself:
+advice on the terminal packages (session-id injection and title capture),
+the focus hook that clears the needs-attention highlight, the
+`agent-session:' Org link type, `C-x p a' and an \"Agent Session\" entry in
+`project-switch-commands', `bp/agent-sessions-terminal-passthrough-keys',
+and the Emacs server, which the hook scripts reach through emacsclient.
+Turning it off removes them again, except the Org link type and the server.
+
+The hooks in the agents' own configuration are separate: run
+`bp/agent-sessions-install' once."
+  :global t
+  :group 'agent-sessions
+  (if bp/agent-sessions-mode
+      (progn
+        (dolist (feature '(vterm eat ghostel ol))
+          (when (featurep feature)
+            (bp/agent-sessions--wire-feature feature)))
+        (add-hook 'after-load-functions #'bp/agent-sessions--after-load)
+        ;; Clear a session's needs-attention highlight once the user focuses
+        ;; it.
+        (add-hook 'buffer-list-update-hook
+                  #'bp/agent-session--clear-attention-on-focus)
+        ;; Record that sessions still running at exit were *not* closed by
+        ;; the user.  This is the half of the close-detection scheme that runs
+        ;; when Emacs goes away in an orderly fashion; `kill-buffer-hook'
+        ;; covers the other half, and the fact that Emacs runs one but not
+        ;; the other is what distinguishes them.
+        (add-hook 'kill-emacs-hook #'bp/agent-sessions--log-close-all)
+        ;; A periodic heartbeat so a session lost to a *crash* can still be
+        ;; dated: nothing runs at that point, so the last time we know Emacs
+        ;; was alive is the best available answer.
+        (unless bp/agent-sessions--heartbeat-timer
+          (setq bp/agent-sessions--heartbeat-timer
+                (run-with-timer 60 60 #'bp/agent-sessions--db-heartbeat)))
+        ;; C-x p a, and `a' in the `project-switch-project' menu.
+        (define-key project-prefix-map (kbd "a") #'bp/agent-session-switch-or-new)
+        ;; The option may also name a function (`project-prefix-or-any-command'),
+        ;; which has no list to add to.
+        (when (listp project-switch-commands)
+          (add-to-list 'project-switch-commands
+                       bp/agent-sessions--project-switch-command t))
+        ;; Hook scripts forward events via emacsclient, so the server must be
+        ;; up.
+        (unless (server-running-p)
+          (server-start)))
+    (advice-remove 'vterm--internal #'bp/agent-sessions--vterm-advice)
+    (advice-remove 'vterm--set-title #'bp/agent-sessions--capture-title)
+    (advice-remove 'eat--1 #'bp/agent-sessions--eat-advice)
+    (advice-remove 'eat--t-set-title #'bp/agent-sessions--eat-capture-title)
+    (remove-hook 'ghostel-pre-spawn-hook #'bp/agent-sessions--ghostel-pre-spawn)
+    (advice-remove 'ghostel--set-title #'bp/agent-sessions--ghostel-capture-title)
+    (bp/agent-sessions--remove-passthrough)
+    (remove-hook 'after-load-functions #'bp/agent-sessions--after-load)
+    (remove-hook 'buffer-list-update-hook
+                 #'bp/agent-session--clear-attention-on-focus)
+    (remove-hook 'kill-emacs-hook #'bp/agent-sessions--log-close-all)
+    (when (timerp bp/agent-sessions--heartbeat-timer)
+      (cancel-timer bp/agent-sessions--heartbeat-timer))
+    (setq bp/agent-sessions--heartbeat-timer nil)
+    (when (eq (lookup-key project-prefix-map (kbd "a"))
+              #'bp/agent-session-switch-or-new)
+      (define-key project-prefix-map (kbd "a") nil))
+    (when (listp project-switch-commands)
+      (setq project-switch-commands
+            (delete bp/agent-sessions--project-switch-command
+                    project-switch-commands)))))
 
 ;;;###autoload
 (defun bp/agent-sessions-list ()
@@ -8189,8 +8351,8 @@ Org link type, the `C-x p a' project binding, and starting the Emacs server
   (interactive)
   (let ((buf (get-buffer-create bp/agent-sessions-buffer-name)))
     (with-current-buffer buf
-      (unless (derived-mode-p 'bp/agent-sessions-mode)
-        (bp/agent-sessions-mode))
+      (unless (derived-mode-p 'bp/agent-sessions-dashboard-mode)
+        (bp/agent-sessions-dashboard-mode))
       (bp/agent-locks--reload)
       (bp/agent-sessions--refresh))
     (pop-to-buffer buf)))

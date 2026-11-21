@@ -236,7 +236,7 @@
         (puthash pr '(:life open :review changes-requested)
                  bp/agent-sessions--pr-states)
         (with-temp-buffer
-          (bp/agent-sessions-mode)
+          (bp/agent-sessions-dashboard-mode)
           (let ((inhibit-read-only t)
                 (bp/agent-sessions--row-status nil))
             (bp/agent-sessions--insert-links session "  ")

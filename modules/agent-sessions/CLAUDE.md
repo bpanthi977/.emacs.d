@@ -21,7 +21,33 @@ code says *what* it does; this file records *why*, so the intent survives edits.
   `bp/agent-orchestration-install-skill` alongside orca.
 - `orchestration/` — notes on how *Orca* (the app) does the same thing; read
   before redesigning this, not as a description of what is here.
-- Wiring/config is in `../agent-session-config.el`.
+- `bp/agent-sessions-mode` (global minor mode) is the whole setup; the
+  package must work with nothing else configured. `../agent-session-config.el`
+  is one user's config and holds only their own key choices.
+
+## Self-contained, minimal configuration
+
+This is meant to be published, so everything a user would otherwise have to
+write lives here: the user enables `bp/agent-sessions-mode` and, if they like,
+binds `bp/agent-sessions-list`. Integration with another package
+(terminal keymaps, project.el, Org, ivy) belongs in the package, behind
+`with-eval-after-load`-style wiring, never in the user's config. Two rules
+for that wiring:
+
+- **Turning the mode off undoes it.** Advice, hooks, the timer, the
+  project binding and menu entry, and the passthrough keys are all removed;
+  wiring for a package loaded later goes through `after-load-functions`,
+  which the mode removes, rather than `with-eval-after-load`, which cannot be
+  undone. Only the Org link type and the server stay.
+- **Touch other packages buffer-locally where possible.** The `C-c C-l`
+  binding is a minor mode (`bp/agent-sessions-terminal-mode`) enabled in
+  session terminals, not a binding in vterm's or ghostel's mode map; ghostel's
+  own notifications are turned off only in session terminals. Passthrough keys
+  are the exception: the terminal packages only support them globally, through
+  their exception lists, so the package adds the user's keys there and
+  removes exactly the ones it added. It sets those options through their
+  `:set` function, not `customize-set-variable`, so they are never marked
+  customized and saved into the user's custom file.
 
 ## Live Emacs safety
 
@@ -646,7 +672,7 @@ command no longer has. This is the one idea worth keeping from Orca's own design
 (`orchestration/provenance.md`).
 
 **Org links are composed by Org and pasted by the terminal backend.** `C-c C-l`
-in vterm and Eat's default semi-char mode runs `org-insert-link' in a temporary
+in a session terminal (`bp/agent-sessions-terminal-mode`) runs `org-insert-link' in a temporary
 Org buffer, preserving the normal stored-link completion and description
 prompt. The finished Org markup is then bracket-pasted into the terminal input
 without Enter, so an agent-session link can be copied from the dashboard and
@@ -1038,7 +1064,7 @@ which are the whole point of these commands existing:
   survive untouched; verify round-trips by equality against the original, not by
   eyeballing. A `.bak` is written before each change.
 
-Setup does **not** auto-run install — it writes user config files, so it stays
+`bp/agent-sessions-mode` does **not** run install — it writes user config files, so it stays
 an explicit `M-x`. Point users there rather than editing the JSON by hand.
 
 ## Editing
