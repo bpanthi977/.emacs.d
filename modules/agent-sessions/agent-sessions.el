@@ -1,10 +1,28 @@
-;; Dashboard for Claude/Codex/Pi sessions running in vterm buffers.
+;;; agent-sessions.el --- Dashboard for coding agents in Emacs terminals  -*- lexical-binding: t; -*-
+
+;; Author: Bibek Panthi
+;; Version: 0.1.0
+;; Package-Requires: ((emacs "29.1") (magit "4.0"))
+;; Keywords: tools, processes, convenience
+
+;; This file is not part of GNU Emacs.
+
+;;; Commentary:
+
+;; Dashboard for Claude/Codex/Pi sessions running in vterm, eat or ghostel
+;; terminals.
 ;;
-;; Every vterm buffer gets a unique id injected into its shell environment
+;; Every terminal buffer gets a unique id injected into its shell environment
 ;; (EMACS_AGENT_SESSION_ID) at creation time, with no special launcher command
 ;; needed. Hook scripts for Claude Code / Codex, and a Pi extension, forward
 ;; their event payloads to `agent-sessions-hook-notify' via emacsclient, keyed by
 ;; that id, so sessions sharing a worktree still resolve to the right buffer.
+;;
+;; Setup: turn on `agent-sessions-mode', run `agent-sessions-install' once to
+;; wire the agents' own hooks, and open the dashboard with
+;; `agent-sessions-list'.
+
+;;; Code:
 
 (require 'cl-lib)
 (require 'seq)
@@ -33,6 +51,8 @@
 ;; special so that works whether or not those packages are loaded.
 (defvar ivy-sort-functions-alist)
 (defvar ghostel-notification-functions)
+(defvar vterm-environment)
+(defvar eat-buffer-name)
 
 (defconst agent-sessions--dir
   (file-name-directory (or load-file-name buffer-file-name
@@ -71,7 +91,7 @@ shell's PATH, which is the failure mode worth designing away here."
           agent-sessions--extra-terminal-env))
 
 (defvar agent-sessions-id->buffer (make-hash-table :test 'equal)
-  "Session id -> vterm buffer, populated for every vterm buffer at creation.")
+  "Session id -> terminal buffer, populated for every terminal at creation.")
 
 (defvar agent-sessions--registry (make-hash-table :test 'equal)
   "Session id -> plist of live agent state and its terminal buffer.
@@ -119,7 +139,7 @@ Set on the worker's buffer at spawn, which is what `emacs-agent list' reads to
 answer \"whose workers are these\" without consulting the message log.")
 
 (defvar-local agent-sessions-id nil
-  "Unique id injected into this vterm buffer's shell environment, if any.")
+  "Unique id injected into this terminal's shell environment, if any.")
 
 (defvar-local agent-sessions--created-at nil
   "When this terminal buffer was created; the dashboard's stable sort key.
@@ -5281,7 +5301,7 @@ item's group; with a prefix argument, clears every group."
 
 ;;;###autoload
 (defun agent-sessions-rename-to-title ()
-  "Rename the current vterm buffer to its agent session title.
+  "Rename the current terminal buffer to its agent session title.
 The title captured from the terminal (`agent-sessions-title') is offered
 as the editable default so it can be tweaked before confirming."
   (interactive)
@@ -5829,7 +5849,7 @@ This makes `C-x p' project commands (and anything else keyed off
       (setq default-directory (file-name-as-directory dir)))))
 
 (define-derived-mode agent-sessions-dashboard-mode magit-section-mode "Agent-Sessions"
-  "Major mode listing Claude/Codex sessions running in vterm, as a
+  "Major mode listing agent sessions running in Emacs terminals, as a
 repo > worktree > session tree, or repo > folder > session with `f'.
 Sections fold with TAB; Shift+TAB toggles overview; `F' manages folders."
   (add-hook 'post-command-hook
@@ -7875,7 +7895,7 @@ nothing happens.  Return non-nil when LOCK was released."
                                 'agent-sessions-needs-attention))))))
       (insert "\n"))))
 
-(defcustom agent-sessions-mailboxes-agents-directory "~/dev/agents/"
+(defcustom agent-sessions-mailboxes-agents-directory "~/agents/"
   "Where persistent agents live: one mailbox directory per agent, by name.
 It holds the shared `PLAYBOOK.md' that `agent-sessions-mailboxes-start' tells a new
 agent to read before its own `context.md'."
@@ -8347,7 +8367,7 @@ The hooks in the agents' own configuration are separate: run
 
 ;;;###autoload
 (defun agent-sessions-list ()
-  "Open the dashboard of Claude/Codex sessions running in vterm."
+  "Open the dashboard of agent sessions running in Emacs terminals."
   (interactive)
   (let ((buf (get-buffer-create agent-sessions-buffer-name)))
     (with-current-buffer buf
@@ -8358,3 +8378,5 @@ The hooks in the agents' own configuration are separate: run
     (pop-to-buffer buf)))
 
 (provide 'agent-sessions)
+
+;;; agent-sessions.el ends here

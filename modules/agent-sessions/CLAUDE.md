@@ -726,7 +726,7 @@ pasted, queued or used to revive anything; the role keeps a background
 the user: the dashboard lists it at the top (with its unread count, oldest
 subject, and a not-running holder's lock if one still blocks it), and `RET`
 starts an agent in DIR prompted with `You are <name>. Read
-~/dev/agents/PLAYBOOK.md and then ~/dev/agents/<name>/context.md` — the
+<agents-dir>/PLAYBOOK.md and then <agents-dir>/<name>/context.md` — the
 shared playbook in `agent-sessions-mailboxes-agents-directory`, then the role's own
 context; the name is the mailbox directory's. Starting one automatically was considered and dropped: a burst of mail before the first
 instance took the lock would start several, and the second would sit refused
@@ -919,9 +919,11 @@ the column has no width when no session qualifies, like the lock column.
   only for PRs with no known state; the rest keep showing what GitHub last
   said. Unfetched reads `…`/`fetching…`, failed reads `?` and the reason.
   Nothing goes to the echo area: a background poll must not interrupt.
-- **This file is dynamically bound.** The sentinel cannot close over the URLs
-  it fetched, so they ride on the process (`process-put`), and the callbacks
-  are named functions.
+- **The fetched URLs ride on the process.** They are stored with
+  `process-put` and the callbacks are named functions, written when the file
+  was dynamically bound and the sentinel could not close over them. It is
+  lexically bound now; the shape still works and keeps the callbacks
+  testable on their own.
 
 **PATH injection is additive by construction.** The terminal env sets
 `PATH=<our bin>:<the PATH the terminal was going to inherit anyway>`, read from
@@ -1068,6 +1070,13 @@ which are the whole point of these commands existing:
 an explicit `M-x`. Point users there rather than editing the JSON by hand.
 
 ## Editing
+
+**The file is lexically bound, so another package's variable needs a
+`defvar` before it can be `let`-bound.** vterm, eat and ghostel are loaded
+lazily, so at compile time their variables are not known to be special, and a
+plain `let` of `vterm-environment` or `eat-buffer-name` would bind a local
+the package never sees. They are declared at the top of the file; add any new
+one there.
 
 **Replace a `bin/` script, never rewrite it in place.** Agents keep
 `emacs-agent wait` running for days, and `sh` reads a running script from disk
