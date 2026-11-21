@@ -22,9 +22,18 @@ code says *what* it does; this file records *why*, so the intent survives edits.
 **Zero-friction tracking beats an explicit launcher.** Rather than a wrapper
 command you must remember to use, every terminal buffer gets a unique id
 injected into its shell env, so *any* `claude`/`codex` you type in *any*
-eat/vterm is tracked automatically. The cost is that we advise the terminal
-packages' internals — accepted deliberately in exchange for never having to
-think about launching sessions specially.
+eat/vterm/ghostel is tracked automatically. The cost is that we advise the
+terminal packages' internals — accepted deliberately in exchange for never
+having to think about launching sessions specially.
+
+ghostel needs the least of that: its `ghostel-pre-spawn-hook` runs in the new
+buffer with `process-environment` bound, so the id is injected there, and only
+the title setter is advised. That hook also fires for ghostel's compile,
+shell-command and eshell buffers, so only identities of kind `term` (plain and
+project terminals) become sessions. ghostel owns its pty natively: the
+buffer's process is an event pipe with no pid, and the shell's pid lives in
+`ghostel--pid`. Anything that inspects the shell goes through
+`bp/agent-sessions--terminal-pid`, never `process-id` directly.
 
 **The per-buffer id is the identity, not the agent's own session id.** Sessions
 sharing a worktree must still resolve to the right buffer, and the agent's own
@@ -344,6 +353,15 @@ event). Its status is not `running', i.e. no turn is in progress. And something
 holds its terminal's foreground.
 
 Both of the latter are phrased as exclusions on purpose. Enumerating the states
+ghostel has no faint face: its native renderer bakes faint into the run's
+`:foreground`, blending the text color into the background as
+`(fg*166 + bg*90)/256` per channel (`dimColor` in its `src/style_face.zig`).
+Claude's suggestion is faint in the default color, so a run whose foreground is
+exactly that blend of the `ghostel-default` foreground and the run's background
+counts as faint too. This is not just a nicety. Claude keeps a suggestion on
+screen until the human acts, and an idle Claude fires no hook to retry
+delivery, so without the check mail to an idle Claude waited for the human.
+If ghostel changes its blend, the check fails safe: suggestions read as drafts.
 that *are* fine has already failed once: the first version listed `idle' and
 `needs-attention', and `needs-attention' becomes `stopped' the moment the user
 looks at the terminal, so delivery quietly stopped for exactly the session an
@@ -380,6 +398,15 @@ into `~/.claude/skills` and `~/.codex/prompts`. Two copies of a protocol, one of
 them cached in a config directory, is how a skill ends up describing flags the
 command no longer has. This is the one idea worth keeping from Orca's own design
 (`orchestration/provenance.md`).
+
+**Org links are composed by Org and pasted by the terminal backend.** `C-c C-l`
+in vterm and Eat's default semi-char mode runs `org-insert-link' in a temporary
+Org buffer, preserving the normal stored-link completion and description
+prompt. The finished Org markup is then bracket-pasted into the terminal input
+without Enter, so an agent-session link can be copied from the dashboard and
+included in a prompt without either teaching the terminal Org syntax or
+submitting a half-finished message. The bracketed-paste implementation is shared
+with orchestration delivery; terminal-specific string handling has one owner.
 
 ## Fork/branch tracking — the one place with no ground truth
 
