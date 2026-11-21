@@ -181,6 +181,28 @@
       (kill-buffer target-buffer)
       (kill-buffer wrong-buffer))))
 
+(ert-deftest bp/agent-sessions-emacs-share-help-lists-every-state ()
+  "`emacs-share --help' names each accepted state, and only those.
+The help writes the states out with their meanings, so this keeps it in step
+with `bp/agent-sessions-states'.  `state --help' is help, not a state."
+  (let ((script (expand-file-name "bin/emacs-share"
+                                  (file-name-directory
+                                   (locate-library "agent-sessions"))))
+        (process-environment (copy-sequence process-environment)))
+    ;; Help must not need Emacs: no session, no emacsclient call.
+    (setenv "EMACS_AGENT_SESSION_ID" nil)
+    (dolist (args '(("--help") ("state" "--help")))
+      (with-temp-buffer
+        (should (= 0 (apply #'call-process script nil t nil args)))
+        (let ((listed nil))
+          (goto-char (point-min))
+          (while (re-search-forward "^        \\([A-Z][A-Z-]+\\)  " nil t)
+            (push (match-string 1) listed))
+          (should (equal (nreverse listed) bp/agent-sessions-states)))))
+    (with-temp-buffer
+      (should (= 2 (call-process script nil t nil "state")))
+      (should (string-match-p "--help" (buffer-string))))))
+
 (ert-deftest bp/agent-sessions-emacs-share-passes-codex-thread-id ()
   (let* ((directory (make-temp-file "agent-share-cli-" t))
          (source (expand-file-name "handoff.md" directory))

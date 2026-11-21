@@ -101,6 +101,12 @@ Give a worker a worktree to itself when it will:
 - **rebuild or regenerate into shared paths**, where two builds clobber each
   other's artifacts.
 
+Workers in separate worktrees can still collide on something outside them: a
+shared local stack, a database, a port. Tell each such worker which
+`emacs-lock` name guards it (a directory, such as `~/src/app`, names
+itself), so they take turns
+instead of each inventing a different name for the same resource.
+
 When you do share a worktree, say so in every brief that shares it: name the
 files that worker may write, and tell it to leave git alone. A worker that was
 not told will reasonably assume the checkout is its own. (Its launch preamble

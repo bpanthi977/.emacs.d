@@ -55,6 +55,15 @@ Rules:
   `rebase`, `stash`) unless your task says the worktree is yours. The index and
   HEAD are shared per worktree: staging anything would stage a co-tenant's
   half-finished edits along with yours.
+- Something only one agent may use at a time (a shared stack, a database, a
+  checkout outside yours) is guarded with `emacs-lock`. Use the lock name your
+  task or the resource's own docs give; otherwise try a name, and if it is
+  refused as unknown, reuse one of the names it prints before creating one
+  with `--new "what it is"`. Run
+  `emacs-lock wait NAME --why "..."` in the background, and release it with
+  `emacs-lock release NAME` when you are done, including when you fail. If mail
+  says the user released your lock, stop using the resource until you have
+  waited for it again.
 - To stop a `wait` you started in the background, stop that task by its id or
   kill the exact pid you started. Never `pkill -f "emacs-agent wait"` or kill
   by any other pattern: it matches every agent's mailbox watcher on the machine.

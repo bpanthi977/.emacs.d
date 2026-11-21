@@ -53,7 +53,11 @@ additive.  Assembling one from anywhere else could silently *shrink* the
 shell's PATH, which is the failure mode worth designing away here."
   (append (list (format "EMACS_AGENT_SESSION_ID=%s" id)
                 (format "PATH=%s%s%s" bp/agent-sessions--bin-dir path-separator
-                        (or (getenv "PATH") "")))
+                        (or (getenv "PATH") ""))
+                ;; `emacs-lock' opens the database itself; tell it which one,
+                ;; so it follows a customised `bp/agent-sessions-db-file'.
+                (format "EMACS_AGENT_SESSIONS_DB=%s"
+                        (expand-file-name bp/agent-sessions-db-file)))
           bp/agent-sessions--extra-terminal-env))
 
 (defvar bp/agent-session-id->buffer (make-hash-table :test 'equal)
@@ -667,6 +671,11 @@ to the terminal that actually owns the event."
         ;; terminal paste safe.
         (bp/agent-orchestration--hydrate session-id)
         (bp/agent-orchestration-deliver
+         session-id (equal event-name "UserPromptSubmit"))
+        ;; Likewise the locks it held before a crash or `k': it believes it
+        ;; still holds them, so they should read as running again.
+        (bp/agent-locks--adopt session-id agent-session-id
+                               (equal event-name "SessionStart"))))
     (bp/agent-sessions--refresh-if-visible))
   nil)
 
@@ -1102,6 +1111,11 @@ not push the titles of stated rows out of line with unstated ones."
 (defvar-local bp/agent-sessions--worktree-column-width 1
   "Width of the worktree name column in the current dashboard render.")
 
+(defvar-local bp/agent-sessions--lock-column-width 0
+  "Width of the lock column in the current dashboard render.
+Zero when no session holds or waits for a lock, so the column costs nothing
+on a dashboard that does not use locks.")
+
 (defvar-local bp/agent-sessions--pr-column-width 0
   "Width of the PR glyph column in the current dashboard render.
 Zero when no session has exactly one PR link, so the column costs nothing on a
@@ -1182,7 +1196,11 @@ indentation conveys the relationship."
                     (bp/agent-sessions--session-worktree-name session)))
                  marker
                  (format "%-7s %-16s "
+                         (or (plist-get session :agent-type) "") status)
+                 (bp/agent-locks--pad (bp/agent-locks--session-marker id session)
+                                      bp/agent-sessions--lock-column-width))
          (bp/agent-sessions--session-state session)
+         (format "%s%s%s%s%s\n"
                  title
                  (bp/agent-orchestration--row-badge id)
                  (if folder (format "  [%s]" (plist-get folder :name)) "")
@@ -1199,6 +1217,9 @@ indentation conveys the relationship."
        (bp/agent-sessions--session-note-keys session)
        (concat base indent "    "))
       (bp/agent-sessions--insert-links session (concat base indent "    "))
+      (bp/agent-sessions--insert-files session (concat base indent "    "))
+      (bp/agent-locks--insert-session-locks id session
+                                            (concat base indent "    ")))))
 
 (defun bp/agent-sessions--insert-entries (entries)
   "Insert ENTRIES, nesting any branched session under its parent when present.
@@ -1546,6 +1567,54 @@ order (e.g. for buffers with no creation stamp)."
        shared_at  INTEGER NOT NULL,
        updated_at INTEGER NOT NULL,
        visited_at INTEGER,
+       PRIMARY KEY (owner_kind, owner_key, url))"
+
+    ;; Locks are taken and released by `bin/emacs-lock' talking to this file
+    ;; with sqlite3 directly, never through Emacs; Emacs only owns the schema
+    ;; and reads the rows.  A holder is a durable conversation key, so a held
+    ;; lock survives its terminal, and `holder_pid' plus its start time is how
+    ;; anyone can tell whether the holder is still running.  Directory names
+    ;; end in "/" so containment is a plain prefix test.
+    "CREATE TABLE IF NOT EXISTS locks (
+       name             TEXT    PRIMARY KEY,
+       is_dir           INTEGER NOT NULL,
+       holder_kind      TEXT    NOT NULL,
+       holder_key       TEXT    NOT NULL,
+       holder_label     TEXT,
+       holder_pid       INTEGER,
+       holder_pid_start TEXT,
+       why              TEXT,
+       acquired_at      INTEGER NOT NULL)"
+    ;; The ticket orders the queue; a waiter renews `expires_at' on every
+    ;; poll, so one that stopped polling drops out instead of blocking.
+    "CREATE TABLE IF NOT EXISTS lock_waiters (
+       ticket       INTEGER PRIMARY KEY AUTOINCREMENT,
+       name         TEXT    NOT NULL,
+       is_dir       INTEGER NOT NULL,
+       waiter_kind  TEXT    NOT NULL,
+       waiter_key   TEXT    NOT NULL,
+       waiter_label TEXT,
+       why          TEXT,
+       expires_at   INTEGER NOT NULL,
+       UNIQUE (name, waiter_kind, waiter_key))"
+    ;; Free-form lock names ever used, so the next agent reuses a spelling
+    ;; instead of inventing one.  Directories never appear: they name
+    ;; themselves.  `id' is the cursor `lock_name_seen' compares against.
+    "CREATE TABLE IF NOT EXISTS lock_names (
+       id           INTEGER PRIMARY KEY AUTOINCREMENT,
+       name         TEXT    NOT NULL UNIQUE,
+       description  TEXT    NOT NULL,
+       created_by   TEXT,
+       created_at   INTEGER NOT NULL,
+       last_used_at INTEGER NOT NULL)"
+    ;; The newest `lock_names.id' each holder has been shown.  Creating a name
+    ;; is refused while a newer one exists, so no one invents a second
+    ;; spelling for a resource someone named a moment ago.
+    "CREATE TABLE IF NOT EXISTS lock_name_seen (
+       holder_kind TEXT    NOT NULL,
+       holder_key  TEXT    NOT NULL,
+       seen_id     INTEGER NOT NULL,
+       PRIMARY KEY (holder_kind, holder_key))")
   "Statements that bring an empty or existing database up to date.
 Schema migrations are handled by `bp/agent-sessions--db-migrate'.")
 
@@ -1690,6 +1759,8 @@ reason — an Emacs with no agent sessions has nothing to date."
   (when (sqlitep bp/agent-sessions--db)
     (bp/agent-sessions--meta-set bp/agent-sessions--db
                                  "last_seen" (bp/agent-sessions--now))
+    (bp/agent-sessions--log-reopen-live bp/agent-sessions--db)
+    (bp/agent-locks--tick)))
 
 (defun bp/agent-sessions--log-reopen-live (db)
   "Reopen any log row in DB that a terminal still running here points at.
@@ -3950,6 +4021,7 @@ same path under another session by magit's parent chain."
     (setq bp/agent-sessions--row-status nil)
     (magit-insert-section (bp/agent-sessions-root)
       (bp/agent-mailboxes--insert-section)
+      (bp/agent-locks--insert-section)
       (let ((entries (bp/agent-sessions--live-entries)))
         (setq bp/agent-sessions--worktree-column-width
               (1+ (apply #'max 0
@@ -3958,6 +4030,15 @@ same path under another session by magit's parent chain."
                                     (bp/agent-sessions--session-worktree-name
                                      (plist-get entry :session))))
                                  entries))))
+        (setq bp/agent-sessions--lock-column-width
+              (let ((widest (apply #'max 0
+                                   (mapcar (lambda (entry)
+                                             (string-width
+                                              (bp/agent-locks--session-marker
+                                               (plist-get entry :id)
+                                               (plist-get entry :session))))
+                                           entries))))
+                (if (> widest 0) (1+ widest) 0)))
         (setq bp/agent-sessions--pr-column-width
               (if (seq-some (lambda (entry)
                               (bp/agent-sessions--session-pr-link
@@ -4011,7 +4092,14 @@ same path under another session by magit's parent chain."
 (defun bp/agent-sessions--overview-depth (section parent-depth)
   "Return SECTION's hierarchy depth, inheriting it for auxiliary sections."
   (pcase (oref section type)
+    ((or 'bp/agent-session-repo 'bp/agent-locks-root) 0)
+    ((or 'bp/agent-session-folder 'bp/agent-session-worktree
+         'bp/agent-lock-row)
+     1)
     ('bp/agent-session-row 2)
+    ((or 'bp/agent-session-file 'bp/agent-session-link
+         'bp/agent-session-lock 'bp/agent-session-lock-wait)
+     3)
     (_ parent-depth)))
 
 (defun bp/agent-sessions--overview-max-level ()
@@ -4107,6 +4195,7 @@ invalidates the worktree cache and re-reads each session's repo/branch info."
   (interactive)
   (clrhash bp/agent-sessions--worktrees-cache)
   (bp/agent-sessions--reread-repo-info)
+  (bp/agent-locks--reload)
   (bp/agent-sessions--refresh)
   ;; After the render, which is what records the PRs on the dashboard.
   (bp/agent-sessions--pr-fetch t))
@@ -4317,12 +4406,20 @@ of the file row above them: pressing `u' again there would act on that file."
               (throw 'found (magit-section-ident section)))))))))
 
 (defun bp/agent-sessions-kill ()
+  "Kill the session at point, detach its shared file or link, or release a lock.
 On an empty folder heading, delete that folder.
 Detaching drops only the dashboard pointer; files on disk and external targets
+are untouched.  Killing a session leaves the locks it holds held, shown as not
+running: a restored session still believes it holds them."
   (interactive)
+  (cond ((bp/agent-locks--at-point) (bp/agent-locks-release-at-point))
+        ((bp/agent-sessions--enclosing-section 'bp/agent-session-lock-wait)
+         (message "The agent leaves a queue itself; there is nothing to release."))
         ((let ((section (magit-current-section)))
            (and section (eq (oref section type) 'bp/agent-session-folder)))
          (bp/agent-sessions--delete-empty-folder-at-point))
+        (t (bp/agent-sessions--kill-attachment-or-session))))
+
 (defun bp/agent-sessions--delete-empty-folder-at-point ()
   "Delete the folder whose heading is at point, if it shows no session.
 Emptiness is what the heading's count shows: live sessions.  A folder
@@ -4344,6 +4441,7 @@ holding sessions is left alone; `F' deletes it after confirmation."
         (bp/agent-sessions--goto-ident ident)
         (message "Deleted empty folder %s." (plist-get folder :name)))))))
 
+(defun bp/agent-sessions--kill-attachment-or-session ()
   (pcase (bp/agent-sessions--link-at-point)
     (`(,session ,url ,link)
      (let ((ident (bp/agent-sessions--neighbour-ident
@@ -5919,9 +6017,10 @@ message is gone, but the identity it was filed under is not."
 A message restored from the database may have outlived the terminal that sent
 it, so the sender is resolved through its durable key: answerable when that
 conversation is live again, named but not addressable when it is not."
-  (let* ((live (bp/agent-orchestration--sender-terminal msg))
+  (let* ((from-user (equal (car (plist-get msg :from-key)) "user"))
          (from-mailbox (bp/agent-mailbox--of-key (plist-get msg :from-key)))
          (to-mailbox (bp/agent-mailbox--of-key (plist-get msg :to-key)))
+         (live (bp/agent-orchestration--sender-terminal msg))
          (reply-to (bp/agent-orchestration--sender-address msg))
          ;; Mail read from a mailbox is answered as that mailbox, so the
          ;; reply reaches the role rather than this one conversation.
@@ -5932,14 +6031,16 @@ conversation is live again, named but not addressable when it is not."
                                             (shell-quote-argument to-mailbox))
                                   ""))))
          (label (or (plist-get msg :from-label) (plist-get msg :from) "unknown")))
-                    (if live
-                        (bp/agent-orchestration--describe-sender live)
     (concat (format "--- $orca (/orca) message from %s%s [%s]\n"
                     (cond (from-mailbox (concat "mailbox " from-mailbox))
                           (live live)
                           (t label))
                     (cond (from-mailbox (format " (sent by %s)" label))
                           (live (bp/agent-orchestration--describe-sender live))
+                          ;; Sent from the dashboard, e.g. a lock notice:
+                          ;; there never was a terminal to be gone.
+                          (from-user " (via the agent-sessions dashboard)")
+                          (t (format " (%s — that terminal is gone)" label)))
                     (plist-get msg :type))
             (format "Subject: %s\n" (plist-get msg :subject))
             (let ((body (plist-get msg :body)))
@@ -5950,14 +6051,16 @@ conversation is live again, named but not addressable when it is not."
             (let ((report (plist-get msg :report)))
               (if (and report (not (string-empty-p report)))
                   (format "Report: %s\n" report) ""))
-                (format "Reply: emacs-agent send --to %s --type answer --subject \"...\"\n"
-              "Reply: the sender's terminal is not live here; nothing to reply to.\n"))))
             (cond ((and reply-to (equal (plist-get msg :type) "question"))
+                   (format "Reply: emacs-agent send --to %s --type answer --subject \"...\"\n"
+                           reply-to))
                   ;; Only a question waits on its reply; offering the command
                   ;; anyway keeps a follow-up one copy away.
                   (reply-to
                    (format "Reply (optional): emacs-agent send --to %s --subject \"...\"\n"
                            reply-to))
+                  (from-user "Reply: none needed; tell the user in your normal output.\n")
+                  (t "Reply: the sender's terminal is not live here; nothing to reply to.\n")))))
 
 (defun bp/agent-orchestration--format-messages (messages)
   (concat (format "messages: %d\n" (length messages))
@@ -6733,7 +6836,17 @@ guide', so what is installed is a stub that cannot go stale.  Idempotent."
            (bp/agent-orchestration--link
             (expand-file-name "orca-prompt.md" dir)
             (expand-file-name (format "%s.md" bp/agent-orchestration--skill-name)
-                              bp/agent-orchestration-codex-prompts-dir)))))
+                              bp/agent-orchestration-codex-prompts-dir))))
+         ;; The `emacs-lock' skill rides along: it teaches the same agents
+         ;; the other command this package puts on their PATH.
+         (lock-dir (expand-file-name "skills/emacs-lock" bp/agent-sessions--dir))
+         (results
+          (append results
+                  (mapcar (lambda (skills-dir)
+                            (bp/agent-orchestration--link
+                             lock-dir (expand-file-name "emacs-lock" skills-dir)))
+                          (list bp/agent-orchestration-claude-skills-dir
+                                bp/agent-orchestration-codex-skills-dir)))))
     (unless (file-directory-p dir)
       (error "agent-sessions: missing skill directory %s" dir))
     (unless (server-running-p) (server-start))
@@ -7290,6 +7403,83 @@ out one that is already taken — or hide one that just became available."
                           ""))))
             worktrees "")))))))
 
+;;; Locks -------------------------------------------------------------------
+;; `bin/emacs-lock' takes and releases locks by writing the database with
+;; sqlite3 directly (see "Locks" in CLAUDE.md).  Emacs keeps a working copy
+;; for the render path, which must never query the database, and reloads it
+;; when the CLI pokes `bp/agent-locks-changed' and on the heartbeat, which
+;; catches changes made while no Emacs was listening.
+
+(defvar bp/agent-locks--held nil
+  "Held locks as plists, oldest first: the render path's copy of `locks'.")
+
+(defvar bp/agent-locks--waiters nil
+  "Live queued waiters as plists, in ticket order.")
+
+(defvar bp/agent-locks--loaded-p nil
+  "Non-nil once the working copy has been read at least once.")
+
+(defun bp/agent-locks--pid-start (pid)
+  "PID's start time as `ps -o lstart=' prints it, or nil when it is gone.
+The same spelling `bin/emacs-lock' records, so the two compare as strings and a
+reused pid, which has a different start time, does not read as the holder."
+  (when (and (integerp pid) (> pid 0))
+    (with-temp-buffer
+      (when (eq 0 (call-process "ps" nil t nil "-o" "lstart="
+                                "-p" (number-to-string pid)))
+        (let ((start (string-trim (buffer-string))))
+          (unless (string-empty-p start) start))))))
+
+(defun bp/agent-locks--liveness (pid start)
+  "Whether the process PID that started at START is still running.
+`unknown' when no process was recorded, which happens for agents whose
+environment names no long-lived pid until Emacs adopts the lock."
+  (cond ((null pid) 'unknown)
+        ((equal (bp/agent-locks--pid-start pid) start) 'running)
+        (t 'not-running)))
+
+(defun bp/agent-locks--reload ()
+  "Re-read held locks and live waiters into the working copy.
+Return non-nil when what the dashboard would show has changed."
+  (let* ((db (bp/agent-sessions--db))
+         (now (bp/agent-sessions--now))
+         (held
+          (mapcar
+           (pcase-lambda (`(,name ,is-dir ,kind ,key ,label ,pid ,start ,why ,at))
+             (list :name name :dir (eql is-dir 1) :holder (list kind key)
+                   :label label :pid pid :pid-start start :why why
+                   :acquired-at at
+                   :liveness (bp/agent-locks--liveness pid start)))
+           (sqlite-select db "SELECT name, is_dir, holder_kind, holder_key,
+                                     holder_label, holder_pid, holder_pid_start,
+                                     why, acquired_at
+                                FROM locks ORDER BY acquired_at")))
+         (waiters
+          (mapcar
+           (pcase-lambda (`(,name ,kind ,key ,label ,why))
+             (list :name name :waiter (list kind key) :label label :why why))
+           (sqlite-select db "SELECT name, waiter_kind, waiter_key,
+                                     waiter_label, why
+                                FROM lock_waiters WHERE expires_at >= ?
+                               ORDER BY ticket"
+                          (list now))))
+         (changed (not (and (equal held bp/agent-locks--held)
+                            (equal waiters bp/agent-locks--waiters)))))
+    (setq bp/agent-locks--held held
+          bp/agent-locks--waiters waiters
+          bp/agent-locks--loaded-p t)
+    changed))
+
+(defun bp/agent-locks--ensure-loaded ()
+  "Load the working copy once, for callers that run before anything poked."
+  (unless bp/agent-locks--loaded-p
+    (bp/agent-locks--reload)))
+
+(defun bp/agent-locks-changed ()
+  "Entry point `bin/emacs-lock' pokes after it changes a lock.
+Reload the working copy and redraw.  Errors are swallowed: the poke is
+best-effort by design, and nothing reads its reply."
+  (condition-case err
       ;; Both reloads run: `or' would skip the second whenever the first
       ;; reported a change.  Mailboxes ride along because whether one has a
       ;; listener is a lock question.
@@ -7297,9 +7487,283 @@ out one that is already taken — or hide one that just became available."
             (mailboxes (bp/agent-mailboxes--reload)))
         (when (or locks mailboxes)
           (bp/agent-sessions--refresh-if-visible)))
+    (error (message "agent-sessions: could not reload locks (%s)"
+                    (error-message-string err))))
+  nil)
+
+(defun bp/agent-locks--tick ()
+  "Heartbeat half of the reload: catch changes no poke announced.
+A poke reaches only the default server, and a holder's death announces nothing
+at all, so liveness is recomputed here too."
+  (when (or bp/agent-locks--held bp/agent-locks--waiters
             bp/agent-mailboxes--unread
+            (get-buffer bp/agent-sessions-buffer-name))
+    (bp/agent-locks-changed)))
+
+(defun bp/agent-locks--adopt (id agent-session-id &optional fresh)
+  "Point AGENT-SESSION-ID's locks at terminal ID's process if they lost theirs.
+Called on every hook event, so it touches the database only when the working
+copy shows this conversation holding a lock that is not running — a session
+restored with `R', or one whose agent recorded no pid at all.  The terminal's
+process is the stand-in: it lives at least as long as the agent in it.
+
+With FRESH, check each of this conversation's locks with `ps' instead of
+trusting the working copy.  The caller passes it on `SessionStart': a restore
+resumes the conversation seconds after its old terminal was killed, while the
+working copy's liveness can be up to a heartbeat old and still say `running'.
+Trusting it there skipped the adoption, and nothing retried until the next
+hook event, often the human's next prompt."
+  (when agent-session-id
+    (condition-case err
+        (progn
+          (bp/agent-locks--ensure-loaded)
+          (let* ((key (list "session" agent-session-id))
+                 (names (delq nil
+                              (mapcar (lambda (lock)
+                                        (and (equal (plist-get lock :holder) key)
+                                             (not (eq (if fresh
+                                                          (bp/agent-locks--liveness
+                                                           (plist-get lock :pid)
+                                                           (plist-get lock :pid-start))
+                                                        (plist-get lock :liveness))
+                                                      'running))
+                                             (plist-get lock :name)))
+                                      bp/agent-locks--held)))
+                 (buf (and names (gethash id bp/agent-session-id->buffer)))
                  (pid (and (buffer-live-p buf)
                            (bp/agent-sessions--terminal-pid buf)))
+                 (start (and pid (bp/agent-locks--pid-start pid))))
+            (when start
+              (let ((db (bp/agent-sessions--db)))
+                (with-sqlite-transaction db
+                  (dolist (name names)
+                    (sqlite-execute db "UPDATE locks
+                                           SET holder_pid = ?, holder_pid_start = ?
+                                         WHERE name = ? AND holder_kind = ?
+                                           AND holder_key = ?"
+                                    (append (list pid start name) key)))))
+              (bp/agent-locks--reload))))
+      (error (message "agent-sessions: could not adopt locks (%s)"
+                      (error-message-string err))))))
+
+;;;; Dashboard
+
+(defun bp/agent-locks--display-name (name)
+  "NAME as the dashboard shows it: directories abbreviated, with their slash."
+  (if (string-prefix-p "/" name) (abbreviate-file-name name) name))
+
+;; A lock is drawn under the session holding it, the way a shared file is, so
+;; the session row is its holder and the lock row only says what and why.
+;; The Locks section above the repos keeps only what has no session row to
+;; hang from: a holder that is not running here (killed, another Emacs, a
+;; script), and a waiter in the same position.
+
+(defun bp/agent-locks--age (seconds)
+  (cond ((< seconds 60) (format "%ds" seconds))
+        ((< seconds 3600) (format "%dm" (/ seconds 60)))
+        ((< seconds 86400) (format "%dh%02dm" (/ seconds 3600)
+                                   (/ (% seconds 3600) 60)))
+        (t (format "%dd" (/ seconds 86400)))))
+
+(defun bp/agent-locks--why (plist)
+  "PLIST's reason as a trailing ` — why', or an empty string."
+  (if-let ((why (plist-get plist :why)))
+      (format " — %s" why)
+    ""))
+
+(defun bp/agent-locks--queue-text (name)
+  "Who is queued for NAME, as a trailing `  ⏳ A, B', or an empty string."
+  (let ((queue (seq-filter (lambda (w) (equal (plist-get w :name) name))
+                           bp/agent-locks--waiters)))
+    (if queue
+        (format "  ⏳ %s" (mapconcat (lambda (w) (plist-get w :label)) queue ", "))
+      "")))
+
+(defun bp/agent-locks--insert-held (lock indent &optional show-holder)
+  "Insert a row for held LOCK at INDENT.
+SHOW-HOLDER names the holder in the row, for the Locks section, where no
+session row above says who it is.  The two places use different section
+types so `S-TAB' treats a lock under a session like that session's files.
+A holder that is not running still blocks everyone, and is the row the user
+most needs to notice, so it borrows the error face."
+  (let* ((name (plist-get lock :name))
+         (liveness (plist-get lock :liveness))
+         (age (bp/agent-locks--age (- (bp/agent-sessions--now)
+                                      (plist-get lock :acquired-at))))
+         (row
+          (propertize
+           (concat indent "🔒 " (bp/agent-locks--display-name name) "  "
+                   (if show-holder
+                       (format "held by %s%s for %s"
+                               (or (plist-get lock :label)
+                                   (cadr (plist-get lock :holder)))
+                               (pcase liveness
+                                 ('not-running " (not running)")
+                                 ('unknown " (liveness unknown)")
+                                 (_ ""))
+                               age)
+                     (concat age (if (eq liveness 'not-running)
+                                     " (not running)" "")))
+                   (bp/agent-locks--why lock)
+                   (bp/agent-locks--queue-text name)
+                   "\n")
+           'font-lock-face (if (eq liveness 'not-running)
+                               'bp/agent-session-error
+                             'bp/agent-session-file))))
+    (if show-holder
+        (magit-insert-section (bp/agent-lock-row name) (insert row))
+      (magit-insert-section (bp/agent-session-lock name) (insert row)))))
+
+(defun bp/agent-locks--insert-waiting (waiter indent &optional show-waiter)
+  "Insert a row for WAITER at INDENT; SHOW-WAITER names who is waiting."
+  (magit-insert-section (bp/agent-session-lock-wait (plist-get waiter :name))
+    (insert
+     (propertize
+      (concat indent "⏳ " (bp/agent-locks--display-name (plist-get waiter :name))
+              "  " (if show-waiter
+                       (format "%s waiting" (plist-get waiter :label))
+                     "waiting")
+              (bp/agent-locks--why waiter)
+              "\n")
+      'font-lock-face 'bp/agent-session-file))))
+
+(defun bp/agent-locks--session-marker (id session)
+  "The lock column for session ID, e.g. `🔒', `🔒 (2)', `⏳ (1, 3)', or empty.
+A holder shows how many locks it holds, when more than one; who is queued
+behind each lock is on that lock's row.  A waiter shows its place in each queue
+it is in (1 being next), in the order its `⏳' rows are drawn, so each number
+can be matched to its lock.  A session that holds one lock and waits for
+another shows both: being blocked is not hidden by also blocking others."
+  (let* ((key (bp/agent-orchestration--mail-key id session))
+         (held (delq nil (mapcar (lambda (lock)
+                                   (and (equal (plist-get lock :holder) key)
+                                        (plist-get lock :name)))
+                                 bp/agent-locks--held)))
+         ;; The waiters list is in ticket order, so a place is an index.
+         (places (delq nil
+                       (mapcar (lambda (w)
+                                 (and (equal (plist-get w :waiter) key)
+                                      (1+ (seq-position
+                                           (seq-filter
+                                            (lambda (other)
+                                              (equal (plist-get other :name)
+                                                     (plist-get w :name)))
+                                            bp/agent-locks--waiters)
+                                           w))))
+                               bp/agent-locks--waiters))))
+    (string-join
+     (delq nil
+           (list (and held (if (cdr held) (format "🔒 (%d)" (length held)) "🔒"))
+                 (and places
+                      (format "⏳ (%s)"
+                              (mapconcat #'number-to-string places ", ")))))
+     " ")))
+
+(defun bp/agent-locks--pad (text width)
+  "TEXT padded with spaces to display WIDTH; emoji are two columns wide."
+  (concat text (make-string (max 0 (- width (string-width text))) ?\s)))
+
+(defun bp/agent-locks--insert-session-locks (id session indent)
+  "Insert rows for the locks session ID holds and waits for, at INDENT."
+  (let ((key (bp/agent-orchestration--mail-key id session)))
+    (dolist (lock bp/agent-locks--held)
+      (when (equal (plist-get lock :holder) key)
+        (bp/agent-locks--insert-held lock indent)))
+    (dolist (waiter bp/agent-locks--waiters)
+      (when (equal (plist-get waiter :waiter) key)
+        (bp/agent-locks--insert-waiting waiter indent)))))
+
+(defun bp/agent-locks--insert-section ()
+  "Insert the Locks section: locks and waiters with no session row here."
+  (let* ((keys (mapcar (lambda (entry)
+                         (bp/agent-orchestration--mail-key
+                          (plist-get entry :id) (plist-get entry :session)))
+                       (bp/agent-sessions--live-entries)))
+         (held (seq-remove (lambda (lock) (member (plist-get lock :holder) keys))
+                           bp/agent-locks--held))
+         (waiters (seq-remove (lambda (w) (member (plist-get w :waiter) keys))
+                              bp/agent-locks--waiters)))
+    (when (or held waiters)
+      (magit-insert-section (bp/agent-locks-root)
+        (magit-insert-heading
+          (propertize "Locks held outside the sessions below\n"
+                      'font-lock-face 'magit-section-heading))
+        (dolist (lock held)
+          (bp/agent-locks--insert-held lock "    " t))
+        (dolist (waiter waiters)
+          (bp/agent-locks--insert-waiting waiter "    " t))
+        (insert "\n")))))
+
+(defun bp/agent-locks--at-point ()
+  "The held lock whose row point is on, or nil."
+  (when-let ((section (or (bp/agent-sessions--enclosing-section 'bp/agent-lock-row)
+                          (bp/agent-sessions--enclosing-section
+                           'bp/agent-session-lock))))
+    (seq-find (lambda (lock) (equal (plist-get lock :name) (oref section value)))
+              bp/agent-locks--held)))
+
+;;;; Force-release
+
+(defun bp/agent-locks--notify (lock)
+  "Tell LOCK's holder that the user released it.
+A live holder here gets ordinary mail.  Any other is only written to the
+database: `send' would revive a killed conversation just to tell it something
+it can learn if it is ever restored, when hydration brings the notice back
+before the agent acts on its stale belief."
+  (let* ((name (plist-get lock :name))
+         (key (plist-get lock :holder))
+         (msg (list :id (bp/agent-orchestration--next-id "msg")
+                    :from nil :from-key (list "user" "dashboard")
+                    :from-label "the user"
+                    :to-key key :type "status"
+                    :subject (format "Lock released by the user: %s" name)
+                    :body (format "You no longer hold the lock on %s; someone else may have it now. Stop using the resource, and run `emacs-lock wait %s' before using it again."
+                                  name (shell-quote-argument name))
+                    :files "" :report ""
+                    :sent-at (bp/agent-sessions--now) :read nil))
+         (live (bp/agent-orchestration--live-id-for-key key)))
+    (if live
+        (progn
+          (bp/agent-orchestration--store-message live msg)
+          (bp/agent-orchestration-deliver live))
+      (bp/agent-orchestration--mail-insert msg))))
+
+(defun bp/agent-locks--force-release (lock)
+  "Release LOCK on the user's behalf, and leave its holder a notice.
+Only the row the user saw is deleted: if its holder released and re-took it,
+or someone else took it, since the last reload, that is a different lock and
+nothing happens.  Return non-nil when LOCK was released."
+  (let* ((db (bp/agent-sessions--db))
+         (released
+          (with-sqlite-transaction db
+            (> (sqlite-execute db "DELETE FROM locks
+                                    WHERE name = ? AND holder_kind = ?
+                                      AND holder_key = ? AND acquired_at = ?"
+                               (append (list (plist-get lock :name))
+                                       (plist-get lock :holder)
+                                       (list (plist-get lock :acquired-at))))
+               0))))
+    ;; An `--owner' holder has no mailbox; it is a person or a script.
+    (when (and released (equal (car (plist-get lock :holder)) "session"))
+      (bp/agent-locks--notify lock))
+    (bp/agent-locks--reload)
+    released))
+
+(defun bp/agent-locks-release-at-point ()
+  "Force-release the lock at point, after confirming."
+  (interactive)
+  (let* ((lock (or (bp/agent-locks--at-point) (user-error "No lock at point")))
+         (name (bp/agent-locks--display-name (plist-get lock :name))))
+    (when (yes-or-no-p (format "Release %s, held by %s%s? "
+                               name (plist-get lock :label)
+                               (if (eq (plist-get lock :liveness) 'running)
+                                   " (still running)" "")))
+      (if (bp/agent-locks--force-release lock)
+          (message "Released %s; its holder will be told." name)
+        (message "%s changed hands since the dashboard last looked; not released."
+                 name))
+      (bp/agent-sessions--refresh))))
+
 ;;;; Pending mailboxes
 ;; Mail to a mailbox nobody listens on waits for the user, not for an agent
 ;; started on its behalf: the dashboard lists it at the top, and `RET' starts
@@ -7727,6 +8191,7 @@ Org link type, the `C-x p a' project binding, and starting the Emacs server
     (with-current-buffer buf
       (unless (derived-mode-p 'bp/agent-sessions-mode)
         (bp/agent-sessions-mode))
+      (bp/agent-locks--reload)
       (bp/agent-sessions--refresh))
     (pop-to-buffer buf)))
 

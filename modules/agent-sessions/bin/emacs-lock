@@ -1,0 +1,498 @@
+#!/bin/sh
+# Take turns on a shared resource with other agents.
+#
+#   emacs-lock list [--verbose]
+#   emacs-lock acquire NAME [--why TEXT] [--new DESCRIPTION] [--owner NAME]
+#   emacs-lock wait NAME [--why TEXT] [--new DESCRIPTION] [--owner NAME]
+#                   [--timeout SECONDS] [--interval SECONDS]
+#   emacs-lock release NAME [--owner NAME]
+#
+# NAME is a directory (anything containing "/" or starting with "~" or ".")
+# or a free-form name.  Directory locks conflict when one contains the other.
+# A free-form name must already be known: acquiring an unknown one is refused
+# with the names used recently.  Creating one needs --new, and is refused while
+# a name you have not been shown yet exists.
+#
+# Exit status: 0 done, 1 refused, 2 usage, 3 cannot run (no database, no
+# tables, no identity, sqlite3 missing).
+#
+# This talks to agent-sessions.db with sqlite3 directly, so it works with
+# Emacs busy, down, or absent.  Emacs owns the schema and only reads the rows;
+# see "Locks" in agent-sessions/CLAUDE.md for why.
+
+set -u
+
+usage() { sed -n '3,9p' "$0" | sed -e 's/^# \{0,1\}//'; }
+die() { echo "emacs-lock: $1" >&2; exit "${2:-1}"; }
+
+US=$(printf '\037')
+recent_days=30
+
+# ---- arguments -------------------------------------------------------------
+
+verb=${1:-}
+[ -n "$verb" ] || { usage >&2; exit 2; }
+shift
+case "$verb" in -h|--help|help) usage; exit 0 ;; esac
+
+arg=""; why=""; new_desc=""; new_given=""; owner=""; verbose=""
+timeout=""; interval=5
+value() { [ $# -ge 2 ] || die "$1 needs a value" 2; }
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --why) value "$@"; why=$2; shift 2 ;;
+    --new) value "$@"; new_desc=$2; new_given=1; shift 2 ;;
+    --owner) value "$@"; owner=$2; shift 2 ;;
+    --timeout) value "$@"; timeout=$2; shift 2 ;;
+    --interval) value "$@"; interval=$2; shift 2 ;;
+    -v|--verbose) verbose=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    -*) die "unknown option: $1 (try 'emacs-lock help')" 2 ;;
+    *) [ -z "$arg" ] || die "only one NAME is accepted" 2; arg=$1; shift ;;
+  esac
+done
+
+is_count() { case "$1" in ''|*[!0-9]*) return 1 ;; esac; }
+[ -z "$timeout" ] || is_count "$timeout" || die "--timeout must be whole seconds" 2
+is_count "$interval" && [ "$interval" -gt 0 ] || die "--interval must be positive whole seconds" 2
+if [ -n "$new_given" ] && [ -z "$(printf '%s' "$new_desc" | tr -d '[:space:]')" ]; then
+  die "--new needs a description of the resource" 2
+fi
+
+# ---- database --------------------------------------------------------------
+
+command -v sqlite3 >/dev/null 2>&1 || die "sqlite3 not found" 3
+db=${EMACS_AGENT_SESSIONS_DB:-$HOME/.emacs.d/agent-sessions.db}
+# Never let sqlite3 create the file: an empty database has no lock tables,
+# and Emacs, not this script, decides what the schema is.
+[ -f "$db" ] || die "no agent-sessions database at $db (load agent-sessions in Emacs)" 3
+
+# q VALUE -> VALUE as an SQL string literal.
+q() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/''/g")"; }
+# qn VALUE -> literal, or NULL when VALUE is empty.
+qn() { if [ -n "$1" ]; then q "$1"; else printf NULL; fi; }
+
+# sql < SCRIPT -> rows separated by newlines, fields by \037.
+sql() {
+  { printf '.timeout 5000\n.bail on\n.separator "\\037" "\\n"\n'; cat; } |
+    sqlite3 -batch -noheader "$db"
+}
+
+tables=$(printf "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name IN ('locks','lock_waiters','lock_names','lock_name_seen');\n" | sql) ||
+  die "cannot read $db" 3
+[ "$tables" = 4 ] ||
+  die "$db has no lock tables yet (reload agent-sessions in Emacs)" 3
+
+# ---- identity --------------------------------------------------------------
+# The most durable id the environment offers: a lock outlives its terminal,
+# so it belongs to the conversation that will be resumed, not the shell.
+
+holder_kind=""; holder_key=""
+if [ -n "$owner" ]; then
+  holder_kind=owner; holder_key=$owner
+elif [ -n "${CLAUDE_CODE_SESSION_ID:-}" ]; then
+  holder_kind=session; holder_key=$CLAUDE_CODE_SESSION_ID
+elif [ -n "${CODEX_THREAD_ID:-${CODEX_SESSION_ID:-}}" ]; then
+  holder_kind=session; holder_key=${CODEX_THREAD_ID:-${CODEX_SESSION_ID:-}}
+elif [ -n "${EMACS_AGENT_SESSION_ID:-}" ]; then
+  holder_key=$(printf 'SELECT agent_sid FROM sessions WHERE emacs_sid = %s AND closed_at IS NULL AND agent_sid IS NOT NULL ORDER BY id DESC LIMIT 1;\n' \
+    "$(q "$EMACS_AGENT_SESSION_ID")" | sql) || holder_key=""
+  [ -z "$holder_key" ] || holder_kind=session
+fi
+
+need_identity() {
+  [ -n "$holder_kind" ] ||
+    die "cannot tell who you are: no agent session id in the environment; pass --owner NAME" 3
+}
+
+# A process whose life is the holder's life.  Emacs records the terminal's
+# process instead when it restores a holder whose pid has died.
+pid_start() { ps -o lstart= -p "$1" 2>/dev/null | sed -e 's/^ *//' -e 's/ *$//'; }
+holder_pid=""; holder_pid_start=""
+if [ "$holder_kind" = session ] && is_count "${CLAUDE_PID:-}"; then
+  holder_pid=$CLAUDE_PID
+  holder_pid_start=$(pid_start "$holder_pid")
+  [ -n "$holder_pid_start" ] || holder_pid=""
+fi
+
+# ---- names -----------------------------------------------------------------
+
+name=""; is_dir=0
+resolve_name() { # resolve_name ALLOW-MISSING-DIR
+  case "$arg" in
+    "") die "$verb needs a NAME" 2 ;;
+  esac
+  case "$arg" in
+    /*|"~"|"~/"*|.*|*/*)
+      is_dir=1
+      case "$arg" in
+        "~") path=$HOME ;;
+        "~/"*) path=$HOME/${arg#"~/"} ;;
+        "~"*) die "~user paths are not supported: $arg" 2 ;;
+        *) path=$arg ;;
+      esac
+      if abs=$(cd -- "$path" 2>/dev/null && pwd -P); then
+        :
+      elif [ -n "$1" ]; then
+        # Releasing a lock on a directory that has since gone away.
+        case "$path" in /*) abs=$path ;; *) abs=$PWD/$path ;; esac
+        abs=$(printf '%s' "$abs" | sed -e 's://*:/:g' -e 's:/$::')
+      else
+        die "no such directory: $arg" 2
+      fi
+      case "$abs" in */) name=$abs ;; *) name=$abs/ ;; esac
+      ;;
+    *)
+      name=$(printf '%s' "$arg" | tr '\n\t' '  ' | tr '[:upper:]' '[:lower:]' |
+        sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/[[:space:]][[:space:]]*/-/g')
+      [ -n "$name" ] || die "empty lock name" 2
+      ;;
+  esac
+}
+
+# ---- formatting ------------------------------------------------------------
+
+age() { # age SECONDS -> 45s, 14m, 2h05m, 3d
+  s=$1
+  if [ "$s" -lt 60 ]; then printf '%ss' "$s"
+  elif [ "$s" -lt 3600 ]; then printf '%sm' $((s / 60))
+  elif [ "$s" -lt 86400 ]; then printf '%sh%02dm' $((s / 3600)) $((s % 3600 / 60))
+  else printf '%sd' $((s / 86400)); fi
+}
+
+running() { # running PID START -> running | not running | unknown
+  if [ -z "$1" ]; then printf 'liveness unknown'
+  elif [ "$(pid_start "$1")" = "$2" ]; then printf 'running'
+  else printf 'not running'; fi
+}
+
+# Records the transactions print, one per line:
+#   S status [detail]
+#   L name label pid pid_start why age_seconds queued
+#   W name label why ticket
+#   N name description idle_seconds created_by
+print_lock() { # fields of an L record
+  printf '  %s  held by %s (%s) for %s' "$1" "$2" "$(running "$3" "$4")" "$(age "$6")"
+  [ -z "$5" ] || printf ', why: %s' "$5"
+  [ "$7" = 0 ] || printf ', %s waiting' "$7"
+  printf '\n'
+}
+print_name() { # fields of an N record
+  printf '  %s  %s (last used %s ago' "$1" "$2" "$(age "$3")"
+  [ -z "$4" ] || printf ', created by %s' "$4"
+  printf ')\n'
+}
+records() { # records KIND TEXT -> print records of KIND from TEXT
+  printf '%s\n' "$2" | while IFS=$US read -r k a b c d e f g; do
+    [ "$k" = "$1" ] || continue
+    case "$k" in
+      L) print_lock "$a" "$b" "$c" "$d" "$e" "$f" "$g" ;;
+      W) printf '  %s  queued: %s' "$a" "$b"; [ -z "$c" ] || printf ', why: %s' "$c"; printf '\n' ;;
+      N) print_name "$a" "$b" "$c" "$d" ;;
+    esac
+  done
+}
+status_of() { printf '%s\n' "$1" | sed -n "s/^S$US\\([^$US]*\\).*/\\1/p" | head -n 1; }
+detail_of() { printf '%s\n' "$1" | sed -n "s/^S$US[^$US]*$US\\(.*\\)/\\1/p" | head -n 1; }
+
+# Tell a listening Emacs to redraw.  Best-effort and detached: a hung or absent
+# server must never stall or fail the agent, and Emacs also polls.
+# EMACS_LOCK_EMACSCLIENT lets tests point this away from the user's Emacs.
+poke() {
+  client=${EMACS_LOCK_EMACSCLIENT:-emacsclient}
+  command -v "$client" >/dev/null 2>&1 || return 0
+  ( "$client" -e "(when (fboundp 'bp/agent-locks-changed) (bp/agent-locks-changed))" \
+      >/dev/null 2>&1 & ) >/dev/null 2>&1
+}
+
+# ---- SQL fragments ---------------------------------------------------------
+
+clean() { printf "replace(replace(COALESCE(%s, ''), char(10), ' '), char(9), ' ')" "$1"; }
+
+# conflicts TABLE-ALIAS -> predicate: that row's name overlaps ours.
+conflicts() {
+  if [ "$is_dir" = 1 ]; then
+    printf "(%s.name = %s OR (%s.is_dir = 1 AND (substr(%s, 1, length(%s.name)) = %s.name OR substr(%s.name, 1, length(%s)) = %s)))" \
+      "$1" "$Q_NAME" "$1" "$Q_NAME" "$1" "$1" "$1" "$Q_NAME" "$Q_NAME"
+  else
+    printf "%s.name = %s" "$1" "$Q_NAME"
+  fi
+}
+
+us() { printf "%s_kind = %s AND %s_key = %s" "$1" "$Q_KIND" "$1" "$Q_KEY"; }
+
+lock_records() { # lock_records WHERE -> SELECT emitting L records
+  cat <<EOF
+SELECT 'L', l.name, $(clean "l.holder_label"), COALESCE(l.holder_pid, ''),
+       COALESCE(l.holder_pid_start, ''), $(clean "l.why"),
+       $now - l.acquired_at,
+       (SELECT count(*) FROM lock_waiters w WHERE w.name = l.name AND w.expires_at >= $now)
+  FROM locks l WHERE $1 ORDER BY l.acquired_at;
+EOF
+}
+
+name_records() { # name_records WHERE -> SELECT emitting N records
+  cat <<EOF
+SELECT 'N', n.name, $(clean "n.description"), $now - n.last_used_at, $(clean "n.created_by")
+  FROM lock_names n WHERE $1 ORDER BY n.last_used_at DESC;
+EOF
+}
+
+mark_seen() { # mark_seen [CONDITION]
+  cat <<EOF
+INSERT INTO lock_name_seen (holder_kind, holder_key, seen_id)
+  SELECT $Q_KIND, $Q_KEY, COALESCE((SELECT max(id) FROM lock_names), 0) WHERE ${1:-1}
+  ON CONFLICT (holder_kind, holder_key) DO UPDATE SET seen_id = excluded.seen_id;
+EOF
+}
+
+# ---- transactions ----------------------------------------------------------
+
+setup_quoted() {
+  now=$(date +%s)
+  Q_NAME=$(q "$name"); Q_KIND=$(qn "$holder_kind"); Q_KEY=$(qn "$holder_key")
+  Q_WHY=$(qn "$why")
+  # Name the holder the way the dashboard does: its session title.
+  if [ "$holder_kind" = session ]; then
+    Q_LABEL="COALESCE((SELECT COALESCE(NULLIF(title, ''), NULLIF(label, '')) FROM sessions WHERE agent_sid = $Q_KEY ORDER BY id DESC LIMIT 1), $Q_KEY)"
+  else
+    Q_LABEL=$Q_KEY
+  fi
+}
+
+# try_acquire MODE -> one transaction's records.  MODE is `acquire' (a single
+# attempt that never jumps a queue) or `wait' (hold a ticket and take the lock
+# only when no earlier conflicting ticket is still live).
+try_acquire() {
+  mode=$1
+  expires=$((now + 3 * interval + 10))
+  if [ "$is_dir" = 1 ]; then known_sql=1
+  else known_sql="EXISTS (SELECT 1 FROM lock_names WHERE name = $Q_NAME)"; fi
+  if [ -n "$new_given" ]; then may_create=1; else may_create=0; fi
+  if [ "$mode" = wait ]; then
+    ahead="w.ticket < (SELECT ticket FROM lock_waiters WHERE name = $Q_NAME AND $(us waiter))"
+  else
+    ahead=1
+  fi
+  sql <<EOF
+BEGIN IMMEDIATE;
+CREATE TEMP TABLE r (k TEXT PRIMARY KEY, v, d);
+DELETE FROM lock_waiters WHERE expires_at < $now;
+INSERT INTO r SELECT 'known', $known_sql, NULL;
+INSERT INTO r SELECT 'seen', COALESCE((SELECT seen_id FROM lock_name_seen WHERE $(us holder)), 0), NULL;
+
+INSERT INTO r SELECT 'status', 'mine', NULL
+  WHERE EXISTS (SELECT 1 FROM locks WHERE name = $Q_NAME AND $(us holder));
+INSERT OR IGNORE INTO r SELECT 'status', 'unknown', NULL
+  WHERE (SELECT v FROM r WHERE k = 'known') = 0 AND $may_create = 0;
+INSERT OR IGNORE INTO r SELECT 'status', 'stale', NULL
+  WHERE (SELECT v FROM r WHERE k = 'known') = 0
+    AND EXISTS (SELECT 1 FROM lock_names WHERE id > (SELECT v FROM r WHERE k = 'seen'));
+INSERT OR IGNORE INTO r SELECT 'status', 'held', NULL
+  WHERE EXISTS (SELECT 1 FROM locks l WHERE $(conflicts l));
+
+$( [ "$mode" = wait ] && cat <<EOW
+INSERT INTO lock_waiters (name, is_dir, waiter_kind, waiter_key, waiter_label, why, expires_at)
+  SELECT $Q_NAME, $is_dir, $Q_KIND, $Q_KEY, $Q_LABEL, $Q_WHY, $expires
+   WHERE NOT EXISTS (SELECT 1 FROM r WHERE k = 'status' AND v IN ('mine', 'unknown', 'stale'))
+  ON CONFLICT (name, waiter_kind, waiter_key)
+  DO UPDATE SET expires_at = excluded.expires_at, why = excluded.why;
+EOW
+)
+
+INSERT OR IGNORE INTO r
+  SELECT 'status', 'queued', count(*) FROM lock_waiters w
+   WHERE $(conflicts w) AND NOT ($(us w.waiter)) AND $ahead
+  HAVING count(*) > 0;
+
+-- Nothing objected: create the name if it is new, and take the lock.
+INSERT INTO lock_names (name, description, created_by, created_at, last_used_at)
+  SELECT $Q_NAME, $(q "$new_desc"), $Q_LABEL, $now, $now
+   WHERE NOT EXISTS (SELECT 1 FROM r WHERE k = 'status')
+     AND (SELECT v FROM r WHERE k = 'known') = 0;
+INSERT INTO locks (name, is_dir, holder_kind, holder_key, holder_label,
+                   holder_pid, holder_pid_start, why, acquired_at)
+  SELECT $Q_NAME, $is_dir, $Q_KIND, $Q_KEY, $Q_LABEL,
+         $(qn "$holder_pid"), $(qn "$holder_pid_start"), $Q_WHY, $now
+   WHERE NOT EXISTS (SELECT 1 FROM r WHERE k = 'status');
+INSERT OR IGNORE INTO r VALUES ('status', 'granted', NULL);
+
+UPDATE lock_names SET last_used_at = $now
+ WHERE name = $Q_NAME AND (SELECT v FROM r WHERE k = 'status') = 'granted';
+DELETE FROM lock_waiters
+ WHERE name = $Q_NAME AND $(us waiter)
+   AND (SELECT v FROM r WHERE k = 'status') IN ('granted', 'mine', 'unknown', 'stale');
+
+-- Showing names, or creating one, moves this holder's cursor.  Taking a
+-- known name shows nothing, so it must not.
+$(mark_seen "(SELECT v FROM r WHERE k = 'status') IN ('unknown', 'stale')
+   OR ((SELECT v FROM r WHERE k = 'status') = 'granted' AND (SELECT v FROM r WHERE k = 'known') = 0)")
+
+SELECT 'S', v, COALESCE(d, '') FROM r WHERE k = 'status';
+SELECT * FROM (
+$(lock_records "$(conflicts l) AND (SELECT v FROM r WHERE k = 'status') IN ('held', 'mine')" | sed 's/;$//')
+);
+SELECT * FROM (
+$(name_records "(SELECT v FROM r WHERE k = 'status') = 'unknown' AND n.last_used_at >= $now - $recent_days * 86400" | sed 's/;$//')
+);
+SELECT * FROM (
+$(name_records "(SELECT v FROM r WHERE k = 'status') = 'stale' AND n.id > (SELECT v FROM r WHERE k = 'seen')" | sed 's/;$//')
+);
+SELECT 'W', w.name, $(clean "w.waiter_label"), $(clean "w.why"), w.ticket
+  FROM lock_waiters w
+ WHERE (SELECT v FROM r WHERE k = 'status') = 'queued'
+   AND $(conflicts w) AND NOT ($(us w.waiter)) AND $ahead
+ ORDER BY w.ticket;
+COMMIT;
+EOF
+}
+
+leave_queue() {
+  sql <<EOF >/dev/null 2>&1
+DELETE FROM lock_waiters WHERE name = $Q_NAME AND $(us waiter);
+EOF
+}
+
+# report_acquire OUTPUT -> prints, and returns 0 granted / 1 refused / 4 blocked.
+report_acquire() {
+  out=$1
+  st=$(status_of "$out")
+  case "$st" in
+    granted) printf 'LOCKED %s\n' "$name"; poke; return 0 ;;
+    mine) printf 'LOCKED %s (already held by you)\n' "$name"; return 0 ;;
+    unknown)
+      {
+        printf 'emacs-lock: unknown lock name: %s\n' "$name"
+        n=$(records N "$out")
+        if [ -n "$n" ]; then
+          printf 'Names used in the last %s days:\n%s\n' "$recent_days" "$n"
+          printf 'Use one of these if it names the same resource; otherwise retry with --new "what it is".\n'
+        else
+          printf 'No names are in use.  Retry with --new "what it is" to create it.\n'
+        fi
+      } >&2
+      return 1 ;;
+    stale)
+      {
+        printf 'emacs-lock: not creating %s: names were added since you last looked:\n' "$name"
+        records N "$out"
+        printf 'Use one of these if it names the same resource; otherwise retry the same command.\n'
+      } >&2
+      return 1 ;;
+    held)
+      printf 'HELD %s by:\n' "$name"
+      records L "$out"
+      return 4 ;;
+    queued)
+      printf 'QUEUED %s: %s waiting ahead of you:\n' "$name" "$(detail_of "$out")"
+      records W "$out"
+      return 4 ;;
+    *) die "unexpected reply from the database: $out" 3 ;;
+  esac
+}
+
+# ---- verbs -----------------------------------------------------------------
+
+case "$verb" in
+  acquire)
+    need_identity
+    resolve_name ""
+    setup_quoted
+    out=$(try_acquire acquire) || die "database error" 3
+    report_acquire "$out"
+    rc=$?
+    [ "$rc" != 4 ] || exit 1
+    exit "$rc"
+    ;;
+
+  wait)
+    need_identity
+    resolve_name ""
+    setup_quoted
+    started=$now
+    trap 'leave_queue; exit 130' INT TERM HUP
+    shown=""
+    while :; do
+      out=$(try_acquire wait) || { leave_queue; die "database error" 3; }
+      st=$(status_of "$out")
+      case "$st" in
+        held|queued)
+          # Say who is in the way once, then wait quietly.
+          [ -n "$shown" ] || { report_acquire "$out"; shown=1; printf 'waiting...\n'; } ;;
+        *) trap - INT TERM HUP; report_acquire "$out"; exit $? ;;
+      esac
+      if [ -n "$timeout" ] && [ $(( $(date +%s) - started )) -ge "$timeout" ]; then
+        leave_queue
+        trap - INT TERM HUP
+        printf 'emacs-lock: gave up on %s after %ss; you are no longer queued\n' "$name" "$timeout" >&2
+        exit 1
+      fi
+      sleep "$interval"
+      now=$(date +%s)
+    done
+    ;;
+
+  release)
+    need_identity
+    resolve_name allow-missing
+    setup_quoted
+    out=$(sql <<EOF
+BEGIN IMMEDIATE;
+CREATE TEMP TABLE r (k TEXT PRIMARY KEY, v);
+INSERT INTO r SELECT 'status', 'released'
+  WHERE EXISTS (SELECT 1 FROM locks WHERE name = $Q_NAME AND $(us holder));
+INSERT OR IGNORE INTO r SELECT 'status', 'other'
+  WHERE EXISTS (SELECT 1 FROM locks WHERE name = $Q_NAME);
+INSERT OR IGNORE INTO r VALUES ('status', 'free');
+DELETE FROM locks WHERE name = $Q_NAME AND $(us holder);
+UPDATE lock_names SET last_used_at = $now
+ WHERE name = $Q_NAME AND (SELECT v FROM r WHERE k = 'status') = 'released';
+SELECT 'S', v, '' FROM r WHERE k = 'status';
+SELECT * FROM (
+$(lock_records "l.name = $Q_NAME" | sed 's/;$//')
+);
+COMMIT;
+EOF
+) || die "database error" 3
+    case "$(status_of "$out")" in
+      released) printf 'UNLOCKED %s\n' "$name"; poke ;;
+      other) { printf 'emacs-lock: not releasing %s: you do not hold it:\n' "$name"; records L "$out"; } >&2; exit 1 ;;
+      free) printf 'emacs-lock: %s is not locked\n' "$name" >&2; exit 1 ;;
+      *) die "unexpected reply from the database: $out" 3 ;;
+    esac
+    ;;
+
+  list)
+    # Lists only what is held and queued.  It deliberately shows no unheld
+    # names and so does not move the seen-cursor: an agent learns existing
+    # names from the refusals of `acquire', which do show them.
+    [ -z "$arg" ] || die "list takes no NAME" 2
+    now=$(date +%s)
+    out=$(sql <<EOF
+BEGIN IMMEDIATE;
+DELETE FROM lock_waiters WHERE expires_at < $now;
+$(lock_records 1)
+SELECT 'W', w.name, $(clean "w.waiter_label"), $(clean "w.why"), w.ticket
+  FROM lock_waiters w ORDER BY w.ticket;
+COMMIT;
+EOF
+) || die "database error" 3
+    if [ -n "$verbose" ]; then
+      held=$(records L "$out")
+      if [ -n "$held" ]; then printf 'HELD:\n%s\n' "$held"; else printf 'HELD: none\n'; fi
+      queued=$(records W "$out")
+      [ -z "$queued" ] || printf 'WAITING:\n%s\n' "$queued"
+    else
+      held=$(printf '%s\n' "$out" | while IFS=$US read -r k a b c d e f g; do
+        [ "$k" = L ] || continue
+        [ "$a" = / ] || a=${a%/}
+        if [ "$g" = 0 ]; then printf '%s\n' "$a"; else printf '%s (%s waiting)\n' "$a" "$g"; fi
+      done)
+      if [ -n "$held" ]; then printf 'HELD:\n%s\n' "$held"; else printf 'HELD: none\n'; fi
+    fi
+    ;;
+
+  *)
+    die "unknown verb: $verb (try 'emacs-lock help')" 2
+    ;;
+esac

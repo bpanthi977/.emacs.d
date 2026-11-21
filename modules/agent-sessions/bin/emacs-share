@@ -23,7 +23,59 @@ usage() {
   fi
 }
 
+# The full help.  The states are bp/agent-sessions-states in Emacs, in the
+# order the dashboard's `t' cycles them; a test keeps this list in step.
+help() {
+  usage
+  cat <<'EOF'
+
+Hand something to the human in their Emacs agent dashboard.  It attaches to
+this terminal's session row and stays highlighted until they look at it.
+Works only inside an Emacs agent session terminal.
+
+  file FILE [DESCRIPTION]
+      Share a local file (a plan, report, generated output) with a one-line
+      reason.  Re-run it on the same path after changing the file: that
+      re-highlights the existing entry instead of adding another.
+
+  link linear|pr URL [LABEL]
+      Attach a Linear issue or GitHub PR URL to the session.  Sharing the
+      same URL again keeps one row; a new LABEL marks it unread again.
+
+  state STATE
+  state --clear
+      Set or clear the session's workflow state, shown in the dashboard's
+      state column.  The human can change it too (key `t'); whoever writes
+      last wins.  STATE is one of:
+
+        TODO          not started yet
+        PLANNING      the agent is writing a plan
+        PLAN-REVIEW   the plan waits on the human
+        IMPLEMENTING  the agent is implementing
+        IMPL-REVIEW   the implementation waits on the human
+        PR-OPEN       the PR is up and waits on the human
+        AUTOFIX       the agent is fixing review-bot findings on its PR
+        REVIEW        waiting on someone else to look
+        DONE          finished, nothing pending
+        BLOCKED       needs the human's attention before the agent can go on
+        LEARN         finished, with something worth taking away
+
+      Anything else is refused with the list Emacs accepts.
+
+Examples:
+  emacs-share file plan.md "Plan for review"
+  emacs-share link pr https://github.com/org/repo/pull/123
+  emacs-share state BLOCKED
+EOF
+}
+
 die() { echo "$program: $1" >&2; exit 1; }
+
+usage_error() {
+  usage >&2
+  echo "Run '$program --help' for what each command does and the states." >&2
+  exit 2
+}
 
 need_session() {
   [ -n "${EMACS_AGENT_SESSION_ID:-}" ] ||
@@ -59,12 +111,19 @@ if [ "$program" = "emacs-share-file" ]; then
 else
   mode=${1:-}
   case "$mode" in
+    -h|--help|help) help; exit 0 ;;
+    "") usage_error ;;
   esac
   shift
+  # `emacs-share state --help' and the like: help, not a state named --help.
+  case "${1:-}" in
+    -h|--help) help; exit 0 ;;
+  esac
 fi
 
 case "$mode" in
   file)
+    [ $# -ge 1 ] || usage_error
     [ $# -le 2 ] || die "file accepts FILE and an optional DESCRIPTION"
     file=$1
     label=${2:-}
@@ -90,6 +149,7 @@ case "$mode" in
     ;;
 
   state)
+    [ $# -eq 1 ] || usage_error
     state=$1
     [ "$state" = "--clear" ] && state=
 
@@ -102,6 +162,7 @@ case "$mode" in
     ;;
 
   link)
+    [ $# -ge 2 ] || usage_error
     [ $# -le 3 ] || die "link accepts KIND, URL, and an optional LABEL"
     kind=$1
     url=$2

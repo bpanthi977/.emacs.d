@@ -8,14 +8,17 @@ code says *what* it does; this file records *why*, so the intent survives edits.
 - `agent-sessions.el` — everything; `agent-sessions-codex-hook.sh` — Codex event
   forwarder. The Claude forwarder lives outside the repo
   (`~/.orca/agent-hooks/claude-hook.sh`, wired via `~/.claude/settings.json`).
-  (see "Shared files") and `emacs-agent` (see "Orchestration"). On every session
-  terminal's PATH.
   Pi needs neither: its extension is TypeScript in-process, so
   `agent-sessions-pi-hook.ts` is the forwarder itself, copied into
   `~/.pi/agent/extensions/` by `bp/agent-sessions-install`.
 - `bin/` — commands agents run *inside* a session terminal: `emacs-share`
+  (see "Shared files"), `emacs-agent` (see "Orchestration") and `emacs-lock`
+  (see "Locks"). On every session terminal's PATH.
 - `skills/orca/` — the `/orca` skill an agent loads to learn orchestration, and
   the two guides `emacs-agent guide` serves.
+- `skills/emacs-lock/` — the skill that teaches agents to use `emacs-lock`;
+  linked into the Claude and Codex skill directories by
+  `bp/agent-orchestration-install-skill` alongside orca.
 - `orchestration/` — notes on how *Orca* (the app) does the same thing; read
   before redesigning this, not as a description of what is here.
 - Wiring/config is in `../agent-session-config.el`.
@@ -898,6 +901,119 @@ the column has no width when no session qualifies, like the lock column.
 `PATH=<our bin>:<the PATH the terminal was going to inherit anyway>`, read from
 `process-environment`. Building it from any other source could silently shrink
 the shell's PATH.
+
+## Locks — agents taking turns on a shared resource
+
+`emacs-lock acquire|wait|release|list` lets agents take turns on something only
+one of them may use at a time: a shared dev stack, a database, a checkout.
+The motivating case was a hand-rolled `mkdir` lock described in a per-repository
+instructions file, which every agent had to follow by hand.
+
+**The database is the lock, and Emacs is not in the path.** `emacs-lock` is a
+shell script that talks to `agent-sessions.db` with `sqlite3` directly; every
+acquire and release is one `BEGIN IMMEDIATE` transaction. Routing it through
+emacsclient would have made the lock only as available as one Emacs — absent
+outside a managed terminal, frozen while Emacs is busy, and wrong the moment two
+Emacs processes share the file and each keeps its own idea of who holds what.
+SQLite already serialises writers across processes, so it is the one place both
+the check and the claim can happen atomically.
+
+**Emacs still owns the schema.** The CLI never creates a table; a missing one is
+a loud failure telling the user to load agent-sessions. Two owners of one schema
+is how migrations go wrong (see "Editing"). The cost is that the CLI depends on
+table layouts Emacs defines, which is why the tests drive the real CLI against a
+database Emacs created.
+
+**A holder is a conversation, not a terminal, and held locks persist.** The key
+is the agent's durable id read from its own environment
+(`CLAUDE_CODE_SESSION_ID`, `CODEX_THREAD_ID`, else the session log's agent id
+for `EMACS_AGENT_SESSION_ID`), or an explicit `--owner NAME` when there is none;
+it is never guessed. Keying on the terminal and releasing on terminal death
+looks tidier and is wrong: a session restored with `R` remembers holding the
+lock, keeps using the resource, and by then someone else may have it. So a
+crash, a restart, or `k` leaves the lock held. Its holder is shown as *not
+running* — the lock still blocks — and the user either restores the holder or
+releases the lock by hand. There is deliberately no timeout: two agents driving
+the stack at once is worse than one waiting for the user.
+
+**"Running" is a process the lock row can check, not Emacs's opinion.** The row
+stores a pid plus that process's start time (`ps -o lstart=`), so a reused pid
+does not read as alive. The CLI records the agent process (`CLAUDE_PID`); Emacs
+records the terminal's process when a holder is restored. This works the same
+for any number of Emacs processes, and for holders outside Emacs entirely.
+
+**A lock taken away from its holder leaves it a note, but never wakes it.** The
+only such path is the user's force-release (`k` on a lock row, which deletes
+only the exact row the user saw, so a lock that changed hands meanwhile is left
+alone). A running holder
+gets ordinary mail. A holder that is not running gets the same row written
+straight into `mail` — not through `send`, which would revive the conversation
+just to tell it something it can learn later. If it is ever restored, hydration
+brings the notice back and it is pasted in before the agent acts on its stale
+belief. One gap is accepted: a holder mid-turn when its lock is pulled keeps
+going until it reads the notice. That is the price of being able to pull one.
+
+**Directories name themselves; free-form names need help.** An argument that
+looks like a path is resolved with `pwd -P` and must exist, and two directory
+locks conflict when one contains the other — otherwise "a directory is
+unambiguous" would be only half true. Free-form names are case-folded and
+whitespace-collapsed, but that cannot stop `dev-stack` and `local-stack`
+naming one thing. Showing only the locks held *now* does not help: when nothing
+is held the list is empty, which is exactly when the second spelling gets
+invented. So `lock_names` remembers free-form names with a description and last
+use (directories are never added — they cannot be misspelt into a second
+resource), and acquiring an unknown name is refused with the names used in the
+last 30 days. `list` itself stays short — what is held, and with `--verbose`
+by whom, why and who waits — so it shows no unheld names.
+
+**Creating a name requires having seen the newest one.** Emacs-side discipline
+("read the list first") cannot be enforced; a cursor can. Every output that
+shows the known names records the newest name id that holder has seen; `list`
+shows none, so it moves nothing — counting it as a showing would let `--new`
+through for a holder that never saw the name it duplicates. `acquire NAME
+--new DESC` succeeds only if no name was added after it, in the same
+transaction as the insert; otherwise it is refused with the names added since.
+That refusal is itself a showing, so a second `--new` after reading it is a
+deliberate choice. Acquiring an unknown name without `--new` is refused with the
+recent list. The real fix for naming is still the resource's own docs stating
+its lock name; this is the backstop for the resources nobody documented.
+
+**Waiting is fair, and a vanished waiter loses its place.** Waiters take a
+ticket; a lock is granted to the oldest live conflicting ticket, and a
+non-waiting `acquire` does not jump a queue. A waiter renews its ticket on every
+poll and expires after three missed intervals, so a Ctrl-C'd wait cannot block
+the queue forever. Polling lives in the shell for the same reason as
+`emacs-agent wait`.
+
+**The dashboard learns of changes by a poke, not by querying.** The render path
+never queries the database, so the CLI ends each change with a best-effort
+`emacsclient` call that exits 0 when Emacs is unreachable (the hook forwarders'
+rule: a dead Emacs must not fail the agent), and Emacs reloads its working copy.
+The heartbeat reloads too, catching changes made while no Emacs was listening
+and holders that died, which announce nothing.
+
+**A lock hangs under its holder, like a shared file.** The session row already
+says who holds it, so the lock row says only what, for how long, and why; one
+row that named the lock, the holder and the reason side by side was hard to
+read when a title and a reason started with the same ticket id. The section
+above the repos keeps only locks and waiters with no session row to hang from
+(a killed holder, another Emacs, a script), which is also where a not-running
+holder that still blocks everyone is most visible.
+The session row also gets a lock column after its status, `🔒 (N)` for the N
+locks it holds (bare `🔒` for one) and `⏳ (1, 3)` for its place in each queue
+it is in, both
+when it holds one lock and waits for another, so who is blocking whom reads at
+a glance even with the session folded; the column has no width when no session
+uses a lock.
+
+**A restored holder is re-attached at its first hook event.** That is where its
+durable id meets a live terminal, the same moment its mail is hydrated, so its
+locks are pointed at the terminal's process and read as running again. The
+check consults only the working copy, because it runs on every hook event.
+
+**Tests drive the real CLI.** `agent-sessions-lock-test.el` builds a temp
+database with `bp/agent-sessions--db`, strips every inherited agent identity,
+and sets `EMACS_LOCK_EMACSCLIENT=true` so a test never pokes the user's Emacs.
 
 ## Wiring is self-owned and additive, never authoritative
 
