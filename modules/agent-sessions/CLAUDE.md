@@ -100,6 +100,7 @@ that is the thing to revisit. Because a crash runs no code, close *times* come
 from a periodic heartbeat in `meta` — the last moment Emacs is known to have
 been alive.
 
+
 **A reorder writes two rows, not the group.** `M-n`/`M-p` are adjacent
 transpositions, and `--merge-order` turns one into a list differing from the
 saved one in exactly two slots, so `--order-write-group` diffs old against new
@@ -254,10 +255,16 @@ per-refresh work off the git path.
 
 ## Orchestration — an agent spawning and talking to other agents
 
-`bin/emacs-agent` (spawn/send/done/ask/check/wait/list/worktrees) lets an agent
-start another agent in another worktree and block until it reports. It reaches
-Emacs the way `emacs-share-file` does, and returns its failures as the printed
-value for the same reason.
+`bin/emacs-agent` lets an agent start another agent in another worktree and
+block until it reports. Its verbs are spawn, send, send-and-wait, check, wait,
+list, and worktrees. It reaches Emacs the way `emacs-share`
+does, and returns its failures as the printed value for the same reason.
+Like `emacs-share`, it identifies a Codex caller by `CODEX_THREAD_ID`, not
+`EMACS_AGENT_SESSION_ID`. Codex runs tool commands in its shared app-server
+daemon, whose environment carries the id of whichever terminal started it, so
+every Codex session would otherwise send and read mail as that one (often
+long-dead) terminal. An unregistered thread id is an error, never a fallback to
+the stale terminal id.
 
 **Emacs owns only what an agent cannot do for itself.** There are no task rows,
 no dependency graph and no scheduler, and adding them is the obvious wrong turn.
@@ -297,6 +304,23 @@ as one quoted argument is exactly the line a TUI mangles. The brief file is kept
 after launch — it is the only record of what a worker was actually told, and
 re-running that one line reproduces the launch by hand.
 
+**A model is a hole in the launch command, not another agent type.** Before
+`--model`, running a worker on a different model meant the human adding a whole
+type to `bp/agent-orchestration-launch-commands` (`claude-opus`, `claude-haiku`,
+…), which multiplies types by models and hides a per-spawn choice in a config
+file. So the template grew placeholders — `%b` for the brief, `%m` for the model
+flag — and a second alist says how each type *spells* that flag. Two knobs
+rather than one because the two facts are independent: how to start an agent, and
+what that agent calls the option. A type absent from the flag alist takes no
+model and a spawn naming one is refused, rather than being launched with a
+guessed flag: an unknown CLI rejecting `--model` exits on its usage message, and
+what the orchestrator would see is a worker that never reports — the failure
+this whole path is built to avoid. Model *names* are not validated for the same
+reason a list of them would be wrong within a release; the spawn line echoes the
+model instead, so a worker that dies at launch has a spelling to check. Old
+single-`%s` templates still render, since `format-spec` is only reached when the
+template actually uses the new placeholders.
+
 **Spawning restores the window configuration.** `+` showing its new terminal is
 right because the user asked for it; three background spawns rearranging the
 layout the user is reading is not. Same `save-window-excursion` the restore path
@@ -306,14 +330,16 @@ uses, for the same reason.
 sent to.** Unread mail is exactly what the persistence rule above is for: the
 recipient cannot reconstruct a message it never saw, and a crash between a
 worker reporting and its coordinator reading would otherwise lose the report
-silently. But mail is *addressed* to a terminal id, which carries this Emacs's
-pid and dies with it, so the record files each message under the same identity a
-note or shared file uses: the agent's own session id, falling back to the
-terminal id. That fallback is deliberately not the buffer name that notes fall
-back to — a name is reused by a later terminal, and inheriting a stranger's
-unread mail (which is then *pasted into its prompt*) is a different order of
-wrong than inheriting a stale note. Mail under a terminal key therefore never
-survives a restart, which is correct: nothing can resume a bare shell.
+silently. A caller may address mail by current terminal id, raw agent session
+id, or a complete `agent-session:' link. Resolution turns each form into the
+current terminal or the metadata needed to revive the conversation; the record
+then files the message under the same identity a note or shared file uses: the
+agent's own session id, falling back to the terminal id. That fallback is
+deliberately not the buffer name that notes fall back to — a name is reused by a
+later terminal, and inheriting a stranger's unread mail (which is then *pasted
+into its prompt*) is a different order of wrong than inheriting a stale note.
+Mail under a terminal key therefore never survives a restart, which is correct:
+nothing can resume a bare shell.
 
 So there are two structures, and they answer different questions. The hash table
 is the working copy, keyed the way mail is addressed, and it is what the render
@@ -329,30 +355,69 @@ acted on. A killed terminal drops its working copy in
 `bp/agent-session--cleanup`, never the record.
 
 One consequence worth stating: a message can outlive the terminal that sent it,
-so the sender is resolved through its durable key at display time. When that
-conversation is live again the reply command names its *current* terminal; when
-it is not, the message says so instead of printing an address that would reach
-either nobody or somebody else.
+so the sender is resolved through its durable key at display time. The reply
+command names the durable agent session id when one exists, whether or not its
+terminal is currently live; only mail from a bare terminal falls back to an
+ephemeral address and becomes unreplyable when that terminal dies.
+
+**A durable or killed address revives its conversation on the next send.** A
+raw session id is resolved from the live registry and then the session log; a
+full `agent-session:' link is self-contained even when the log lacks a row. An
+old terminal id falls back to the newest resumable session logged under it. Each
+path first follows the durable agent-session key to an already-restored terminal,
+avoiding a duplicate; otherwise it resumes the conversation and supplies the
+formatted mail as the CLI's initial prompt. Passing the prompt at launch is what
+makes this reliable for Codex, whose first hook does not fire until its first
+prompt. The message is persisted and marked read because launch itself delivered
+it, and the send result names the replacement terminal id. Revival also installs
+the sender as the new terminal's coordinator and parent, including the worker
+environment, so the dashboard nests the revived session under the agent that
+brought it back. A bare terminal has no agent-session key and therefore remains
+unaddressable after death.
 
 **Waiting polls from the shell, not from Emacs.** An emacsclient call runs on
 Emacs's only thread, so a blocking wait inside Emacs would freeze the editor for
 its whole duration — which for this feature is minutes. `emacs-agent wait` loops
-over cheap `check` calls instead, and prints a keepalive to stderr every 15s so
-the calling agent's tool does not read a long wait as a hung command.
+over cheap consuming `check` calls instead, and **any mail ends a wait**. There
+used to be a `--types` filter so a coordinator could sit through progress
+`status` mail; it was removed, along with the five-type vocabulary it filtered,
+because the cost of an early return (the agent reads a status and calls `wait`
+again) is smaller than the cost of a filter every caller has to get right.
+Each check snapshots and consumes in one Emacs call, so a message cannot arrive
+between reading and marking read.
 
-**Mail is pushed into an agent that is resting, and never into one mid-turn.**
-An orchestrator that is waiting collects its own mail; the case that needs help
-is mail arriving for an agent that has finished its turn, which would otherwise
-sit unread until the human prompted it. So delivery fires on the `Stop` hook
-(via `bp/agent-orchestration-deliver`) and on arrival, and is gated on two
-things — three, counting the one learned the hard way. It has not read its
-inbox recently, which is what stops a waiting orchestrator being handed the same
-message twice (and when it defers for that reason it schedules a retry, because
-mail landing just after a wait gave up would otherwise wait for the next hook
-event). Its status is not `running', i.e. no turn is in progress. And something
-holds its terminal's foreground.
+**Three types, split by whether a reply is expected.** `question` expects one,
+and its `Reply:` line names the `--type answer` command; `status` (the default)
+and `answer` do not, and their `Reply:` line is marked optional. `done` and
+`blocked` went with `--types`: they differed from `status` only in steering a
+running Codex turn, so a worker's final report is a `status` whose subject says
+`Done:` or `Failed:`. Likewise the `done` and `ask` verbs, and `--files` and
+`--report`: each was a default recipient or a printed path on top of `send`.
 
-Both of the latter are phrased as exclusions on purpose. Enumerating the states
+`send-and-wait' composes the existing shell-side send and poll operations,
+defaulting the outgoing type to `question'.  Because the send must succeed
+before polling begins, address routing, revival, persistence and timeout
+behavior remain owned by their existing chokepoints.
+
+**Agent mail preserves the human's terminal composer.** Codex has a native
+session queue, so its mail never touches the terminal. Claude Code does not
+expose a session-addressed CLI queue. Its rendered prompt is therefore the
+safety boundary: delivery proceeds only when the current composer is known not
+to contain an unsent draft. If it does contain a human draft, mail stays unread
+and the draft is never moved. The next `UserPromptSubmit` hook proves that the
+human has sent that draft; delivery then bracket-pastes the mail into the
+available composer and invokes `chat:queueSubmit`, putting it behind the
+human's message.
+The queue-submit key bytes are customizable as
+`bp/agent-orchestration-claude-queue-submit-key` for users who rebind that
+Claude action.
+
+Claude's inline Tab completion also occupies the composer, but it is not a
+draft until the human accepts or edits it. Claude renders that suggestion with
+the terminal's ANSI faint attribute; Eat preserves it as `eat-term-faint`.
+Agent-sessions therefore treats a composer whose entire non-whitespace body is
+faint as empty. A typed prefix is non-faint, so mixed typed-plus-suggested text
+continues to block delivery.
 ghostel has no faint face: its native renderer bakes faint into the run's
 `:foreground`, blending the text color into the background as
 `(fg*166 + bg*90)/256` per channel (`dimColor` in its `src/style_face.zig`).
@@ -362,6 +427,61 @@ counts as faint too. This is not just a nicety. Claude keeps a suggestion on
 screen until the human acts, and an idle Claude fires no hook to retry
 delivery, so without the check mail to an idle Claude waited for the human.
 If ghostel changes its blend, the check fails safe: suggestions read as drafts.
+
+ghostel only draws a terminal into its buffer while a window shows it
+(`ghostel--pending-redraw` stays set while it is hidden), so a hidden Claude's
+buffer shows an old screen, or nothing if it has not been shown since it
+started. Judged from that, mail waited for the human's next prompt, even after
+they looked at the terminal and saw only a suggestion. A hidden ghostel
+terminal is therefore judged from its current text (`ghostel--copy-all-text`),
+which is plain: no faces to tell a suggestion from a draft. The rule that
+replaces them: the human can only type into a terminal a window shows, and
+showing it redraws the buffer, so a draft is still in the buffer exactly as
+the terminal holds it. Composer text the buffer doesn't show appeared while
+nobody could type, so it is Claude's. When the two agree, the buffer's faces
+decide as before. They are compared without whitespace, since the two can
+wrap a long line differently. Because plain text can't tell a draft from
+anything else, the composer is recognized more strictly there: `❯` directly
+under a separator, and only status lines after the box. That way the
+transcript's last prompt above an open dialog is not taken for the composer.
+
+Claude does not always clear submitted text from the rendered composer before
+the hook callback tries delivery; it can retain that text through the turn or
+until the next edit. `UserPromptSubmit` includes the authoritative
+`user_prompt`, so the session remembers it. A non-empty composer whose
+whitespace-normalized text still equals that submitted prompt is safe; changed
+text is a new human draft and remains protected. This comparison also absorbs
+visual hard wrapping. Without it, a Stop or mail-arrival check can see the old
+prompt, withhold mail, and receive no further event until the human submits
+again.
+
+An hour-long turn is exactly when a question or answer must not wait for
+`Stop'. When one of those types arrives for a running conversation, delivery
+queues all pending mail in order. For Codex it calls
+`codex queue --thread … --message …`; for Claude it uses the TUI action sequence
+above. Codex keeps the actionable-type steering policy: a plain `status' does
+not trigger its native queue, but an earlier status rides along with later
+actionable mail so delivery cannot reorder the inbox. Claude instead queues all
+pending types whenever its composer is known to be safe. Its hook status can
+remain `running' while the main chat is waiting on background work, so using
+message type or status there would strand ordinary mail despite an available
+composer. Codex must acknowledge the queue before messages are consumed;
+failure leaves them unread for `check' or a later retry. Resting Codex sessions
+use the same native queue: terminal paste would share the human's composer, so
+a half-written human prompt could otherwise be submitted as part of agent mail.
+Resting Claude sessions use the same composer gate. An unrecognized Claude
+display is treated conservatively as non-empty and waits for the next user
+submission. Other agents keep the idle behavior because typing into a busy TUI
+is not a portable queue API.
+
+Idle delivery fires on the `Stop` hook (via
+`bp/agent-orchestration-deliver`) and on arrival. It requires both a non-running
+status and something holding the terminal's foreground, and is only the fallback
+for agents without a known queue action. Inbox reads, queue acceptance, and
+idle delivery consume mail on Emacs's single thread, so whichever gets a message
+first owns it and the others see no pending mail.
+
+Both gates are phrased as exclusions on purpose. Enumerating the states
 that *are* fine has already failed once: the first version listed `idle' and
 `needs-attention', and `needs-attention' becomes `stopped' the moment the user
 looks at the terminal, so delivery quietly stopped for exactly the session an
@@ -370,8 +490,15 @@ tidiness — with the shell's own prompt in front, a paste plus Enter is not
 reaching a TUI at all, it is the shell *running the message as a command line*,
 where the message was written by another agent. Mail for a bare shell stays
 queued for `emacs-agent check' instead.
-Delivery is one bracketed paste plus a delayed Enter: typed plainly, every
+Idle delivery is one bracketed paste plus a delayed Enter: typed plainly, every
 newline in the message would submit, firing the agent's turn on the first line.
+
+**Every rendered message identifies `$orca (/orca)' in its header.** The
+recipient may be a peer agent that was never spawned by the sender and has not
+loaded the skill, so "orchestration mail" or a coordinator/worker label is not
+enough context. Naming the skill in the payload makes both pushed mail and
+explicit inbox reads self-routing while the sender line states the relationship
+that actually exists.
 
 **Pre-trusting the spawn directory is a deliberate widening, not a convenience.**
 Both agent CLIs gate a directory they have never run in behind an interactive
@@ -407,6 +534,74 @@ without Enter, so an agent-session link can be copied from the dashboard and
 included in a prompt without either teaching the terminal Org syntax or
 submitting a half-finished message. The bracketed-paste implementation is shared
 with orchestration delivery; terminal-specific string handling has one owner.
+
+## Mailboxes — addressing a role rather than a conversation
+
+A role agent (a reviewer, a planner) is restarted with fresh conversations, so
+neither its terminal id nor its session id survives as an address. A
+**mailbox** is any existing directory standing for the role: `send --to DIR`
+files mail under `("mailbox" DIR)`, keyed by the directory's true name with a
+trailing slash — the spelling `emacs-lock` stores, so the two compare as
+strings. `emacs-agent` resolves the path, since only the shell knows the
+caller's directory; Emacs re-resolves and refuses a directory that does not
+exist.
+
+**Listening is holding the lock; there is no binding.** `wait --mailbox DIR`
+and `check --mailbox DIR` first run `emacs-lock acquire DIR` (a no-op for the
+holder) and exit with its refusal otherwise, so one conversation plays a role at
+a time without a second registry of who is bound where. That inherits the lock
+rules unchanged, deliberately: a holder that dies keeps the mailbox until the
+user releases it, and a fresh instance is refused meanwhile. Releasing a dead
+role's lock automatically would let two instances believe they are the role,
+which is the failure the lock exists to prevent. Emacs re-checks the lock on
+every mailbox call, because the shell's acquire is advisory to anyone calling
+`emacsclient` by hand.
+
+**Sending as a mailbox is explicit.** `send --from DIR` takes the lock the same
+way and files the mail as from `("mailbox" DIR)`, so replies land in the
+mailbox instead of with a conversation that may be gone. It is never inferred
+from the locks a sender holds: one agent may hold several directories for
+unrelated purposes. Mail read from a mailbox carries `--from DIR` in its
+`Reply:` line for the same reason. `send-and-wait` refuses `--from`: the reply
+goes to the mailbox, where the role's own watcher already waits, and two waits
+would race for it.
+
+`spawn --from DIR` applies the same idea to workers: their
+`EMACS_AGENT_COORDINATOR`, and the coordinator line of their launch preamble,
+name the mailbox instead of the spawning terminal. Without it, a worker that
+outlives its coordinator's conversation reports to a dead terminal id, and
+mail to a dead terminal *revives* that conversation — a second instance of the
+role beside the one holding the lock. Only the address changes: dashboard
+nesting and `list` still follow the spawning terminal, since that is the live
+parent the user sees.
+
+**Delivery is pull-only, and nothing starts by itself.** Mailbox mail is never
+pasted, queued or used to revive anything; the role keeps a background
+`wait --mailbox` running. Mail to a mailbox with no running holder waits for
+the user: the dashboard lists it at the top (with its unread count, oldest
+subject, and a not-running holder's lock if one still blocks it), and `RET`
+starts an agent in DIR prompted with `You are <name>. Read
+~/dev/agents/PLAYBOOK.md and then ~/dev/agents/<name>/context.md` — the
+shared playbook in `bp/agent-mailboxes-agents-directory`, then the role's own
+context; the name is the mailbox directory's. Starting one automatically was considered and dropped: a burst of mail before the first
+instance took the lock would start several, and the second would sit refused
+on the lock waiting for the user anyway.
+
+**Unread mailbox mail has its own working copy.** It is not hydrated into any
+terminal's inbox — there is no fixed terminal to file it under — so
+`bp/agent-mailboxes--unread` holds per-mailbox counts for the render path,
+reloaded on mailbox send and read and alongside the lock copy on the poke and
+the heartbeat. `wait`/`check` read the `mail` table directly; they are not the
+render path.
+
+**The archive is history, not transport.** Emacs writes each message into the
+mailbox too: `DIR/mail/in/<timestamp>.md` for mail to it,
+`DIR/mail/out/<timestamp>.md` for mail sent as it, headed with sender and
+recipient (mailbox, session and terminal ids). A role reads them for its past.
+Nothing reads them back, read state stays in the `mail` table, and a failed
+write is reported without failing the send. There are no exceptions for git
+worktrees: archiving into one dirties it, which is why mailboxes belong in
+directories of their own.
 
 ## Fork/branch tracking — the one place with no ground truth
 
@@ -510,6 +705,7 @@ print to stderr and exit non-zero. `bp/agent-sessions-share-file` therefore
 *returns* its failures as strings rather than signalling: emacsclient's printed
 value is the only channel back to the agent.
 
+
 **PATH injection is additive by construction.** The terminal env sets
 `PATH=<our bin>:<the PATH the terminal was going to inherit anyway>`, read from
 `process-environment`. Building it from any other source could silently shrink
@@ -542,6 +738,22 @@ Setup does **not** auto-run install — it writes user config files, so it stays
 an explicit `M-x`. Point users there rather than editing the JSON by hand.
 
 ## Editing
+
+**Replace a `bin/` script, never rewrite it in place.** Agents keep
+`emacs-agent wait` running for days, and `sh` reads a running script from disk
+by offset as it goes, so an in-place save (including an editor's or an agent's
+Edit tool) shifts the code under every running copy: they died with `syntax
+error near unexpected token 'else'`. Write the new version to a temp file in
+`bin/` and `mv` it over the original; running copies keep the old inode.
+
+**A long reply must not come back through emacsclient's stdout.** Emacs
+splits a long reply into several `-print-nonl` protocol lines, and emacsclient
+parses each `recv()` as whole lines, so a read that ends mid-line prints the
+rest as `*ERROR*: Unknown message: …` with spaces still quoted as `&_`. It is
+timing-dependent: mail bodies of a few KB hit it. `emacs-agent`'s `call` has
+Emacs `write-region` the reply to a temp file and prints that instead.
+`emacs-share`'s replies are one short line and still use stdout; move it over
+too if it ever returns anything long.
 
 **A schema addition needs the load-time re-migration to be reachable.**
 `--db` runs the schema only when it *opens* the file and then caches the handle

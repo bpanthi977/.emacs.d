@@ -1,15 +1,25 @@
 #!/bin/sh
 # Talk to other agents through the Emacs agent-sessions dashboard.
 #
-#   emacs-agent spawn --type claude|codex --worktree DIR --task TEXT [--title T]
-#   emacs-agent send --to ID --type TYPE --subject S [--body B] [--files csv] [--report P]
-#   emacs-agent done --summary S [--files csv] [--report P] [--subject S] [--to ID]
-#   emacs-agent ask --question Q [--timeout SECONDS] [--to ID]
-#   emacs-agent check [--types csv] [--peek]
-#   emacs-agent wait [--types csv] [--timeout SECONDS] [--interval SECONDS]
+#   emacs-agent spawn --type claude|codex --worktree DIR --task TEXT [--title T] [--model M]
+#                     [--from MAILBOX]
+#   emacs-agent send --to ADDRESS [--from DIR] [--type TYPE] --subject S [--body B | <stdin]
+#   emacs-agent send-and-wait --to ADDRESS --subject S [--body B | <stdin] [--type TYPE]
+#                             [--timeout SECONDS] [--interval SECONDS]
+#   emacs-agent check [--mailbox DIR] [--peek]
+#   emacs-agent wait [--mailbox DIR] [--timeout SECONDS] [--interval SECONDS]
 #   emacs-agent list
 #   emacs-agent worktrees
 #   emacs-agent guide [--main]
+#
+# TYPE is status (the default), question (the sender waits on a reply; the
+# default for send-and-wait) or answer.  Any mail ends a wait.
+# ADDRESS is a terminal id, an agent session id, an agent-session: link, or a
+# mailbox: a directory standing for a role.  --mailbox and --from take that
+# directory's emacs-lock first, and are refused while someone else holds it.
+# spawn --from makes the worker report to the mailbox rather than this terminal.
+# Without --body, send and send-and-wait read the body from stdin when it is a
+# pipe or a file (a heredoc, `cmd |'), never from a terminal or a socket.
 #
 # Every verb but `guide' is an emacsclient call into the Emacs that owns this
 # terminal, and is gated on EMACS_AGENT_SESSION_ID — the id agent-sessions.el
@@ -24,35 +34,61 @@
 set -u
 
 selfdir=$(cd -- "$(dirname -- "$0")" 2>/dev/null && pwd -P) || selfdir=""
-KEEPALIVE_EVERY=15
 
 usage() {
-  sed -n '3,17p' "$0" | sed -e 's/^# \{0,1\}//'
+  sed -n '3,22p' "$0" | sed -e 's/^# \{0,1\}//'
 }
 
 die() { echo "emacs-agent: $1" >&2; exit 1; }
 
 need_session() {
+  command -v emacsclient >/dev/null 2>&1 || die "emacsclient not found"
+  # Codex runs tool commands in a shared app-server daemon, whose environment
+  # holds the EMACS_AGENT_SESSION_ID of whichever terminal started it.  The
+  # thread id is this session's own, so find its terminal from that.  An
+  # unknown thread fails rather than falling back: the stale id may name
+  # another live terminal, and mail sent as it would go astray.
+  agent_session_id=${CODEX_THREAD_ID:-${CODEX_SESSION_ID:-}}
+  if [ -n "$agent_session_id" ]; then
+    EMACS_AGENT_SESSION_ID=$(call "(bp/agent-sessions-terminal-id-for-agent \"$(esc "$agent_session_id")\")")
+    [ -n "$EMACS_AGENT_SESSION_ID" ] ||
+      die "no Emacs agent session registered for agent id $agent_session_id"
+  fi
   [ -n "${EMACS_AGENT_SESSION_ID:-}" ] ||
     die "not inside an Emacs agent session terminal (no EMACS_AGENT_SESSION_ID)"
-  command -v emacsclient >/dev/null 2>&1 || die "emacsclient not found"
 }
 
 # Escape a value for interpolation into an elisp string literal.
 esc() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
 
-# Turn emacsclient's printed elisp string back into plain text.
-unquote() {
-  printf '%s' "$1" | sed -e 's/^"//' -e 's/"$//' \
-    -e 's/\\n/\
-/g' -e 's/\\t/	/g' -e 's/\\"/"/g' -e 's/\\\\/\\/g'
-}
-
 # call ELISP -> prints the returned string; non-zero only when Emacs is unreachable.
+#
+# The reply comes back through a file, not emacsclient's output.  Emacs sends a
+# long reply as several protocol lines, and emacsclient parses each read() as
+# if it held whole lines; when a read ends mid-line, the rest of the reply is
+# printed as "*ERROR*: Unknown message: ..." with its quoting left in (spaces
+# as "&_").  Mail bodies are long enough to hit this.  The wrapper is inline
+# so it needs nothing loaded in Emacs beyond the entry point itself.
 call() {
-  reply=$(emacsclient -e "$1" 2>&1) ||
+  reply_file=$(mktemp "${TMPDIR:-/tmp}/emacs-agent-reply.XXXXXX") ||
+    die "cannot create a reply file"
+  expr="(let ((f \"$(esc "$reply_file")\") (r $1)) (let ((coding-system-for-write 'utf-8-unix)) (write-region (if (stringp r) r (prin1-to-string r)) nil f nil 'silent)) nil)"
+  # A refused connection never reached Emacs, so retrying it cannot repeat
+  # anything.  Refusals come in bursts while Emacs is busy and every agent's
+  # watcher keeps polling (the socket's accept queue fills), and one used to
+  # end a 30-day wait.  EMACS_AGENT_CONNECT_TRIES is for tests.
+  tries=${EMACS_AGENT_CONNECT_TRIES:-30}
+  until reply=$(emacsclient -e "$expr" 2>&1); do
+    tries=$((tries - 1))
+    case "$reply" in
+      *"can't connect"*|*"Connection refused"*)
+        [ "$tries" -gt 0 ] && { sleep 1; continue; } ;;
+    esac
+    rm -f -- "$reply_file"
     die "could not reach Emacs: $reply"
-  unquote "$reply"
+  done
+  cat -- "$reply_file"
+  rm -f -- "$reply_file"
 }
 
 # An entry point's failures come back as text, so recognise the shapes that
@@ -69,25 +105,23 @@ verb=${1:-}
 shift 2>/dev/null || true
 case "$verb" in -h|--help|help) usage; exit 0 ;; esac
 
-type_=""; to=""; subject=""; body=""; files=""; report_path=""
-worktree=""; task=""; title=""; summary=""; question=""; types=""
+type_=""; to=""; subject=""; body=""; body_given=""; from=""; mailbox=""
+worktree=""; task=""; title=""; model=""
 timeout=90; interval=3; peek=""; main=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --type) type_=${2:-}; shift 2 ;;
     --to) to=${2:-}; shift 2 ;;
+    --from) from=${2:-}; shift 2 ;;
+    --mailbox) mailbox=${2:-}; shift 2 ;;
     --subject) subject=${2:-}; shift 2 ;;
-    --body) body=${2:-}; shift 2 ;;
-    --files) files=${2:-}; shift 2 ;;
-    --report) report_path=${2:-}; shift 2 ;;
+    --body) body=${2:-}; body_given=1; shift 2 ;;
     --worktree) worktree=${2:-}; shift 2 ;;
     --task) task=${2:-}; shift 2 ;;
     --task-file) task=$(cat -- "${2:-}") || die "cannot read --task-file ${2:-}"; shift 2 ;;
     --title) title=${2:-}; shift 2 ;;
-    --summary) summary=${2:-}; shift 2 ;;
-    --question) question=${2:-}; shift 2 ;;
-    --types) types=${2:-}; shift 2 ;;
+    --model) model=${2:-}; shift 2 ;;
     --timeout) timeout=${2:-}; shift 2 ;;
     --interval) interval=${2:-}; shift 2 ;;
     --peek) peek=1; shift ;;
@@ -97,41 +131,85 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-do_send() { # do_send TO TYPE SUBJECT BODY FILES REPORT
-  out=$(call "(bp/agent-orchestration-send \"$(esc "$EMACS_AGENT_SESSION_ID")\" \"$(esc "$1")\" \"$(esc "$2")\" \"$(esc "$3")\" \"$(esc "$4")\" \"$(esc "$5")\" \"$(esc "$6")\")")
+# Is this address a mailbox directory?  The test emacs-lock uses for a path,
+# minus agent-session: links, which may contain a slash.
+is_path() {
+  case "$1" in
+    agent-session:*) return 1 ;;
+    /*|~*|.*|*/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# The canonical spelling of mailbox directory DIR: physical, slash-terminated,
+# as emacs-lock stores it.  Resolved here because only this shell knows the
+# caller's working directory.
+mailbox_path() { # mailbox_path DIR
+  case "$1" in "~"|"~/"*) set -- "$HOME${1#\~}" ;; esac
+  resolved=$(cd -- "$1" 2>/dev/null && pwd -P) ||
+    die "no such mailbox directory: $1"
+  case "$resolved" in */) printf '%s' "$resolved" ;; *) printf '%s/' "$resolved" ;; esac
+}
+
+# Take mailbox DIR's lock, a no-op when this conversation already holds it.
+claim_mailbox() { # claim_mailbox DIR WHY
+  lock_out=$("$selfdir/emacs-lock" acquire "$1" --why "$2" 2>&1) || {
+    status=$?
+    printf '%s\n' "$lock_out" >&2
+    exit "$status"
+  }
+}
+
+# Without --body, take the body from stdin, but only when stdin is a pipe or a
+# file: agents naturally write `send ... <<EOF', and send used to drop that
+# body silently.  A terminal would wait for typing, and an agent harness's
+# stdin can be a socket that never closes (Claude Code's is), so neither is read.
+stdin_body() {
+  [ -z "$body_given" ] || return 0
+  if [ -p /dev/stdin ] || [ -f /dev/stdin ]; then body=$(cat); fi
+}
+
+do_send() { # do_send TO TYPE SUBJECT BODY [FROM]
+  out=$(call "(bp/agent-orchestration-send \"$(esc "$EMACS_AGENT_SESSION_ID")\" \"$(esc "$1")\" \"$(esc "$2")\" \"$(esc "$3")\" \"$(esc "$4")\" \"$(esc "${5:-}")\")")
   report "$out" 'Sent*'
 }
 
-do_check() { # do_check TYPES CONSUME -> prints "messages: N" and the messages
-  consume=t; [ -n "$2" ] || consume=nil
-  call "(bp/agent-orchestration-check \"$(esc "$EMACS_AGENT_SESSION_ID")\" \"$(esc "$1")\" $consume)"
+do_check() { # do_check CONSUME -> prints "messages: N" and the messages
+  consume=t; [ -n "$1" ] || consume=nil
+  call "(bp/agent-orchestration-check \"$(esc "$EMACS_AGENT_SESSION_ID")\" $consume \"$(esc "$mailbox")\")"
 }
 
 count_of() { printf '%s' "$1" | sed -n '1s/^messages: \([0-9]*\)$/\1/p'; }
 
-# Poll for mail until something matching arrives or the deadline passes.
-poll() { # poll TYPES TIMEOUT INTERVAL
+# Check, consuming, until some mail arrives or TIMEOUT passes.  An Emacs that
+# cannot be reached (restarting, or refusing past call's retries) is waited
+# out like silence: a mailbox watcher runs for weeks, and one that died with
+# Emacs left its agent deaf until someone noticed.
+poll() { # poll TIMEOUT INTERVAL
   started=$(date +%s)
-  last_ping=$started
+  unreachable=""
   while :; do
-    out=$(do_check "$1" consume)
+    out=$(do_check consume 2>&1)
     n=$(count_of "$out")
-    case "$n" in
-      ''|0) : ;;
-      *) printf '%s\n' "$out"; return 0 ;;
-    esac
+    if [ -z "$n" ]; then
+      case "$out" in
+        "emacs-agent: could not reach Emacs:"*)
+          [ -n "$unreachable" ] ||
+            echo "emacs-agent: cannot reach Emacs; still waiting" >&2
+          unreachable=1 ;;
+        *) printf '%s\n' "$out" >&2; return 1 ;;
+      esac
+    else
+      unreachable=""
+      [ "$n" -eq 0 ] || { printf '%s\n' "$out"; return 0; }
+    fi
     now=$(date +%s)
     elapsed=$((now - started))
-    [ "$elapsed" -lt "$2" ] || {
-      echo "messages: 0 (nothing after ${elapsed}s; call wait again to keep waiting)"
+    [ "$elapsed" -lt "$1" ] || {
+      echo "messages: 0 (no mail after ${elapsed}s; call wait again to keep waiting)"
       return 0
     }
-    if [ $((now - last_ping)) -ge "$KEEPALIVE_EVERY" ]; then
-      # Keeps the calling agent's tool from reading a long wait as a hang.
-      echo "{\"_keepalive\":true,\"elapsed\":$elapsed}" >&2
-      last_ping=$now
-    fi
-    sleep "$3"
+    sleep "$2"
   done
 }
 
@@ -149,43 +227,59 @@ case "$verb" in
     [ -n "$type_" ] || die "spawn needs --type (claude, codex, ...)"
     [ -n "$worktree" ] || die "spawn needs --worktree DIR (see 'emacs-agent worktrees')"
     [ -n "$task" ] || die "spawn needs --task TEXT or --task-file FILE"
-    out=$(call "(bp/agent-orchestration-spawn \"$(esc "$EMACS_AGENT_SESSION_ID")\" \"$(esc "$type_")\" \"$(esc "$worktree")\" \"$(esc "$task")\" \"$(esc "$title")\")")
+    if [ -n "$from" ]; then
+      from=$(mailbox_path "$from") || exit 1
+      claim_mailbox "$from" "spawning a worker for this mailbox"
+    fi
+    out=$(call "(bp/agent-orchestration-spawn \"$(esc "$EMACS_AGENT_SESSION_ID")\" \"$(esc "$type_")\" \"$(esc "$worktree")\" \"$(esc "$task")\" \"$(esc "$title")\" \"$(esc "$model")\" \"$(esc "$from")\")")
     report "$out" 'Spawned*'
     ;;
 
   send)
     need_session
-    [ -n "$to" ] || die "send needs --to ID"
+    [ -n "$to" ] || die "send needs --to ADDRESS"
     [ -n "$subject" ] || die "send needs --subject"
-    do_send "$to" "$type_" "$subject" "$body" "$files" "$report_path"
+    ! is_path "$to" || to=$(mailbox_path "$to") || exit 1
+    if [ -n "$from" ]; then
+      from=$(mailbox_path "$from") || exit 1
+      claim_mailbox "$from" "sending as this mailbox"
+    fi
+    stdin_body
+    do_send "$to" "$type_" "$subject" "$body" "$from"
     ;;
 
-  done)
+  send-and-wait)
     need_session
-    [ -n "$summary" ] || die "done needs --summary (three sentences)"
-    [ -n "$to" ] || to=${EMACS_AGENT_COORDINATOR:-}
-    [ -n "$to" ] || die "no coordinator to report to; pass --to ID"
-    [ -n "$subject" ] || subject="Done"
-    do_send "$to" done "$subject" "$summary" "$files" "$report_path"
-    ;;
-
-  ask)
-    need_session
-    [ -n "$question" ] || die "ask needs --question"
-    [ -n "$to" ] || to=${EMACS_AGENT_COORDINATOR:-}
-    [ -n "$to" ] || die "no coordinator to ask; pass --to ID"
-    do_send "$to" question "${subject:-Question}" "$question" "" "" || exit 1
-    poll answer "$timeout" "$interval"
+    [ -n "$to" ] || die "send-and-wait needs --to ADDRESS"
+    [ -n "$subject" ] || die "send-and-wait needs --subject"
+    # Replies to mail sent as a mailbox land in the mailbox, where its own
+    # watcher already waits; a second wait there would compete with it.
+    [ -z "$from" ] || die "send-and-wait does not take --from; use send, and let your mailbox watcher collect the reply"
+    [ -z "$mailbox" ] || die "send-and-wait does not take --mailbox"
+    ! is_path "$to" || to=$(mailbox_path "$to") || exit 1
+    [ -n "$type_" ] || type_=question
+    stdin_body
+    do_send "$to" "$type_" "$subject" "$body" || exit 1
+    poll "$timeout" "$interval"
     ;;
 
   check)
     need_session
-    if [ -n "$peek" ]; then do_check "$types" ""; else do_check "$types" consume; fi
+    if [ -n "$mailbox" ]; then
+      mailbox=$(mailbox_path "$mailbox") || exit 1
+      claim_mailbox "$mailbox" "listening on this mailbox"
+    fi
+    if [ -n "$peek" ]; then out=$(do_check ""); else out=$(do_check consume); fi
+    report "$out" 'messages:*'
     ;;
 
   wait)
     need_session
-    poll "$types" "$timeout" "$interval"
+    if [ -n "$mailbox" ]; then
+      mailbox=$(mailbox_path "$mailbox") || exit 1
+      claim_mailbox "$mailbox" "listening on this mailbox"
+    fi
+    poll "$timeout" "$interval"
     ;;
 
   list)

@@ -18,6 +18,10 @@
 (require 'magit-section)
 (require 'project)
 (require 'org)
+;; Not autoloaded: `format-spec' renders the launch templates in
+;; `bp/agent-orchestration-launch-commands', and a spawn is the first thing
+;; that would notice it missing — long after this file loaded cleanly.
+(require 'format-spec)
 
 (defconst bp/agent-sessions--dir
   (file-name-directory (or load-file-name buffer-file-name
@@ -55,18 +59,28 @@ shell's PATH, which is the failure mode worth designing away here."
   "Session id -> vterm buffer, populated for every vterm buffer at creation.")
 
 (defvar bp/agent-sessions (make-hash-table :test 'equal)
-  "Session id -> plist (:buffer :agent-type :status :last-event :updated-at :repo :worktree).
+  "Session id -> plist of live agent state and its terminal buffer.
+Includes agent identity, hook status, repo/worktree, and Claude's most recently
+submitted prompt when its `UserPromptSubmit' hook provided one.
 Populated lazily: an entry only exists once a hook event has fired for it.")
 
 (defvar bp/agent-session-counter 0)
 
 (defconst bp/agent-orchestration-message-types
-  '("status" "done" "blocked" "question" "answer")
+  '("status" "question" "answer")
   "The types an inter-agent message may carry.
-Deliberately short: `done' is the one an orchestrator waits on, `blocked' and
-`question' are the two ways a worker stops short of it, `answer' closes a
-question, and `status' is everything else.  A larger vocabulary would have to
-earn itself by changing what some command *does*, not just what a row says.")
+The line they draw is whether the sender expects a reply: a `question' does,
+and its `Reply:' line says so; an `answer' closes one; `status' is everything
+else, including a worker reporting that it finished or is stuck.  A larger
+vocabulary would have to earn itself by changing what some command *does*, not
+just what a row says.")
+
+(defconst bp/agent-orchestration-actionable-message-types
+  '("question" "answer")
+  "Mail types important enough to steer a running Codex turn.
+Plain `status' mail waits for the recipient to become idle, unless actionable
+mail is queued with it, so progress chatter cannot repeatedly steer active
+work and earlier context still stays ordered with the actionable message.")
 
 (defvar bp/agent-orchestration--mail (make-hash-table :test 'equal)
   "Recipient terminal id -> list of message plists, oldest first.
@@ -80,11 +94,6 @@ the database), and a session that outlives this Emacs is found again through the
 other.  Filled from the database by `bp/agent-orchestration--hydrate' when a
 session's identity becomes known, and dropped for a terminal when it is killed
 \(`bp/agent-session--cleanup') — dropping the working copy, never the record.")
-
-(defvar bp/agent-orchestration--polls (make-hash-table :test 'equal)
-  "Terminal id -> `float-time' of its last inbox read.
-`emacs-agent wait' polls, so a recent read means that agent is coming back for
-its own mail; see `bp/agent-orchestration--polling-p'.")
 
 (defvar bp/agent-orchestration--counter 0
   "Source of message and brief ids within this Emacs.")
@@ -112,6 +121,11 @@ Used to order the agent picker shown by `bp/agent-sessions-send-region'.")
   "Buffer seen by the previous focus-hook run.
 This distinguishes actually selecting a terminal from hook runs caused by
 output arriving in a terminal that was already selected.")
+
+(defvar-local bp/agent-session--resuming-session-id nil
+  "Agent session id this terminal was opened to resume.
+This bridges startup until the agent's first hook confirms its identity, so a
+message addressed through an older terminal can find this live replacement.")
 
 (defconst bp/agent-sessions-buffer-name "*Agent Sessions*")
 
@@ -245,7 +259,6 @@ Populates the cache on first use; `bp/agent-sessions-refresh' clears it."
     (remhash bp/agent-session-id bp/agent-session-id->buffer)
     (remhash bp/agent-session-id bp/agent-sessions)
     (remhash bp/agent-session-id bp/agent-orchestration--mail)
-    (remhash bp/agent-session-id bp/agent-orchestration--polls)
     (bp/agent-sessions--refresh-if-visible)))
 
 (defun bp/agent-sessions--vterm-advice (orig-fun pop-to-buf-fun &optional arg)
@@ -314,6 +327,7 @@ registers the resulting buffer."
 ;; current (same idea as the `vterm--set-title' advice above).
 (defun bp/agent-sessions--eat-capture-title (title &rest _)
   (setq-local bp/agent-session-title title))
+
 ;; ghostel has a pre-spawn hook, run in the new buffer while
 ;; `process-environment' is bound to the child's environment, so it needs no
 ;; advice for the id injection.  Only plain terminals are sessions: ghostel's
@@ -444,8 +458,15 @@ the body names the agent type, state, and its terminal title (task summary)."
          ;; Path to this session's transcript (Claude includes it on every
          ;; hook, notably SessionStart). Used to auto-detect fork parentage.
          (transcript-path (or (and payload (gethash "transcript_path" payload))
-                              (and existing (plist-get existing :transcript-path)))))
     (when (buffer-live-p buf)
+                              (and existing (plist-get existing :transcript-path))))
+         ;; Claude leaves the submitted text rendered in its composer while a
+         ;; turn starts and sometimes after it stops.  Remember the hook's
+         ;; authoritative value so that retained text is not mistaken for a
+         ;; new human draft.  Other events preserve the last submitted value.
+         (submitted-prompt
+                   payload
+                   (gethash "user_prompt" payload))
       (let* ((info (bp/agent-session--repo-info (buffer-local-value 'default-directory buf)))
              ;; Parentage, in priority order: what a previous event already
              ;; recorded; the marker a fresh `b'-branch left on the buffer; or,
@@ -463,6 +484,7 @@ the body names the agent type, state, and its terminal title (task summary)."
                        :agent-type agent-type
                        :agent-session-id agent-session-id
                        :transcript-path transcript-path
+                       :submitted-prompt submitted-prompt
                        :status status
                        :last-event event-name
                        :updated-at (current-time)
@@ -490,12 +512,11 @@ the body names the agent type, state, and its terminal title (task summary)."
         ;; This event is where a session's durable identity becomes known, so
         ;; it is also where mail stored for it under that identity — by a
         ;; previous Emacs, or before this terminal had an agent id — is picked
-        ;; up.  Then deliver: mail that arrived while the session was mid-turn
-        ;; had nowhere to go, because pasting into a running TUI would land in
-        ;; the middle of its turn, and this event is the moment that stops
-        ;; being true.
+        ;; up.  Then deliver: Codex has a session-aware native queue, while an
+        ;; agent without one may have been waiting for this event to make a
+        ;; terminal paste safe.
         (bp/agent-orchestration--hydrate session-id)
-        (bp/agent-orchestration-deliver session-id)))
+        (bp/agent-orchestration-deliver
     (bp/agent-sessions--refresh-if-visible))
   nil)
 
@@ -592,6 +613,8 @@ These fill in for vterm/eat buffers that have not (yet) fired an agent hook,
 so idle terminals still appear in the dashboard tree."
   (let ((info (bp/agent-sessions--buffer-repo-info buf)))
     (list :buffer buf
+          :agent-session-id
+          (buffer-local-value 'bp/agent-session--resuming-session-id buf)
           ;; Whatever is running right now, agent or not; the backend name only
           ;; when the terminal is sitting at its shell prompt.
           :agent-type (or (bp/agent-sessions--foreground-command buf)
@@ -618,6 +641,23 @@ agent hook yet, or nil if no live buffer is registered for ID."
       (let ((buf (gethash id bp/agent-session-id->buffer)))
         (and (buffer-live-p buf)
              (bp/agent-sessions--terminal-session buf)))))
+
+(defun bp/agent-sessions-terminal-id-for-agent (agent-session-id)
+  "Return the terminal id of the live session whose durable id is AGENT-SESSION-ID.
+Returns \"\" when no live session has that id.  `emacs-agent' calls this over
+emacsclient to find its own terminal: Codex runs tool commands in a shared
+app-server daemon whose environment holds the EMACS_AGENT_SESSION_ID of the
+terminal that started it, not of the session issuing the command."
+  (or (catch 'found
+        (maphash
+         (lambda (id session)
+           (when (and (equal agent-session-id
+                             (plist-get session :agent-session-id))
+                      (buffer-live-p (plist-get session :buffer)))
+             (throw 'found id)))
+         bp/agent-sessions)
+        nil)
+      ""))
 
 (defun bp/agent-sessions--session-title (session)
   "The title for SESSION's buffer: the user override if any, else the OSC title."
@@ -800,11 +840,9 @@ every manually marked row.  Record what was drawn; don't derive it twice.")
 (defun bp/agent-orchestration--messages (id)
   (gethash id bp/agent-orchestration--mail))
 
-(defun bp/agent-orchestration--pending (id &optional types)
-  "Unread messages for ID, optionally filtered to TYPES (a list of strings)."
-  (seq-filter (lambda (m)
-                (and (not (plist-get m :read))
-                     (or (null types) (member (plist-get m :type) types))))
+(defun bp/agent-orchestration--pending (id)
+  "Unread messages for ID."
+  (seq-remove (lambda (m) (plist-get m :read))
               (bp/agent-orchestration--messages id)))
 
 (defun bp/agent-orchestration--pending-count (id)
@@ -2277,6 +2315,7 @@ most-recently-active first; otherwise the stable order of
             (insert "No active sessions.\n")
           (dolist (repo repos)
             (bp/agent-sessions--insert-repo repo)))))
+      (bp/agent-mailboxes--insert-section)
     (setq bp/agent-sessions--row-status (nreverse bp/agent-sessions--row-status))
     ;; Freshly inserted sections carry the visibility magit cached for them
     ;; (e.g. a note folded with TAB) in their `hidden' slot, but nothing has
@@ -2395,6 +2434,7 @@ On a session row, pop to its vterm buffer.  On a shared-file row, open the
 file — which is also what clears its highlight.  On a worktree or repo
 heading, open project.el's dispatch menu in that directory (see
 `bp/agent-sessions--switch-project')."
+and clear its highlight.  On a pending mailbox, start an agent on it.  On a worktree or repo heading, open project.el's
   (interactive)
   (if (bp/agent-sessions--file-at-point)
       (bp/agent-sessions--open-file-at-point #'pop-to-buffer)
@@ -2406,6 +2446,8 @@ heading, open project.el's dispatch menu in that directory (see
            (if (buffer-live-p buf)
                (pop-to-buffer buf)
              (message "No session at point."))))
+        ('bp/agent-mailbox-row
+         (bp/agent-mailboxes-start (oref section value)))
         ((or 'bp/agent-session-worktree 'bp/agent-session-repo)
          (let* ((value (oref section value))
                 (dir (or (plist-get value :path) (plist-get value :root))))
@@ -2427,6 +2469,7 @@ Point stays in the dashboard either way."
       (if (buffer-live-p buf)
           (display-buffer buf '(nil (inhibit-same-window . t)))
         (message "No session at point.")))))
+
 
 (defun bp/agent-sessions--row-locations ()
   "Return (POSITION . ID) for each session row, in buffer order."
@@ -2725,6 +2768,7 @@ BUFNAME is the desired buffer name.  Loads the backend package lazily."
       ('eat (eat-term-send-string eat-terminal "\r"))
       ('ghostel (ghostel-send-key "return"))
       (_ (user-error "%s is not a vterm, eat or ghostel terminal" buf)))))
+
 (defun bp/agent-sessions--terminal-paste (buf string)
   "Bracket-paste STRING into the terminal in BUF without submitting it."
   (with-current-buffer buf
@@ -3055,12 +3099,14 @@ The %s is replaced with the parent's own session id."
   :type '(alist :key-type symbol :value-type string))
 
 (defun bp/agent-session--spawn (worktree-path agent-type session-id commands
-                                              &optional branched-from)
+                                              &optional branched-from initial-prompt)
   "Open a terminal in WORKTREE-PATH and run COMMANDS's template for AGENT-TYPE.
 COMMANDS is an alist like `bp/agent-session-resume-commands'; its template's
 %s is filled with SESSION-ID.  When BRANCHED-FROM is non-nil (a cons
 \(PARENT-SID . LABEL)), tag the new terminal so the session it starts records
-that it was branched from that parent.  Returns the new terminal buffer."
+that it was branched from that parent.  When INITIAL-PROMPT is non-nil, append
+it as a shell-quoted argument to the launch command.  Returns the new terminal
+buffer."
   (let* ((agent (if (symbolp agent-type) agent-type (intern agent-type)))
          (template (alist-get agent commands))
          (default-directory (file-name-as-directory worktree-path)))
@@ -3074,16 +3120,26 @@ that it was branched from that parent.  Returns the new terminal buffer."
       (when (and branched-from (buffer-live-p buf))
         (with-current-buffer buf
           (setq-local bp/agent-session--branched-from branched-from)))
-      (bp/agent-sessions--terminal-send buf (format template session-id))
+      (bp/agent-sessions--terminal-send
+       buf (concat (format template session-id)
+                   (if initial-prompt
+                       (concat " " (shell-quote-argument initial-prompt))
+                     "")))
       buf)))
 
 ;;;###autoload
-(defun bp/agent-session-start (worktree-path agent-type session-id)
+(defun bp/agent-session-start (worktree-path agent-type session-id
+                                             &optional initial-prompt)
   "Open a vterm in WORKTREE-PATH and resume AGENT-TYPE's SESSION-ID.
 AGENT-TYPE is a symbol such as `claude' or `codex'.  This is the target of
-the `elisp:' links produced by `org-store-link' on a session row."
-  (bp/agent-session--spawn worktree-path agent-type session-id
-                           bp/agent-session-resume-commands))
+the `elisp:' links produced by `org-store-link' on a session row.  When
+INITIAL-PROMPT is non-nil, submit it as the resumed session's first prompt."
+  (let ((buf (bp/agent-session--spawn
+              worktree-path agent-type session-id
+              bp/agent-session-resume-commands nil initial-prompt)))
+    (when (buffer-live-p buf)
+      (with-current-buffer buf
+    buf))
 
 (defun bp/agent-sessions--buffer-for-agent-session (session-id)
   "Return the live buffer running the agent session SESSION-ID, or nil.
@@ -3273,6 +3329,9 @@ Return non-nil on success, nil when SESSION lacks the info to build a link."
                           (format "%s %s %s" branch agent (or title sid))
                         (format "%s %s" agent (or title sid))))
         t))))
+  (when (and path (not (string-empty-p path)))
+    t))
+
 
 (defun bp/agent-sessions--store-file-link (path)
   "Store an Org `file:' link to PATH, described by its bare file name.
@@ -3287,17 +3346,26 @@ the path it came from is rarely what the surrounding prose wants to read."
      :link (concat "file:" (abbreviate-file-name path))
      :description (file-name-nondirectory (directory-file-name path)))
     t))
+(defun bp/agent-sessions--parse-session-link (link)
+  "Return (AGENT SESSION-ID WORKTREE) parsed from LINK, or nil.
+LINK may include the `agent-session:' prefix or only its Org handler payload."
+  (let ((payload (if (string-prefix-p "agent-session:" link)
+                     (substring link (length "agent-session:"))
+                   link)))
+    (when (string-match "\\`\\([^:]+\\)::\\([^:]+\\)::\\(.*\\)\\'" payload)
+      (list (match-string 1 payload)
+            (match-string 2 payload)
+            (match-string 3 payload)))))
 
 (defun bp/agent-sessions--org-follow-link (link &optional _arg)
   "Follow an `agent-session:' LINK, jumping to or resuming the session.
 LINK is AGENT::SESSION-ID::WORKTREE-PATH, as produced by the `:store'
 handler.  Using a dedicated link type (rather than an `elisp:' link) avoids
 the confirmation prompt Org shows before running arbitrary elisp."
-  (if (string-match "\\`\\([^:]+\\)::\\([^:]+\\)::\\(.*\\)\\'" link)
-      (bp/agent-session-open (match-string 3 link)
-                             (match-string 1 link)
-                             (match-string 2 link))
-    (error "Malformed agent-session link: %s" link)))
+  (pcase (bp/agent-sessions--parse-session-link link)
+    (`(,agent ,session-id ,worktree)
+     (bp/agent-session-open worktree agent session-id))
+    (_ (error "Malformed agent-session link: %s" link))))
 
 (defun bp/agent-sessions--org-store-link (&optional _interactive)
   "Store a link for the dashboard row at point, or for the session around point.
@@ -3316,6 +3384,7 @@ Registered as the `:store' handler for `org-store-link'."
             (bp/agent-sessions--session-at-point))
            (bp/agent-session-id
             (gethash bp/agent-session-id bp/agent-sessions))))))
+
 
 (defun bp/agent-sessions--sync-default-directory ()
   "Track the worktree/repo at point in `default-directory'.
@@ -3356,39 +3425,74 @@ repo > worktree > session tree with foldable sections (TAB to fold/unfold)."
 ;; answers.
 
 (defcustom bp/agent-orchestration-launch-commands
-  '((claude . "claude \"$(cat %s)\"")
-    (codex  . "codex \"$(cat %s)\""))
+  '((claude . "claude %m \"$(cat %b)\"")
   "Shell command per agent type that starts a worker on a task brief.
-%s is the path of the brief file `bp/agent-orchestration-spawn' wrote.
+Rendered with `format-spec':
+
+  %b  path of the brief file `bp/agent-orchestration-spawn' wrote, quoted
+  %m  the model flag for this spawn, or nothing when it named no model
+      (spelled by `bp/agent-orchestration-model-flags')
 
 The brief is read by the shell instead of being passed as a literal argument
 because it is a two-kilobyte multi-line prompt, and typing that into a terminal
 as one quoted argument is exactly the sort of line a TUI mangles.  `cat' keeps
 the typed line short whichever agent is launched, and passing the task at
 launch avoids the race that sending it afterwards would have: a TUI that is
-still starting silently drops input."
+still starting silently drops input.
+
+A template written before `%m' existed — one bare `%s' for the brief — still
+launches; it just has nowhere to put a model, so a spawn that names one against
+that type is refused rather than quietly run on the default model."
+  :type '(alist :key-type symbol :value-type string))
+
+(defcustom bp/agent-orchestration-model-flags
+  '((claude . "--model %s")
+  "How each agent type spells \"run on this model\", with %s for the model name.
+This is what `%m' in `bp/agent-orchestration-launch-commands' expands to when a
+spawn names a model.  A type with no entry here takes no model, and a spawn
+naming one for it is refused: guessing a flag for a CLI we know nothing about
+would produce a worker that dies on its own usage message, which reaches the
+orchestrator as a worker that simply never reports.
+
+Model *names* are passed through unchecked — they are the agent CLI\='s
+vocabulary, not ours, and a list here would be wrong within a release."
   :type '(alist :key-type symbol :value-type string))
 
 (defcustom bp/agent-orchestration-push-when-idle t
-  "When non-nil, mail for an agent that is resting is typed into its terminal.
-An orchestrator that is waiting collects its own mail through `emacs-agent
-wait', so this covers the other case: mail arriving for an agent that has
-finished its turn and would otherwise sit idle until the user prompted it.
-Delivery is skipped while the recipient is polling, so a waiting orchestrator
-cannot be handed the same message twice — see `bp/agent-orchestration--polling-p'."
+  "When non-nil, automatically hand queued mail to a recipient agent.
+Codex mail uses its native session queue, whether the conversation is running
+or resting, so it never shares the human's terminal composer.  Claude mail uses
+Claude Code's queue-submit action only when its composer is known to be safe.
+Mail that arrives while the human is drafting stays unread until the human
+submits that prompt, then queues behind it.  Claude's composer safety decides
+delivery regardless of message type or stale hook status; Codex retains its
+native-queue steering policy.  `emacs-agent wait' remains the explicit way for
+an agent to collect its own mail."
   :type 'boolean)
 
-(defcustom bp/agent-orchestration-poll-grace 30
-  "Seconds after an inbox read during which mail is not pushed to a terminal.
-`emacs-agent wait' polls every couple of seconds, so anything shorter than its
-interval would race it; anything much longer would leave a coordinator that has
-stopped waiting waiting again."
-  :type 'integer)
+(defcustom bp/agent-orchestration-claude-queue-submit-key "\C-x\r"
+  "Terminal bytes bound to Claude Code's `chat:queueSubmit' action.
+The default is Claude Code's default Ctrl+X Enter chord.  Keep this synchronized
+with `~/.claude/keybindings.json' if that action is rebound."
+  :type 'string)
 
 (defconst bp/agent-orchestration--submit-delay 0.5
   "Seconds between pasting a message into a TUI and pressing Enter.
 The pasted block only becomes the TUI's composed input after it has processed
 it; submitting in the same breath submits an empty prompt.")
+
+(defconst bp/agent-orchestration--native-queue-timeout 5
+  "Seconds to wait for an agent's native queue command to acknowledge mail.")
+
+(defcustom bp/agent-orchestration-codex-empty-prompt-regexp
+  "^›[[:blank:]]+Ask Codex to do anything[[:blank:]]*$"
+  "Regexp matching Codex's empty idle composer.
+This is the one terminal state where delivering mail through the composer is
+safe even when the last hook still says the session is running.  In
+particular, Codex does not emit a Stop hook when a turn is interrupted, and
+its native queue deliberately leaves messages pending while the thread has
+that internal state."
+  :type 'regexp)
 
 (defvar bp/agent-orchestration--brief-dir
   (expand-file-name "emacs-agent-briefs/" temporary-file-directory)
@@ -3505,12 +3609,12 @@ message is gone, but the identity it was filed under is not."
     (cond ((and from (bp/agent-sessions--session-for-id from)) from)
           (key (bp/agent-orchestration--live-id-for-key key)))))
 
-(defun bp/agent-orchestration--record-poll (id)
-  (puthash id (float-time) bp/agent-orchestration--polls))
-
-(defun bp/agent-orchestration--polling-p (id)
-  (let ((last (gethash id bp/agent-orchestration--polls)))
-    (and last (< (- (float-time) last) bp/agent-orchestration-poll-grace))))
+(defun bp/agent-orchestration--sender-address (msg)
+  "The durable address for replying to MSG, or its live terminal id."
+  (pcase (plist-get msg :from-key)
+    (`("mailbox" ,dir) dir)
+    (`("session" ,session-id) session-id)
+    (_ (bp/agent-orchestration--sender-terminal msg))))
 
 ;;;; Message rendering
 
@@ -3530,12 +3634,27 @@ A message restored from the database may have outlived the terminal that sent
 it, so the sender is resolved through its durable key: answerable when that
 conversation is live again, named but not addressable when it is not."
   (let* ((live (bp/agent-orchestration--sender-terminal msg))
+         (from-mailbox (bp/agent-mailbox--of-key (plist-get msg :from-key)))
+         (to-mailbox (bp/agent-mailbox--of-key (plist-get msg :to-key)))
+         (reply-to (bp/agent-orchestration--sender-address msg))
+         ;; Mail read from a mailbox is answered as that mailbox, so the
+         ;; reply reaches the role rather than this one conversation.
+         (reply-to (and reply-to
+                        (concat (shell-quote-argument reply-to)
+                                (if to-mailbox
+                                    (concat " --from "
+                                            (shell-quote-argument to-mailbox))
+                                  ""))))
          (label (or (plist-get msg :from-label) (plist-get msg :from) "unknown")))
-    (concat (format "--- [%s] from %s%s\n" (plist-get msg :type)
-                    (or live label)
                     (if live
                         (bp/agent-orchestration--describe-sender live)
-                      (format " (%s — that terminal is gone)" label)))
+    (concat (format "--- $orca (/orca) message from %s%s [%s]\n"
+                    (cond (from-mailbox (concat "mailbox " from-mailbox))
+                          (live live)
+                          (t label))
+                    (cond (from-mailbox (format " (sent by %s)" label))
+                          (live (bp/agent-orchestration--describe-sender live))
+                    (plist-get msg :type))
             (format "Subject: %s\n" (plist-get msg :subject))
             (let ((body (plist-get msg :body)))
               (if (and body (not (string-empty-p body))) (concat body "\n") ""))
@@ -3545,10 +3664,14 @@ conversation is live again, named but not addressable when it is not."
             (let ((report (plist-get msg :report)))
               (if (and report (not (string-empty-p report)))
                   (format "Report: %s\n" report) ""))
-            (if live
                 (format "Reply: emacs-agent send --to %s --type answer --subject \"...\"\n"
-                        live)
               "Reply: the sender's terminal is not live here; nothing to reply to.\n"))))
+            (cond ((and reply-to (equal (plist-get msg :type) "question"))
+                  ;; Only a question waits on its reply; offering the command
+                  ;; anyway keeps a follow-up one copy away.
+                  (reply-to
+                   (format "Reply (optional): emacs-agent send --to %s --subject \"...\"\n"
+                           reply-to))
 
 (defun bp/agent-orchestration--format-messages (messages)
   (concat (format "messages: %d\n" (length messages))
@@ -3578,6 +3701,48 @@ delivery to exactly the session an orchestrator is most likely to be watching.
          (buffer-live-p buf)
          (bp/agent-sessions--foreground-command buf)
          t)))
+
+(defun bp/agent-orchestration--codex-session-p (session)
+  "Non-nil when SESSION is a Codex conversation with a durable id."
+  (and (equal (downcase (format "%s" (plist-get session :agent-type))) "codex")
+       (let ((sid (plist-get session :agent-session-id)))
+         (and (stringp sid) (not (string-empty-p sid))))))
+
+(defun bp/agent-orchestration--codex-empty-prompt-p (session)
+  "Non-nil when SESSION visibly has Codex's empty idle composer.
+Only inspect the bottom four buffer lines.  An older prompt in terminal
+scrollback must not make a running conversation look receptive, and a nonempty
+human draft deliberately does not match."
+  (let ((buf (plist-get session :buffer)))
+    (and (buffer-live-p buf)
+         (with-current-buffer buf
+           (save-restriction
+             (widen)
+             (goto-char (point-max))
+             (when (re-search-backward
+                    bp/agent-orchestration-codex-empty-prompt-regexp nil t)
+               (<= (count-lines (line-beginning-position) (point-max)) 4)))))))
+
+(defun bp/agent-orchestration--claude-session-p (session)
+  "Non-nil when SESSION is a Claude conversation."
+  (equal (downcase (format "%s" (plist-get session :agent-type))) "claude"))
+
+(defun bp/agent-orchestration--claude-normalize-prompt (text)
+  "Normalize Claude prompt TEXT for rendered-versus-submitted comparison."
+  (string-trim
+   (replace-regexp-in-string "[[:space:]\u00a0]+" " " text)))
+
+(defun bp/agent-orchestration--face-inherits-p (face parent)
+  "Non-nil when FACE names or inherits from PARENT."
+  (cond
+   ((eq face parent) t)
+   ((and (listp face) (keywordp (car face)))
+    (bp/agent-orchestration--face-inherits-p
+     (plist-get face :inherit) parent))
+   ((listp face)
+    (seq-some (lambda (item)
+                (bp/agent-orchestration--face-inherits-p item parent))
+              face))))
 
 (defun bp/agent-orchestration--ghostel-dim (fg bg)
   "The `#rrggbb' color ghostel renders faint FG text in on BG.
@@ -3617,15 +3782,241 @@ eat keeps faint as the `eat-term-faint' face; ghostel only as a dimmed color."
   (or (bp/agent-orchestration--face-inherits-p face 'eat-term-faint)
       (bp/agent-orchestration--ghostel-faint-p face)))
 
+(defun bp/agent-orchestration--claude-ghost-completion-p (text)
+  "Non-nil when every non-whitespace character in TEXT is Claude ghost text.
+Claude renders its Tab completion with the terminal's ANSI faint face.  A
+typed prefix is not faint, so a partially accepted or edited completion remains
+a real draft rather than becoming eligible for mail delivery."
+  (let ((pos 0)
+        (end (length text))
+        saw-text
+        (all-faint t))
+    (while (and all-faint (< pos end))
+      (let* ((next (next-property-change pos text end))
+             (chunk (substring-no-properties text pos next)))
+        (unless (string-match-p "\\`[[:space:]\u00a0]*\\'" chunk)
+          (setq saw-text t)
           (unless (or (bp/agent-orchestration--faint-p
                        (get-text-property pos 'face text))
                       (bp/agent-orchestration--faint-p
                        (get-text-property pos 'font-lock-face text)))
+            (setq all-faint nil)))
+        (setq pos next)))
+    (and saw-text all-faint)))
+
+(defun bp/agent-orchestration--claude-composer-text (session)
+  "Return SESSION's visibly rendered Claude composer text, or nil if unknown.
+Claude renders the current input between a line beginning with its `❯' prompt
+and a horizontal separator.  Inspect only the most recent prompt near the end
+of the terminal buffer."
+  (let ((buf (plist-get session :buffer)))
+    (and (buffer-live-p buf)
+         (with-current-buffer buf
+           (save-restriction
+             (widen)
+             (goto-char (point-max))
+             (when (re-search-backward
+                    "^❯[ \t\u00a0]*" (max (point-min) (- (point-max) 4000)) t)
+               (let ((input-start (match-end 0)))
+                 (and (re-search-forward "^─+[ \t]*$" nil t)
+                      ;; Preserve terminal faces: Claude's inline completion is
+                      ;; distinguishable from typed input by its ANSI faint
+                      ;; styling even though both occupy the composer visually.
+                      (buffer-substring
+                       input-start (match-beginning 0))))))))))
+
+(defun bp/agent-orchestration--claude-receptive-rendered-composer-p (session)
+  "Non-nil when SESSION's rendered Claude composer can safely receive agent mail.
+An empty composer is receptive, as is an all-faint inline completion that has
+not been accepted.  Claude also retains the last submitted text in the input
+box during redraws and sometimes after a turn; that exact text is receptive too
+because `UserPromptSubmit' proves it is no longer a draft.  Anything
+unrecognized, non-faint, or changed from the submitted prompt is treated as a
+live human draft and left untouched."
+  (let* ((visible (bp/agent-orchestration--claude-composer-text session))
+         (submitted (plist-get session :submitted-prompt))
+         (normalized-visible
+          (and (stringp visible)
+               (bp/agent-orchestration--claude-normalize-prompt visible))))
+    (and normalized-visible
+         (or (string-empty-p normalized-visible)
+             (bp/agent-orchestration--claude-ghost-completion-p visible)
+             (and (stringp submitted)
+                  (equal normalized-visible
+                         (bp/agent-orchestration--claude-normalize-prompt
+                          submitted)))))))
+
+(defun bp/agent-orchestration--ghostel-stale-p (buf)
+  "Non-nil when BUF is a ghostel terminal whose text lags its screen.
+ghostel draws a terminal into its buffer only while a window shows it; output
+to a hidden terminal stays pending until it is displayed again.  The buffer
+then holds the screen as it was last seen, or nothing at all for a terminal
+that has not been shown since it started."
+  (and (buffer-live-p buf)
+       (eq (bp/agent-sessions--buffer-terminal-type buf) 'ghostel)
+       (buffer-local-value 'ghostel--pending-redraw buf)
+       (buffer-local-value 'ghostel--term buf)
+       (fboundp 'ghostel--copy-all-text)))
+
+(defun bp/agent-orchestration--claude-boxed-composer ()
+  "The composer text of the Claude screen in the current buffer, or nil.
+Stricter than `bp/agent-orchestration--claude-composer-text', because this
+text has no faces to tell a draft from anything else: the `❯' line must sit
+directly under a separator, and only status lines may follow the box's closing
+separator.  A transcript's earlier `❯' prompt above an open dialog therefore
+does not count as the composer."
+  (save-excursion
+    (goto-char (point-max))
+    (and (re-search-backward "^─+[ \t]*\n❯[ \t\u00a0]*" nil t)
+         (let ((start (match-end 0)))
+           (goto-char start)
+           (and (re-search-forward "^─+[ \t]*$" nil t)
+                (let ((after (buffer-substring-no-properties
+                              (match-end 0) (point-max))))
+                  (and (not (string-match-p "^[─❯]" after))
+                       (<= (cl-count ?\n after) 8)
+                       (buffer-substring-no-properties
+                        start (match-beginning 0)))))))))
+
+(defun bp/agent-orchestration--claude-live-composer-text (session)
+  "SESSION's Claude composer as plain text read from its terminal, or nil."
+  (let ((screen (ghostel--copy-all-text
+                 (buffer-local-value 'ghostel--term (plist-get session :buffer)))))
+    (and (stringp screen)
+         (with-temp-buffer
+           (insert screen)
+           (bp/agent-orchestration--claude-boxed-composer)))))
+
+(defun bp/agent-orchestration--claude-composer-key (text)
+  "TEXT with all whitespace removed, for comparing renderings of one composer.
+The buffer and the terminal's own text can wrap a long line differently."
+  (replace-regexp-in-string "[[:space:]\u00a0]+" "" text))
+
+(defun bp/agent-orchestration--claude-receptive-live-composer-p (session)
+  "Non-nil when hidden ghostel SESSION's Claude composer can receive agent mail.
+The terminal's current text is plain, so it cannot show which characters are
+faint.  But the human can only type into a terminal a window shows, and showing
+it redraws the buffer.  So a human draft is still in the buffer exactly as the
+terminal holds it now.  Composer text the buffer does not show appeared while
+nobody could type: it is Claude's own (a suggestion), not a draft.  When the
+two agree, the buffer's faces decide, as for a visible terminal."
+  (let ((live (bp/agent-orchestration--claude-live-composer-text session))
+        (submitted (plist-get session :submitted-prompt)))
+    (and live
+         (let ((key (bp/agent-orchestration--claude-composer-key live))
+               (rendered (bp/agent-orchestration--claude-composer-text session)))
+           (or (string-empty-p key)
+               (and (stringp submitted)
+                    (equal key (bp/agent-orchestration--claude-composer-key
+                                submitted)))
+               (not (equal key (and rendered
+                                    (bp/agent-orchestration--claude-composer-key
+                                     rendered))))
+               (bp/agent-orchestration--claude-receptive-rendered-composer-p
+                session))))))
+
+(defun bp/agent-orchestration--claude-receptive-composer-p (session)
+  "Non-nil when SESSION's Claude composer can safely receive agent mail.
+A ghostel terminal that is hidden is judged from its current text, since its
+buffer is out of date; see `bp/agent-orchestration--ghostel-stale-p'."
+  (if (bp/agent-orchestration--ghostel-stale-p (plist-get session :buffer))
+      (bp/agent-orchestration--claude-receptive-live-composer-p session)
+    (bp/agent-orchestration--claude-receptive-rendered-composer-p session)))
+
+(defun bp/agent-orchestration--terminal-input (buf string)
+  "Send raw terminal input STRING to BUF without paste handling or Enter."
+  (with-current-buffer buf
     (pcase (bp/agent-sessions--buffer-terminal-type buf)
       ('vterm (vterm-send-string string))
       ('eat (eat-term-send-string eat-terminal string))
       ('ghostel (ghostel-send-string string))
       (_ (user-error "%s is not a vterm, eat or ghostel terminal" buf)))))
+
+(defun bp/agent-orchestration--call-with-timeout (program args timeout)
+  "Run PROGRAM with ARGS, returning its exit status within TIMEOUT seconds.
+Process output goes to the current buffer.  Return nil after an error or
+timeout, inserting the diagnostic into that buffer.  Unlike `process-file',
+this cannot freeze Emacs indefinitely if a native queue client gets stuck."
+  (let (process timed-out)
+    (condition-case err
+        (unwind-protect
+            (progn
+              (setq process
+                    (make-process
+                     :name (generate-new-buffer-name "agent-sessions-native-queue")
+                     :buffer (current-buffer)
+                     :command (cons program args)
+                     :connection-type 'pipe
+                     :noquery t))
+              (let ((deadline (+ (float-time) timeout)))
+                (while (and (process-live-p process)
+                            (< (float-time) deadline))
+                  (accept-process-output
+                   process (min 0.1 (max 0 (- deadline (float-time))))))
+                (when (process-live-p process)
+                  (setq timed-out t)
+                  (delete-process process)))
+              (if timed-out
+                  (progn (insert (format "timed out after %ss" timeout)) nil)
+                (process-exit-status process)))
+          (when (and process (process-live-p process))
+            (delete-process process)))
+      (error
+       (insert (error-message-string err))
+       nil))))
+
+(defun bp/agent-orchestration--codex-queue (session messages)
+  "Queue MESSAGES into running Codex SESSION; return non-nil when accepted.
+Use Codex's session-aware command rather than writing into a busy terminal.
+Failure deliberately leaves the messages unread for idle delivery or an
+explicit inbox check."
+  (let ((program (executable-find "codex"))
+        (sid (plist-get session :agent-session-id)))
+    (when (and program sid)
+      (with-temp-buffer
+        (let* ((text
+                (concat "$orca (/orca) agent mail arrived.\n\n"
+                        (bp/agent-orchestration--format-messages messages)))
+               (status
+                (bp/agent-orchestration--call-with-timeout
+                 program (list "queue" "--thread" sid "--message" text)
+                 bp/agent-orchestration--native-queue-timeout)))
+          (if (and (integerp status) (zerop status))
+              t
+            (message "agent-sessions: could not queue Codex mail for %s%s"
+                     sid
+                     (let ((detail (string-trim (buffer-string))))
+                       (if (string-empty-p detail) "" (format " (%s)" detail))))
+            nil))))))
+
+(defun bp/agent-orchestration--claude-submit-mail (buf)
+  "Queue the prepared agent-mail prompt in Claude BUF."
+  (when (buffer-live-p buf)
+    (bp/agent-orchestration--terminal-input
+     buf bp/agent-orchestration-claude-queue-submit-key)))
+
+(defun bp/agent-orchestration--claude-paste-mail (buf text)
+  "Paste agent-mail TEXT into the now-empty composer in Claude BUF."
+  (when (buffer-live-p buf)
+    (bp/agent-sessions--terminal-paste buf text)
+    (run-at-time bp/agent-orchestration--submit-delay nil
+                 #'bp/agent-orchestration--claude-submit-mail buf)))
+
+(defun bp/agent-orchestration--claude-queue (session messages)
+  "Queue MESSAGES in Claude SESSION after its composer becomes available.
+Claude Code has no session-addressed queue command.  The caller must establish
+that the composer is empty, or that `UserPromptSubmit' has just reported the
+human's draft submitted.  Delay the paste once so Claude can clear a freshly
+submitted prompt, then use its `chat:queueSubmit' action."
+  (let ((buf (plist-get session :buffer)))
+    (when (buffer-live-p buf)
+      (run-at-time
+       bp/agent-orchestration--submit-delay nil
+       #'bp/agent-orchestration--claude-paste-mail buf
+       (concat "$orca (/orca) agent mail arrived.\n\n"
+               (bp/agent-orchestration--format-messages messages)))
+      t)))
+
 (defun bp/agent-orchestration--paste (buf text)
   "Paste TEXT into BUF's terminal as one bracketed paste, then submit it.
 Bracketed paste rather than plain input because a TUI submits on every newline
@@ -3643,11 +4034,6 @@ feed it the rest as separate prompts."
        (bp/agent-sessions--terminal-return target)))
    buf))
 
-(defun bp/agent-orchestration-deliver (id)
-  "Type ID's pending mail into its terminal, when that is the right thing to do.
-Called both when a message arrives and from the hook path when a session comes
-to rest, since either can be the moment the other condition becomes true.
-Consuming before pasting is what keeps this idempotent across both callers."
 ;;; Sending selected text to an agent
 
 (defun bp/agent-sessions--prompt-agent-p (entry)
@@ -3772,25 +4158,69 @@ most-recently-viewed order."
       (bp/agent-orchestration--paste buf text)
       (message "Sent selected text to %s" (buffer-name buf)))))
 
+(defun bp/agent-orchestration-deliver (id &optional user-prompt-submitted)
+  "Hand ID's pending mail to its agent when safe; return the delivery method.
+The result is `delivered' for a generic idle-terminal paste, `queued' for an
+agent-specific queue, and nil when mail remains unread.  Called both on arrival
+and from the hook path.  USER-PROMPT-SUBMITTED means this call handles a
+`UserPromptSubmit' event, so Claude mail withheld behind a human draft can now
+be queued.  Terminal delivery consumes before its asynchronous keystrokes to
+stay idempotent; Codex consumes only after its CLI acknowledges ownership."
   (when bp/agent-orchestration-push-when-idle
     (let* ((session (bp/agent-sessions--session-for-id id))
-           (buf (and session (plist-get session :buffer))))
-      (when (and session (buffer-live-p buf)
-                 (bp/agent-orchestration--receptive-p session)
-                 (bp/agent-orchestration--pending id))
-        (if (bp/agent-orchestration--polling-p id)
-            ;; The recipient read its inbox a moment ago, so it is mid-wait and
-            ;; will collect this itself.  Look again once that stops being
-            ;; true: without the retry, mail that lands just after a wait gives
-            ;; up would sit unread until the next hook event happened along.
-            (run-at-time (1+ bp/agent-orchestration-poll-grace) nil
-                         #'bp/agent-orchestration-deliver id)
-          (let ((pending (bp/agent-orchestration--pending id)))
-            (bp/agent-orchestration--consume pending)
-            (bp/agent-orchestration--paste
-             buf (concat "Orchestration mail arrived while you were idle.\n\n"
-                         (bp/agent-orchestration--format-messages pending)))
-            (bp/agent-sessions--refresh-if-visible)))))))
+           (buf (and session (plist-get session :buffer)))
+           (pending (and session (bp/agent-orchestration--pending id))))
+      (cond
+       ;; An interrupted Codex turn does not fire Stop, so our hook status can
+       ;; still say `running' while the TUI is visibly back at its empty prompt.
+       ;; Codex accepts native queue writes in that state but intentionally does
+       ;; not dispatch them.  Bypass the native queue only for the empty
+       ;; composer: a human draft must remain untouched.
+       ((and pending
+             (bp/agent-orchestration--codex-session-p session)
+             (bp/agent-orchestration--codex-empty-prompt-p session))
+        (bp/agent-orchestration--consume pending)
+        (bp/agent-orchestration--paste
+         buf (concat "$orca (/orca) agent mail arrived while you were idle.\n\n"
+                     (bp/agent-orchestration--format-messages pending)))
+        (bp/agent-sessions--refresh-if-visible)
+        'delivered)
+       ((and pending
+             (bp/agent-orchestration--codex-session-p session)
+             (or (not (eq (plist-get session :status) 'running))
+                 (seq-some
+                  (lambda (message)
+                    (member (plist-get message :type)
+                            bp/agent-orchestration-actionable-message-types))
+                  pending)))
+        ;; This branch owns Codex delivery even when the command fails.  Do not
+        ;; fall through to terminal paste: preserving the human's draft is more
+        ;; important than immediate delivery, and the unread record is safe.
+        (when (bp/agent-orchestration--codex-queue session pending)
+          (bp/agent-orchestration--consume pending)
+          (bp/agent-sessions--refresh-if-visible)
+          'queued))
+       ((and pending
+             (bp/agent-orchestration--claude-session-p session)
+             (buffer-live-p buf)
+             (bp/agent-sessions--foreground-command buf))
+        ;; This branch owns Claude delivery even when it deliberately waits,
+        ;; preventing the generic idle paste below from absorbing a draft.
+        (when (and
+               (or user-prompt-submitted
+                   (bp/agent-orchestration--claude-receptive-composer-p session))
+               (bp/agent-orchestration--claude-queue session pending))
+          (bp/agent-orchestration--consume pending)
+          (bp/agent-sessions--refresh-if-visible)
+          'queued))
+       ((and pending (buffer-live-p buf)
+             (bp/agent-orchestration--receptive-p session))
+        (bp/agent-orchestration--consume pending)
+        (bp/agent-orchestration--paste
+         buf (concat "$orca (/orca) agent mail arrived while you were idle.\n\n"
+                     (bp/agent-orchestration--format-messages pending)))
+        (bp/agent-sessions--refresh-if-visible)
+        'delivered)))))
 
 ;;;; The worker brief
 
@@ -3809,48 +4239,55 @@ agent — your coordinator.  You were started with this file as your prompt.
 It is your only channel to the coordinator — do not try to reach a human
 through Slack, a PR comment, or anything else during the run.
 
-  # REQUIRED when you finish, including when you fail or give up.  Send it
-  # exactly once.  --summary is three sentences: what you did, what you found,
-  # what is left.
-  emacs-agent done --summary \"...\" [--files a.el,b.el] [--report path/to/notes.md]
+  # REQUIRED when you finish, including when you fail or give up: your final
+  # report.  Send it exactly once.  The subject starts with \"Done:\" or
+  # \"Failed:\"; the body is three sentences (what you did, what you found,
+  # what is left) and names any file worth reading.
+  emacs-agent send --to \"$EMACS_AGENT_COORDINATOR\" --subject \"Done: ...\" --body \"...\"
 
-  # Blocked on a decision only the coordinator can make.  Blocks until it
-  # answers and prints the answer.
-  emacs-agent ask --question \"...\" [--timeout 600]
+  # Blocked on a decision only the coordinator can make.  Sends a question,
+  # then blocks until mail arrives and prints it.
+  emacs-agent send-and-wait --to \"$EMACS_AGENT_COORDINATOR\" --subject \"...\" --body \"...\" [--timeout 600]
 
   # A progress note, when there is something worth knowing mid-task.  Optional.
-  emacs-agent send --type status --subject \"...\" --body \"...\"
+  emacs-agent send --to \"$EMACS_AGENT_COORDINATOR\" --subject \"...\" --body \"...\"
 
 RULES
 
 - Never ask a question through an interactive prompt (no AskUserQuestion, no
   reading stdin).  Your coordinator is another agent and cannot see a TUI
-  prompt; your turn would hang until a human noticed.  Use `emacs-agent ask'.
-- Failure is still a `done', with a subject that says so.  Never exit silently.
-- After `done', end your turn and sit at your prompt.  Do not poll for more
-  work and do not start something unrelated; further work arrives as new input.
+  prompt; your turn would hang until a human noticed.  Use
+  `emacs-agent send-and-wait'.
+- Failure still gets a final report, with a subject that says so.  Never exit
+  silently.
+- After your final report, end your turn and sit at your prompt.  Do not poll
+  for more work and do not start something unrelated; further work arrives as
+  new input.  Reply to that later mail with the `Reply:' command it includes
+  rather than sending a second final report.
 - You may be sharing this worktree with other workers.  Touch only the files
   your task names, and leave git state alone — no `git add', `commit',
   `checkout', `rebase' or `stash' — unless the task says this worktree is
   yours.  The index and HEAD are shared by everyone in a worktree, so staging
   anything would clobber a co-tenant's work in progress.
 - `emacs-share-file FILE \"why\"' hands a file to the human in the dashboard.
-  That is for the human, and is not a substitute for reporting `done'.
+  That is for the human, and is not a substitute for your final report.
 
 === YOUR TASK ===
 
 %s"
           coordinator-id (string-trim task)))
 
-(defun bp/agent-orchestration--write-brief (coordinator-id task)
-  "Write the brief for TASK to a file and return its path."
+(defun bp/agent-orchestration--write-brief (coordinator-id task &optional address)
+  "Write the brief for TASK to a file and return its path.
+ADDRESS is where the worker reports, when that is not COORDINATOR-ID."
   (make-directory bp/agent-orchestration--brief-dir t)
   (let ((path (expand-file-name
                (format "%s-%s.md" coordinator-id
                        (bp/agent-orchestration--next-id "brief"))
                bp/agent-orchestration--brief-dir)))
     (with-temp-file path
-      (insert (bp/agent-orchestration--worker-preamble coordinator-id task)))
+      (insert (bp/agent-orchestration--worker-preamble
+               (or address coordinator-id) task)))
     path))
 
 ;;;; Entry points (called from `bin/emacs-agent')
@@ -4012,23 +4449,78 @@ guide', so what is installed is a stub that cannot go stale.  Idempotent."
     (unless (server-running-p) (server-start))
     (message "agent-sessions: %s" (string-join results "; "))))
 
-(defun bp/agent-orchestration-spawn (coordinator-id type worktree task &optional title)
+(defun bp/agent-orchestration--model-flag (agent model)
+  "Render MODEL as AGENT's model flag, nil when MODEL is empty.
+Returns the symbol `unsupported' when a model was asked for and AGENT has no
+spelling for one — the caller refuses the spawn rather than launching a worker
+on a model nobody chose."
+  (let ((model (string-trim (or model ""))))
+    (cond
+     ((string-empty-p model) nil)
+     ((alist-get agent bp/agent-orchestration-model-flags)
+      (format (alist-get agent bp/agent-orchestration-model-flags)
+              (shell-quote-argument model)))
+     (t 'unsupported))))
+
+(defun bp/agent-orchestration--launch-command (template brief model-flag)
+  "Render TEMPLATE into the shell line that launches a worker on BRIEF.
+MODEL-FLAG is the already-spelled flag or nil.  A template carrying neither
+`%b' nor `%m' is the pre-model single-`%s' form and is rendered as such, so an
+old customisation keeps working."
+  (let ((quoted (shell-quote-argument brief)))
+    (if (string-match-p "%[bm]" template)
+        (format-spec template `((?b . ,quoted) (?m . ,(or model-flag ""))))
+      (format template quoted))))
+
+(defun bp/agent-orchestration--mark-worker (buf coordinator-id coordinator title)
+  "Attach BUF to COORDINATOR-ID as a worker and give it TITLE."
+  (let ((parent-sid (plist-get coordinator :agent-session-id)))
+    (with-current-buffer buf
+      (when parent-sid
+        (setq-local bp/agent-session--branched-from
+                    (cons parent-sid
+                          (bp/agent-sessions--session-short-label coordinator))))
+
+(defun bp/agent-orchestration-spawn (coordinator-id type worktree task
+                                                    &optional title model from)
   "Start a TYPE agent in WORKTREE on TASK, dispatched by COORDINATOR-ID.
+MODEL, when given, is the model name to launch that agent on, spelled into its
+command line by `bp/agent-orchestration-model-flags'.
+FROM, when non-empty, is a mailbox COORDINATOR-ID holds the lock on: the worker
+then reports to that mailbox instead of to COORDINATOR-ID's terminal, so its
+reports reach whichever conversation plays the role when they arrive.  It is
+still nested under COORDINATOR-ID's terminal in the dashboard.
 Returns a string to print.  WORKTREE must already exist: allocating checkouts
 is the orchestrator's job, not this package's, so that nothing here can leave a
 stray worktree or branch behind."
   (let* ((coordinator (bp/agent-sessions--session-for-id coordinator-id))
          (agent (and type (not (string-empty-p type)) (intern type)))
          (template (and agent (alist-get agent bp/agent-orchestration-launch-commands)))
+         (model (string-trim (or model "")))
+         (model-flag (and agent (bp/agent-orchestration--model-flag agent model)))
          (dir (and worktree (not (string-empty-p worktree))
-                   (file-name-as-directory (expand-file-name worktree)))))
+                   (file-name-as-directory (expand-file-name worktree))))
+         (claim (and coordinator from (not (string-empty-p from))
+                     (bp/agent-mailbox--claim coordinator-id coordinator from)))
+         (address (if (consp claim) (car claim) coordinator-id)))
     (cond
      ((null coordinator)
       (format "No Emacs terminal registered for session id %s" coordinator-id))
+     ((stringp claim) claim)
      ((null template)
       (format "Unknown agent type `%s'; known types: %s" type
               (mapconcat (lambda (cell) (symbol-name (car cell)))
                          bp/agent-orchestration-launch-commands ", ")))
+     ((eq model-flag 'unsupported)
+      (format "Agent type `%s' has no --model flag configured; types that take one: %s"
+              type
+              (if bp/agent-orchestration-model-flags
+                  (mapconcat (lambda (cell) (symbol-name (car cell)))
+                             bp/agent-orchestration-model-flags ", ")
+                "none")))
+     ((and model-flag (not (string-match-p "%m" template)))
+      (format "The launch command for `%s' has no `%%m' for a model flag: %s"
+              type template))
      ((or (null dir) (not (file-directory-p dir)))
       (format "No such worktree directory: %s (create it first, or pass one from `emacs-agent worktrees')"
               (or worktree "")))
@@ -4036,7 +4528,8 @@ stray worktree or branch behind."
       "Refusing to spawn a worker with an empty --task")
      (t
       (let* ((trust-note (bp/agent-orchestration--ensure-trusted agent dir))
-             (brief (bp/agent-orchestration--write-brief coordinator-id task))
+             (brief (bp/agent-orchestration--write-brief
+                     coordinator-id task address))
              (label (if (and title (not (string-empty-p (string-trim title))))
                         (string-trim title)
                       (bp/agent-orchestration--task-title task)))
@@ -4048,92 +4541,377 @@ stray worktree or branch behind."
              (buf (save-window-excursion
                     (let ((bp/agent-sessions--extra-terminal-env
                            (list "EMACS_AGENT_ROLE=worker"
-                                 (format "EMACS_AGENT_COORDINATOR=%s" coordinator-id)
+                                 (format "EMACS_AGENT_COORDINATOR=%s" address)
                                  (format "EMACS_AGENT_TASK_BRIEF=%s" brief))))
                       (bp/agent-sessions--create-terminal
                        dir (plist-get (bp/agent-session--repo-info dir) :worktree))))))
         (if (not (buffer-live-p buf))
             "Could not create a terminal for the worker"
-          (let ((worker-id (buffer-local-value 'bp/agent-session-id buf))
-                (parent-sid (plist-get coordinator :agent-session-id)))
-            (with-current-buffer buf
-              ;; Parentage rides the same slot a `b'-branch uses, which is what
-              ;; makes the dashboard nest this row under its coordinator's; the
-              ;; worker's first hook event picks it up from the buffer (see
-              ;; `bp/agent-hook-notify').  It needs the coordinator's *agent*
-              ;; session id, so a coordinator that has not fired a hook yet
-              ;; simply gets a flat row — the spawn still works.
-              (when parent-sid
-                (setq-local bp/agent-session--branched-from
-                            (cons parent-sid
-                                  (bp/agent-sessions--session-short-label coordinator))))
-              (setq-local bp/agent-orchestration-coordinator coordinator-id)
-              ;; The task is what the human wants to read on the row, not
-              ;; whatever title the agent's TUI is about to advertise.
-              (setq-local bp/agent-session-title-override label))
+          (let ((worker-id (buffer-local-value 'bp/agent-session-id buf)))
+            (bp/agent-orchestration--mark-worker
+             buf coordinator-id coordinator label)
             (bp/agent-sessions--terminal-send
-             buf (format template (shell-quote-argument brief)))
+             buf (bp/agent-orchestration--launch-command template brief model-flag))
             (bp/agent-sessions--refresh-if-visible)
-            (format "Spawned %s (%s) in %s\nTask: %s\nBrief: %s%s"
-                    worker-id type (abbreviate-file-name dir) label brief
+            (format "Spawned %s (%s) in %s\nTask: %s\nBrief: %s%s%s"
+                    worker-id
+                    (if (string-empty-p model) type (format "%s, %s" type model))
+                    (abbreviate-file-name dir) label brief
+                    (if (consp claim)
+                        (format "\nReports to: mailbox %s" address)
+                      "")
                     (if trust-note (concat "\nNote: " trust-note) "")))))))))
 
-(defun bp/agent-orchestration-send (from-id to type subject body files report)
-  "Queue a message from FROM-ID to TO and try to deliver it.  Returns a string."
-  (let ((type (if (or (null type) (string-empty-p type)) "status" type)))
+(defun bp/agent-orchestration--logged-recipient (value &optional by-agent-session)
+  "Return the most recent resumable session matching VALUE.
+Match an agent session id when BY-AGENT-SESSION is non-nil, otherwise a
+terminal id."
+  (when-let ((row (car (sqlite-select
+                        (bp/agent-sessions--db)
+                        (concat
+                         "SELECT agent_type, agent_sid, worktree, title
+                           FROM sessions
+                          WHERE " (if by-agent-session "agent_sid" "emacs_sid") " = ?
+                            AND agent_type IS NOT NULL
+                            AND agent_sid IS NOT NULL
+                          ORDER BY opened_at DESC, id DESC
+                          LIMIT 1")
+                        (list value)))))
+    (pcase-let ((`(,agent-type ,agent-sid ,worktree ,title) row))
+      (list :agent-type agent-type :agent-session-id agent-sid
+            :worktree worktree :worktree-path worktree :title title))))
+
+(defun bp/agent-orchestration--link-recipient (address)
+  "Return resumable session metadata encoded by agent-session ADDRESS."
+  (when (string-prefix-p "agent-session:" address)
+    (pcase (bp/agent-sessions--parse-session-link address)
+      (`(,agent ,session-id ,worktree)
+       (list :agent-type agent :agent-session-id session-id
+             :worktree worktree :worktree-path worktree)))))
+
+(defun bp/agent-orchestration--live-session-recipient (session-id)
+  "Resolve agent SESSION-ID to (TERMINAL-ID SESSION nil), or nil."
+  (when-let* ((buf (bp/agent-sessions--buffer-for-agent-session session-id))
+              (id (buffer-local-value 'bp/agent-session-id buf))
+              (session (bp/agent-sessions--session-for-id id)))
+    (list id session nil)))
+
+(defun bp/agent-orchestration--resumable-recipient (address recipient)
+  "Resolve RECIPIENT metadata to a live terminal or revival from ADDRESS."
+  (when recipient
+    (let ((key (bp/agent-orchestration--mail-key address recipient)))
+      (if-let ((current (bp/agent-orchestration--live-id-for-key key)))
+          (list current (bp/agent-sessions--session-for-id current) nil)
+        (list address recipient t)))))
+
+(defun bp/agent-orchestration--resolve-recipient (address)
+  "Resolve ADDRESS to (CURRENT-ID SESSION REVIVE-P), or nil.
+ADDRESS may be a terminal id, raw agent session id, or `agent-session:' link."
+  (or (when-let ((session (bp/agent-sessions--session-for-id address)))
+        (list address session nil))
+      (when-let ((link (bp/agent-orchestration--link-recipient address)))
+        (or (bp/agent-orchestration--live-session-recipient
+             (plist-get link :agent-session-id))
+            (bp/agent-orchestration--resumable-recipient address link)))
+      (bp/agent-orchestration--live-session-recipient address)
+      (bp/agent-orchestration--resumable-recipient
+       address (bp/agent-orchestration--logged-recipient address))
+      (bp/agent-orchestration--resumable-recipient
+       address (bp/agent-orchestration--logged-recipient address t))))
+
+(defun bp/agent-orchestration--revive-recipient
+    (coordinator-id coordinator recipient message)
+  "Resume RECIPIENT as COORDINATOR-ID's child and submit MESSAGE.
+Return the new terminal id."
+  (let* ((prompt (concat "$orca (/orca) agent mail revived this session.\n\n"
+                         (bp/agent-orchestration--format-message message)))
+         (buf (save-window-excursion
+                (let ((bp/agent-sessions--extra-terminal-env
+                       (list "EMACS_AGENT_ROLE=worker"
+                             (format "EMACS_AGENT_COORDINATOR=%s"
+                                     coordinator-id))))
+                  (bp/agent-session-start
+                   (plist-get recipient :worktree-path)
+                   (plist-get recipient :agent-type)
+                   (plist-get recipient :agent-session-id)
+                   prompt))))
+         (id (and (buffer-live-p buf)
+                  (buffer-local-value 'bp/agent-session-id buf)))
+         (title (plist-get recipient :title)))
+    (unless id
+      (error "Could not create a terminal for the revived session"))
+    (bp/agent-orchestration--mark-worker
+     buf coordinator-id coordinator title)
+    id))
+
+(defun bp/agent-orchestration--store-message (id message)
+  "Record MESSAGE in terminal ID's in-memory and durable mailboxes."
+  (plist-put message :to id)
+  (bp/agent-orchestration--mail-insert message)
+  (puthash id (append (bp/agent-orchestration--messages id) (list message))
+           bp/agent-orchestration--mail))
+
+;;;; Mailboxes
+;; A mailbox is a directory standing for a role whose agent is restarted with
+;; fresh conversations.  Mail to it is filed under ("mailbox" DIR) and waits
+;; there; whoever holds DIR's `emacs-lock' reads it with `emacs-agent wait
+;; --mailbox' and may send as it with `--from'.  Delivery is pull-only, so none
+;; of the push or revive machinery above applies.  See "Mailboxes" in CLAUDE.md.
+
+(defun bp/agent-mailbox--path (dir)
+  "DIR as a mailbox key, or nil when it is not an existing absolute directory.
+The true name with a trailing slash: the spelling `emacs-lock' stores for a
+directory lock, so the two compare as strings.  `emacs-agent' resolves
+relative paths before calling, since only it knows the caller's directory."
+  (when (and (stringp dir) (file-name-absolute-p dir) (file-directory-p dir))
+    (file-name-as-directory (file-truename dir))))
+
+(defun bp/agent-mailbox--of-key (key)
+  "The mailbox directory durable mail KEY names, or nil for any other key."
+  (pcase key (`("mailbox" ,dir) dir)))
+
+(defun bp/agent-mailbox--holds-p (id session dir)
+  "Non-nil when terminal ID's conversation holds the lock on mailbox DIR.
+Asked of the database rather than the working copy: the CLI took the lock a
+moment ago, and nothing has reloaded since."
+  (sqlite-select (bp/agent-sessions--db)
+                 "SELECT 1 FROM locks
+                   WHERE name = ? AND holder_kind = ? AND holder_key = ?"
+                 (cons dir (bp/agent-orchestration--mail-key id session))))
+
+(defun bp/agent-mailbox--claim (id session mailbox)
+  "Resolve MAILBOX for terminal ID, or return why it cannot use it.
+Returns (DIR) on success and a string on failure.  `emacs-agent' acquires the
+lock before calling; this re-check is what stops a hand-written `emacsclient'
+call reading or speaking for a role it does not hold."
+  (let ((dir (bp/agent-mailbox--path mailbox)))
+    (cond ((null dir) (format "No such mailbox directory: %s" mailbox))
+          ((not (bp/agent-mailbox--holds-p id session dir))
+           (format "You do not hold the lock on mailbox %s; run `emacs-lock acquire %s' first"
+                   dir (shell-quote-argument dir)))
+          (t (list dir)))))
+
+(defun bp/agent-mailbox--unread (dir)
+  "Mailbox DIR's unread messages, oldest first, read from the database."
+  (mapcar
+   (pcase-lambda (`(,mid ,fkind ,fkey ,flabel ,type ,subject ,body ,files
+                         ,report ,sent))
+     (list :id mid :from nil :from-key (list fkind fkey) :from-label flabel
+           :to nil :to-key (list "mailbox" dir) :type type :subject subject
+           :body body :files files :report report :sent-at sent :read nil))
+   (sqlite-select (bp/agent-sessions--db)
+                  "SELECT id, from_kind, from_key, from_label, type, subject,
+                          body, files, report, sent_at
+                     FROM mail
+                    WHERE to_kind = 'mailbox' AND to_key = ? AND read_at IS NULL
+                    ORDER BY sent_at, rowid"
+                  (list dir))))
+
+(defvar bp/agent-mailboxes--unread nil
+  "Mailboxes with unread mail, oldest first: the render path's copy.
+Plists of :dir, :count, :oldest-at and :oldest-subject.  Reloaded when mail
+is filed in or read from a mailbox and on the heartbeat, like the lock copy;
+the render path must never query the database.")
+
+(defun bp/agent-mailboxes--reload ()
+  "Re-read which mailboxes hold unread mail.  Return non-nil on a change."
+  (let ((unread
+         (mapcar
+          (pcase-lambda (`(,dir ,count ,at ,subject))
+            (list :dir dir :count count :oldest-at at :oldest-subject subject))
+          (sqlite-select
+           (bp/agent-sessions--db)
+           "SELECT m.to_key, count(*), min(m.sent_at),
+                   (SELECT o.subject FROM mail o
+                     WHERE o.to_kind = 'mailbox' AND o.to_key = m.to_key
+                       AND o.read_at IS NULL
+                     ORDER BY o.sent_at, o.rowid LIMIT 1)
+              FROM mail m
+             WHERE m.to_kind = 'mailbox' AND m.read_at IS NULL
+             GROUP BY m.to_key
+             ORDER BY min(m.sent_at)"))))
+    (prog1 (not (equal unread bp/agent-mailboxes--unread))
+      (setq bp/agent-mailboxes--unread unread))))
+
+(defun bp/agent-mailbox--check (id session mailbox consume)
+  "MAILBOX's unread mail for its lock holder ID, marked read when CONSUME."
+  (let ((claim (bp/agent-mailbox--claim id session mailbox)))
+    (if (stringp claim)
+        claim
+      (let ((pending (bp/agent-mailbox--unread (car claim))))
+        (when consume (bp/agent-orchestration--consume pending))
+        (when pending
+          (bp/agent-mailboxes--reload)
+          (bp/agent-sessions--refresh-if-visible))
+        (bp/agent-orchestration--format-messages pending)))))
+
+(defun bp/agent-mailbox--party (key terminal)
+  "Describe durable mail KEY for an archive header, naming TERMINAL too."
+  (let ((desc (pcase key
+                (`("mailbox" ,dir) (concat "mailbox " dir))
+                (`(,kind ,value) (format "%s %s" kind value)))))
+    (if (and terminal (not (equal key (list "terminal" terminal))))
+        (format "%s (terminal %s)" desc terminal)
+      desc)))
+
+(defun bp/agent-mailbox--archive (dir direction msg from to)
+  "Write MSG into mailbox DIR's `mail/DIRECTION/' as a timestamped file.
+FROM and TO describe the sender and recipient.  History only: nothing reads
+these back, the `mail' table stays the transport and the record of what was
+read, so a failure to write is reported rather than failing the send."
+  (condition-case err
+      (let* ((folder (expand-file-name (concat "mail/" direction "/") dir))
+             (stamp (format-time-string "%Y%m%dT%H%M%S"
+                                        (plist-get msg :sent-at)))
+             (path (expand-file-name (concat stamp ".md") folder))
+             (n 1))
+        (make-directory folder t)
+        ;; Two messages in one second must not overwrite each other.
+        (while (file-exists-p path)
+          (setq n (1+ n)
+                path (expand-file-name (format "%s-%d.md" stamp n) folder)))
+        (with-temp-file path
+          (insert (format "From: %s\nTo: %s\nType: %s\nSubject: %s\nDate: %s\nMessage-Id: %s\n\n%s\n"
+                          from to (plist-get msg :type) (plist-get msg :subject)
+                          (format-time-string "%F %T %z" (plist-get msg :sent-at))
+                          (plist-get msg :id) (or (plist-get msg :body) "")))))
+    (error (message "agent-sessions: could not archive mail in %s (%s)"
+                    dir (error-message-string err)))))
+
+(defun bp/agent-mailbox--archive-sent (msg id session from-mailbox recipient)
+  "Archive MSG, sent by terminal ID in SESSION, wherever a mailbox is involved.
+FROM-MAILBOX is the mailbox it was sent as, or nil; RECIPIENT describes where
+it went.  Incoming mail goes to the recipient mailbox's `mail/in', outgoing
+mail to the sending mailbox's `mail/out'."
+  (let ((from (concat (if from-mailbox (format "mailbox %s, " from-mailbox) "")
+                      (bp/agent-mailbox--party
+                       (bp/agent-orchestration--mail-key id session) id)))
+        (to-mailbox (bp/agent-mailbox--of-key (plist-get msg :to-key))))
+    (when to-mailbox
+      (bp/agent-mailbox--archive to-mailbox "in" msg from recipient))
+    (when from-mailbox
+      (bp/agent-mailbox--archive from-mailbox "out" msg from recipient))))
+
+(defun bp/agent-mailbox--send (msg dir)
+  "File MSG in mailbox DIR and return what `send' prints.
+Only recorded: the holder collects it with its next wait."
+  (plist-put msg :to-key (list "mailbox" dir))
+  (bp/agent-orchestration--mail-insert msg)
+  (bp/agent-mailbox--archive-sent
+   msg (plist-get msg :from) (bp/agent-sessions--session-for-id
+                              (plist-get msg :from))
+   (bp/agent-mailbox--of-key (plist-get msg :from-key))
+   (concat "mailbox " dir))
+  (bp/agent-mailboxes--reload)
+  (bp/agent-sessions--refresh-if-visible)
+  (format "Sent %s to mailbox %s" (plist-get msg :type) dir))
+
+(defun bp/agent-orchestration-send (from-id to type subject body &optional from)
+  "Send a message from FROM-ID to TO, reviving a killed recipient if needed.
+TO may be a mailbox directory.  FROM, when non-empty, is a mailbox FROM-ID
+holds the lock on; the message is then sent as that mailbox, so replies to it
+are filed there."
+  (let* ((type (if (or (null type) (string-empty-p type)) "status" type))
+         (sender (bp/agent-sessions--session-for-id from-id))
+         (from (and from (not (string-empty-p from)) from))
+         (claim (and sender from (bp/agent-mailbox--claim from-id sender from)))
+         (to-mailbox (and to (string-prefix-p "/" to)
+                          (bp/agent-mailbox--path to))))
     (cond
-     ((null (bp/agent-sessions--session-for-id from-id))
+     ((null sender)
       (format "No Emacs terminal registered for session id %s" from-id))
      ((not (member type bp/agent-orchestration-message-types))
       (format "Unknown message type `%s'; known types: %s" type
               (string-join bp/agent-orchestration-message-types ", ")))
      ((or (null to) (string-empty-p to))
-      "A message needs a --to (an Emacs terminal id)")
-     ((null (bp/agent-sessions--session-for-id to))
-      (format "No live Emacs terminal for recipient %s" to))
+      "A message needs a --to (an Emacs terminal id or a mailbox directory)")
+     ((and (string-prefix-p "/" to) (null to-mailbox))
+      (format "No such mailbox directory: %s" to))
      ((or (null subject) (string-empty-p (string-trim subject)))
       "A message needs a --subject")
+     ((stringp claim) claim)
+     (to-mailbox
+      (bp/agent-mailbox--send
+       (list :id (bp/agent-orchestration--next-id "msg")
+             :from from-id
+             :from-key (if claim (list "mailbox" (car claim))
+                         (bp/agent-orchestration--mail-key from-id sender))
+             :from-label (bp/agent-sessions--session-short-label sender)
+             :to nil :type type :subject (string-trim subject)
+             :body (or body "") :files "" :report ""
+             :sent-at (bp/agent-sessions--now) :read nil)
+       to-mailbox))
      (t
-      (let* ((sender (bp/agent-sessions--session-for-id from-id))
-             (recipient (bp/agent-sessions--session-for-id to))
-             (msg (list :id (bp/agent-orchestration--next-id "msg")
-                        :from from-id
-                        :from-key (bp/agent-orchestration--mail-key from-id sender)
-                        :from-label (bp/agent-sessions--session-short-label sender)
-                        :to to
-                        :to-key (bp/agent-orchestration--mail-key to recipient)
-                        :type type
-                        :subject (string-trim subject)
-                        :body (or body "") :files (or files "")
-                        :report (or report "")
-                        :sent-at (bp/agent-sessions--now) :read nil)))
-        (bp/agent-orchestration--mail-insert msg)
-        (puthash to (append (bp/agent-orchestration--messages to) (list msg))
-                 bp/agent-orchestration--mail)
-        (bp/agent-orchestration-deliver to)
-        (bp/agent-sessions--refresh-if-visible)
-        (format "Sent %s to %s" type to))))))
+      (if-let ((resolved (bp/agent-orchestration--resolve-recipient to)))
+          (pcase-let* ((`(,current-id ,recipient ,revive-p) resolved)
+                       (msg (list :id (bp/agent-orchestration--next-id "msg")
+                                  :from from-id
+                                  :from-key
+                                  (if claim (list "mailbox" (car claim))
+                                    (bp/agent-orchestration--mail-key
+                                     from-id sender))
+                                  :from-label (bp/agent-sessions--session-short-label
+                                               sender)
+                                  :to current-id
+                                  :to-key (bp/agent-orchestration--mail-key
+                                           current-id recipient)
+                                  :type type :subject (string-trim subject)
+                                  :body (or body "") :files "" :report ""
+                                  :sent-at (bp/agent-sessions--now) :read nil)))
+            (condition-case err
+                (progn
+                  (when revive-p
+                    (setq current-id
+                          (bp/agent-orchestration--revive-recipient
+                           from-id sender recipient msg)))
+                  (bp/agent-orchestration--store-message current-id msg)
+                  (when claim
+                    (bp/agent-mailbox--archive-sent
+                     msg from-id sender (car claim)
+                     (bp/agent-mailbox--party (plist-get msg :to-key)
+                                              current-id)))
+                  (let ((delivery
+                         (if revive-p
+                             (progn
+                               (bp/agent-orchestration--consume (list msg))
+                               'revived)
+                           (bp/agent-orchestration-deliver current-id))))
+                    (bp/agent-sessions--refresh-if-visible)
+                    (concat
+                     (format "Sent %s to %s" type to)
+                     (let ((details nil))
+                       (when revive-p
+                         (push (format "revived as %s" current-id) details))
+                       (when (and (not revive-p) (not (equal current-id to)))
+                         (push (format "routed to %s" current-id) details))
+                       (pcase delivery
+                         ('queued (push "queued into agent" details))
+                         ('delivered (push "delivered to idle agent" details)))
+                       (if details
+                           (format " (%s)" (string-join (nreverse details) "; "))
+                         "")))))
+              (error (format "Could not send to recipient %s%s: %s"
+                             to (if revive-p " while reviving it" "")
+                             (error-message-string err)))))
+        (format "No live or resumable agent session for recipient %s" to))))))
 
-(defun bp/agent-orchestration-check (id types consume)
+(defun bp/agent-orchestration-check (id consume &optional mailbox)
   "Return ID's unread mail, marking it read unless CONSUME is nil.
-TYPES is a comma-separated filter or nil.  Recording the read is what tells
-`bp/agent-orchestration-deliver' that this agent is collecting its own mail."
-  (if (null (bp/agent-sessions--session-for-id id))
-      (format "No Emacs terminal registered for session id %s" id)
-    (bp/agent-orchestration--record-poll id)
-    (bp/agent-orchestration--hydrate id)
-    (let* ((filter (and types (not (string-empty-p types))
-                        (split-string types "," t "[ \t]+")))
-           (unknown (seq-remove
-                     (lambda (candidate)
-                       (member candidate bp/agent-orchestration-message-types))
-                     (or filter '()))))
-      (if unknown
-          (format "Unknown message type(s) in --types: %s" (string-join unknown ", "))
-        (let ((pending (bp/agent-orchestration--pending id filter)))
-          (when consume (bp/agent-orchestration--consume pending))
-          (when pending (bp/agent-sessions--refresh-if-visible))
-          (bp/agent-orchestration--format-messages pending))))))
+With MAILBOX, return that mailbox's mail instead, which ID must hold the lock
+on.  This is also what `emacs-agent wait' polls: any mail ends a wait, so a
+wait is just a check repeated until one returns something."
+  (let ((session (bp/agent-sessions--session-for-id id)))
+    (cond
+     ((null session)
+      (format "No Emacs terminal registered for session id %s" id))
+     ((and mailbox (not (string-empty-p mailbox)))
+      (bp/agent-mailbox--check id session mailbox consume))
+     (t
+      (bp/agent-orchestration--hydrate id)
+      (let ((pending (bp/agent-orchestration--pending id)))
+        (when consume (bp/agent-orchestration--consume pending))
+        (when pending (bp/agent-sessions--refresh-if-visible))
+        (bp/agent-orchestration--format-messages pending))))))
 
 (defun bp/agent-orchestration-list (id)
   "Describe the workers ID spawned, and ID's own coordinator if it has one."
@@ -4219,8 +4997,118 @@ out one that is already taken — or hide one that just became available."
                           ""))))
             worktrees "")))))))
 
+      ;; Both reloads run: `or' would skip the second whenever the first
+      ;; reported a change.  Mailboxes ride along because whether one has a
+      ;; listener is a lock question.
+      (let ((locks (bp/agent-locks--reload))
+            (mailboxes (bp/agent-mailboxes--reload)))
+        (when (or locks mailboxes)
+          (bp/agent-sessions--refresh-if-visible)))
+            bp/agent-mailboxes--unread
                  (pid (and (buffer-live-p buf)
                            (bp/agent-sessions--terminal-pid buf)))
+;;;; Pending mailboxes
+;; Mail to a mailbox nobody listens on waits for the user, not for an agent
+;; started on its behalf: the dashboard lists it at the top, and `RET' starts
+;; an agent there.  A mailbox whose lock holder is running is left to that
+;; holder, which collects its mail with its next wait.
+
+(defun bp/agent-mailboxes--listener (dir)
+  "The lock on mailbox DIR, or nil when nobody holds it."
+  (seq-find (lambda (lock) (equal (plist-get lock :name) dir))
+            bp/agent-locks--held))
+
+(defun bp/agent-mailboxes--pending ()
+  "The mailboxes with unread mail and no running listener."
+  (seq-remove (lambda (mailbox)
+                (eq 'running
+                    (plist-get (bp/agent-mailboxes--listener
+                                (plist-get mailbox :dir))
+                               :liveness)))
+              bp/agent-mailboxes--unread))
+
+(defun bp/agent-mailboxes--insert-section ()
+  "Insert the mailboxes that have unread mail and no running listener."
+  (when-let ((pending (bp/agent-mailboxes--pending)))
+    (magit-insert-section (bp/agent-mailboxes-root)
+      (magit-insert-heading
+        (propertize "Mailboxes with mail and no running listener (RET starts an agent)\n"
+                    'font-lock-face 'magit-section-heading))
+      (dolist (mailbox pending)
+        (let* ((dir (plist-get mailbox :dir))
+               (lock (bp/agent-mailboxes--listener dir)))
+          (magit-insert-section (bp/agent-mailbox-row dir)
+            (insert
+             (propertize
+              (format "    ✉%d %s  %s: %s%s\n"
+                      (plist-get mailbox :count)
+                      (abbreviate-file-name dir)
+                      (bp/agent-locks--age (- (bp/agent-sessions--now)
+                                              (plist-get mailbox :oldest-at)))
+                      (plist-get mailbox :oldest-subject)
+                      (if lock
+                          ;; A new agent would block on this lock until the
+                          ;; user releases it.
+                          (format "  — locked by %s (%s)"
+                                  (or (plist-get lock :label)
+                                      (cadr (plist-get lock :holder)))
+                                  (if (eq (plist-get lock :liveness) 'unknown)
+                                      "liveness unknown"
+                                    "not running"))
+                        ""))
+              'font-lock-face (if lock 'bp/agent-session-error
+                                'bp/agent-session-needs-attention))))))
+      (insert "\n"))))
+
+(defcustom bp/agent-mailboxes-agents-directory "~/dev/agents/"
+  "Where persistent agents live: one mailbox directory per agent, by name.
+It holds the shared `PLAYBOOK.md' that `bp/agent-mailboxes-start' tells a new
+agent to read before its own `context.md'."
+  :type 'directory)
+
+(defun bp/agent-mailboxes--start-prompt (dir)
+  "The first prompt for an agent started in mailbox DIR.
+The agent is named after DIR, and reads the shared playbook in
+`bp/agent-mailboxes-agents-directory' before DIR's own `context.md'."
+  (format "You are %s. Read %s and then %s"
+          (file-name-nondirectory (directory-file-name dir))
+          (abbreviate-file-name
+           (expand-file-name "PLAYBOOK.md" bp/agent-mailboxes-agents-directory))
+          (abbreviate-file-name (expand-file-name "context.md" dir))))
+
+(defun bp/agent-mailboxes-start (dir)
+  "Start an agent in mailbox DIR, prompted by `bp/agent-mailboxes--start-prompt'.
+The agent type is asked for; DIR is the working directory.  The agent takes
+the mailbox's lock with its first `emacs-agent wait --mailbox', which is when
+its backlog reaches it."
+  (interactive (list (read-directory-name "Mailbox: ")))
+  (let* ((dir (or (bp/agent-mailbox--path (expand-file-name dir))
+                  (user-error "No such directory: %s" dir)))
+         (types (mapcar (lambda (cell) (symbol-name (car cell)))
+                        bp/agent-orchestration-launch-commands))
+         (type (completing-read (format "Start which agent on %s? "
+                                        (abbreviate-file-name dir))
+                                types nil t nil nil (car types)))
+         (template (alist-get (intern type)
+                              bp/agent-orchestration-launch-commands))
+         (name (file-name-nondirectory (directory-file-name dir)))
+         ;; The launch templates read their prompt from a file, as a worker
+         ;; brief; this one is a single line.
+         (prompt (expand-file-name
+                  (format "%s.md" (bp/agent-orchestration--next-id "mailbox"))
+                  bp/agent-orchestration--brief-dir)))
+    (make-directory bp/agent-orchestration--brief-dir t)
+    (with-temp-file prompt (insert (bp/agent-mailboxes--start-prompt dir)))
+    (let ((buf (bp/agent-sessions--create-terminal
+                dir (or (plist-get (bp/agent-session--repo-info dir) :worktree)
+                        name))))
+      (when (buffer-live-p buf)
+        (bp/agent-sessions--set-title-override buf (concat "mailbox " name))
+        (bp/agent-sessions--terminal-send
+         buf (bp/agent-orchestration--launch-command template prompt nil))
+        (bp/agent-sessions--refresh-if-visible))
+      buf)))
+
 (define-key bp/agent-sessions-mode-map (kbd "RET") #'bp/agent-sessions-jump)
 (define-key bp/agent-sessions-mode-map (kbd "v") #'bp/agent-sessions-display)
 (define-key bp/agent-sessions-mode-map (kbd "k") #'bp/agent-sessions-kill)
