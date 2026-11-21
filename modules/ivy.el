@@ -15,7 +15,7 @@
 (use-package phi-search
   :ensure t
   :bind (("C-c C-s" . phi-search)
-	 ("C-c C-s" . phi-search-backward)))
+	 ("C-c C-r" . phi-search-backward)))
 
 ;; Remembers history for M-x
 (use-package smex
