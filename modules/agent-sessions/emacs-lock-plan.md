@@ -44,7 +44,7 @@ In order, first that is set:
 
 `session` matches mail's `to_kind`, so a notice can be filed under the same key. The process pid is `CLAUDE_PID` when set, else empty (Emacs fills it; see below). Label = session title from `sessions` if found, else the key.
 
-DB path: `$EMACS_AGENT_SESSIONS_DB`, else `~/.emacs.d/agent-sessions.db`. Emacs injects the env var into terminals so it follows `bp/agent-sessions-db-file`.
+DB path: `$EMACS_AGENT_SESSIONS_DB`, else `~/.emacs.d/agent-sessions.db`. Emacs injects the env var into terminals so it follows `agent-sessions-db-file`.
 
 ## Schema (pure additions → `IF NOT EXISTS`, no version bump)
 
@@ -108,17 +108,17 @@ Conflict predicate for candidate `N` against row `L` (both dirs): `substr(N,1,le
 
 SQL values are passed by doubling `'`; numbers are validated as digits before interpolation. (Use `.parameter set` if the quoting gets hairy.)
 
-After every committed change: `emacsclient -e '(bp/agent-locks-changed)' >/dev/null 2>&1 &` — best-effort, backgrounded so a hung server cannot stall the agent, never affects the exit code.
+After every committed change: `emacsclient -e '(agent-sessions-locks-changed)' >/dev/null 2>&1 &` — best-effort, backgrounded so a hung server cannot stall the agent, never affects the exit code.
 
 ## Emacs side
 
 - Schema additions + re-migration (above). Inject `EMACS_AGENT_SESSIONS_DB` in `--terminal-environment`.
-- `bp/agent-locks-changed` → reload working copy (`locks`, `lock_waiters`) into a hash table, refresh dashboard if visible. Plus a 30s timer while the dashboard is visible.
+- `agent-sessions-locks-changed` → reload working copy (`locks`, `lock_waiters`) into a hash table, refresh dashboard if visible. Plus a 30s timer while the dashboard is visible.
 - Dashboard: a marker on session rows that hold / wait for locks; a `Locks` section listing each held lock (holder, running/not running, age, why) with its queue.
 - Force-release (key on a lock row, `yes-or-no-p`): delete the row in a transaction; write a `lock-revoked` notice:
   - holder running in a live terminal → normal mail delivery path;
-  - otherwise → `bp/agent-orchestration--mail-insert` only (no `send`, no revival).
-  - Needs a mail type: add `lock` to `bp/agent-orchestration-message-types`, or a dedicated system sender — decide while implementing.
+  - otherwise → `agent-sessions-orchestration--mail-insert` only (no `send`, no revival).
+  - Needs a mail type: add `lock` to `agent-sessions-orchestration-message-types`, or a dedicated system sender — decide while implementing.
 - Restore: when a hook event attaches an agent sid that holds locks whose pid is not alive, record the terminal's process pid + start time.
 
 ## Verify while implementing

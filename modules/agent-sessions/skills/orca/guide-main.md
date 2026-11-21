@@ -4,7 +4,7 @@ You run in a terminal Emacs owns, and can start other agents, give each one a
 task, send agent mail, and block until a reply or report arrives. Your tool is
 `emacs-agent`, already on your PATH. Everything it does goes through the Emacs
 that owns this terminal, so the human sees every agent you start or message in
-the same dashboard (`M-x bp/agent-sessions-list`).
+the same dashboard (`M-x agent-sessions-list`).
 
 The same mail works in two relationships. Decide which one you are in first:
 
@@ -172,7 +172,7 @@ knows to send you exactly one final report (a `status` whose subject starts
 prompt, and to stop when it is finished. You do not need to repeat that.
 
 `--type` is any agent type configured in
-`bp/agent-orchestration-launch-commands` (`claude` and `codex` out of the box —
+`agent-sessions-orchestration-launch-commands` (`claude` and `codex` out of the box —
 adding one is a one-line defcustom edit the human can make).
 
 ## 3. Choose the model, when the task has an opinion about it
@@ -386,7 +386,7 @@ emacs-agent send --to <address> --from ~/agents/reviewer --subject "..."
   never reads your brief. `spawn` registers the directory as trusted before
   launching, so this normally just works — when it does something, it tells you
   (`Note: pre-trusted … for codex`). Two cases still bite: the human turned that
-  off (`bp/agent-orchestration-trust-new-worktrees`), or the type is one they
+  off (`agent-sessions-orchestration-trust-new-worktrees`), or the type is one they
   added themselves, where Emacs does not know where trust lives. If a fresh
   worker goes quiet immediately and `spawn` printed no such note, assume it is
   sitting at a prompt: say so in your reply rather than waiting for a report

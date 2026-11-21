@@ -10,7 +10,7 @@ code says *what* it does; this file records *why*, so the intent survives edits.
   (`~/.orca/agent-hooks/claude-hook.sh`, wired via `~/.claude/settings.json`).
   Pi needs neither: its extension is TypeScript in-process, so
   `agent-sessions-pi-hook.ts` is the forwarder itself, copied into
-  `~/.pi/agent/extensions/` by `bp/agent-sessions-install`.
+  `~/.pi/agent/extensions/` by `agent-sessions-install`.
 - `bin/` — commands agents run *inside* a session terminal: `emacs-share`
   (see "Shared files"), `emacs-agent` (see "Orchestration") and `emacs-lock`
   (see "Locks"). On every session terminal's PATH.
@@ -18,18 +18,18 @@ code says *what* it does; this file records *why*, so the intent survives edits.
   the two guides `emacs-agent guide` serves.
 - `skills/emacs-lock/` — the skill that teaches agents to use `emacs-lock`;
   linked into the Claude and Codex skill directories by
-  `bp/agent-orchestration-install-skill` alongside orca.
+  `agent-sessions-orchestration-install-skill` alongside orca.
 - `orchestration/` — notes on how *Orca* (the app) does the same thing; read
   before redesigning this, not as a description of what is here.
-- `bp/agent-sessions-mode` (global minor mode) is the whole setup; the
+- `agent-sessions-mode` (global minor mode) is the whole setup; the
   package must work with nothing else configured. `../agent-session-config.el`
   is one user's config and holds only their own key choices.
 
 ## Self-contained, minimal configuration
 
 This is meant to be published, so everything a user would otherwise have to
-write lives here: the user enables `bp/agent-sessions-mode` and, if they like,
-binds `bp/agent-sessions-list`. Integration with another package
+write lives here: the user enables `agent-sessions-mode` and, if they like,
+binds `agent-sessions-list`. Integration with another package
 (terminal keymaps, project.el, Org, ivy) belongs in the package, behind
 `with-eval-after-load`-style wiring, never in the user's config. Two rules
 for that wiring:
@@ -40,7 +40,7 @@ for that wiring:
   which the mode removes, rather than `with-eval-after-load`, which cannot be
   undone. Only the Org link type and the server stay.
 - **Touch other packages buffer-locally where possible.** The `C-c C-l`
-  binding is a minor mode (`bp/agent-sessions-terminal-mode`) enabled in
+  binding is a minor mode (`agent-sessions-terminal-mode`) enabled in
   session terminals, not a binding in vterm's or ghostel's mode map; ghostel's
   own notifications are turned off only in session terminals. Passthrough keys
   are the exception: the terminal packages only support them globally, through
@@ -75,7 +75,7 @@ shell-command and eshell buffers, so only identities of kind `term` (plain and
 project terminals) become sessions. ghostel owns its pty natively: the
 buffer's process is an event pipe with no pid, and the shell's pid lives in
 `ghostel--pid`. Anything that inspects the shell goes through
-`bp/agent-sessions--terminal-pid`, never `process-id` directly.
+`agent-sessions--terminal-pid`, never `process-id` directly.
 
 **The per-buffer id is the identity, not the agent's own session id.** Sessions
 sharing a worktree must still resolve to the right buffer, and the agent's own
@@ -87,7 +87,7 @@ separately, only for resume/branch/links.
 rebuilt from live buffers on every render and nothing on disk feeds them —
 that is what stops a dead session ever being displayed as alive, which was the
 original point of the rule. What *is* persisted lives in one SQLite file
-(`bp/agent-sessions-db-file`), and the bar for adding to it is that it must be
+(`agent-sessions-db-file`), and the bar for adding to it is that it must be
 either something the user chose, or something they cannot reconstruct once it
 is gone:
 
@@ -97,7 +97,7 @@ is gone:
   otherwise forbid. It earns its place because a session id is the one thing
   you cannot get back after a crash, and because it records endings as
   faithfully as beginnings. A log that knows a session died isn't lying about
-  it; it is the only way `R` and `bp/agent-sessions-restore-previous` can offer
+  it; it is the only way `R` and `agent-sessions-restore-previous` can offer
   it back. What would break the rule is letting it populate rows.
 
 One store, not three files, because the log forced the issue: it is
@@ -122,8 +122,8 @@ duplicate insert.
 Pi has no hooks.json — extensions are whole files — so its forwarder translates
 its own events (`agent_end` → `Stop`, `before_agent_start` → `UserPromptSubmit`,
 `session_shutdown` → `SessionEnd`) into the vocabulary the status table already
-keys on, and delivers them through the same `bp/agent-hook-notify` channel. That
-is why `bp/agent-session-status-alist` grows a two-line `pi` entry instead of a
+keys on, and delivers them through the same `agent-sessions-hook-notify` channel. That
+is why `agent-sessions-status-alist` grows a two-line `pi` entry instead of a
 parallel pipeline: an agent that speaks the common event language gets attention
 tracking, the session log, and restore for free, and cannot drift out of sync
 with them. What pi deliberately does not get: fork parentage (Claude-only,
@@ -166,7 +166,7 @@ also forgets the terminal's row, so a closed row that a live terminal still
 holds can only be someone else's mistake. The heartbeat therefore reopens such
 rows, and because `kill-emacs-hook` stamps the heartbeat too, they are healed
 before the `emacs-exit` batch is written. For the same reason,
-`bp/agent-session-start` logs the type and id it resumed instead of waiting for
+`agent-sessions-start` logs the type and id it resumed instead of waiting for
 the first hook. Codex fires no hook until its first prompt, and an idle resumed
 Codex left an anonymous row that no restore could offer. Claude is the opposite
 case: it logs an id at `SessionStart` that has no transcript until the first
@@ -206,13 +206,13 @@ mark the new id as ended.
 **`running` means mid-turn, and two guards keep it that way.**
 `SessionStart` maps to `stopped` for pi and Claude — both fire it when the TUI
 opens at an idle prompt (Claude also on `--resume`), so without the mapping a
-fresh session fell through to the `running` default in `bp/agent-hook-notify`
+fresh session fell through to the `running` default in `agent-sessions-hook-notify`
 and read as mid-turn while sitting at its prompt. Codex deliberately gets no
 mapping: its `SessionStart` fires lazily on the first prompt, in the same
 instant as `UserPromptSubmit`, so mapping it could clobber `running` under
 unordered delivery. The other hole is an agent killed mid-turn — no shutdown
 hook fires, so the status freezes at `running` forever.
-`bp/agent-sessions--reconcile-status` demotes that to `stopped` at display
+`agent-sessions--reconcile-status` demotes that to `stopped` at display
 time when the terminal can name a foreground group (`tpgid` present in
 `process-attributes`) and the group is empty — the shell then owns the pty, so
 no turn can be in progress. An idle pi still holds the foreground with its
@@ -251,7 +251,7 @@ starts (measured, not assumed — a fresh Codex TUI sat drawn at its prompt for
 `--resume`, so before this, a batch of restored sessions left every Codex row
 reading `eat` while the Claude rows read `claude`.
 
-`bp/agent-sessions--foreground-command` instead asks the pty for its
+`agent-sessions--foreground-command` instead asks the pty for its
 *foreground process group* (`tpgid` from `process-attributes`) and names that
 job. Why this shape:
 
@@ -289,10 +289,10 @@ once the process is gone.
 
 The corollary, learned the hard way: **a row's status is whatever was
 rendered, so nothing may re-derive it from the registry.** `N`/`P` did exactly
-that (`gethash` on `bp/agent-sessions`) and so navigated past every row `u` had
+that (`gethash` on `agent-sessions--registry`) and so navigated past every row `u` had
 marked, while the face, marker and sort bucket — all fed by `--live-entries`,
 which applies the overlay — agreed the row needed attention. The render now
-records `(line-pos . status)` into `bp/agent-sessions--row-status` as it draws,
+records `(line-pos . status)` into `agent-sessions--row-status` as it draws,
 and navigation reads that. Any future consumer of "what state is this row in"
 belongs on that list, not on a second lookup.
 
@@ -359,7 +359,7 @@ on a repo/worktree heading opens project.el's switch menu, whose own
 `project--switch-project-command` loops until it reads a key it recognises —
 fine when you deliberately invoked `project-switch-project`, wrong here, where
 `RET` is a glance at what's available and every *other* dashboard key is a
-one-shot action. `bp/agent-sessions--switch-project` therefore swaps in a
+one-shot action. `agent-sessions--switch-project` therefore swaps in a
 one-shot reader (returning `ignore` for unknown input) via `cl-letf`, scoped to
 that single call so the looping behaviour survives everywhere else. Build the
 keymap and prompt from project.el's own `project-switch-commands` /
@@ -437,7 +437,7 @@ caller needs the facts, not our verdict on whether it may work there.
 **A worker learns who it is from its environment, not from its launch command.**
 The id a worker is addressed by is minted inside the vterm/eat advice that
 builds its environment, so at the moment we assemble the command there is no id
-to write into it. Hence `bp/agent-sessions--extra-terminal-env`, bound around
+to write into it. Hence `agent-sessions--extra-terminal-env`, bound around
 the create call: role, coordinator and brief path ride in alongside
 `EMACS_AGENT_SESSION_ID`, and `emacs-agent` reads them so the worker never has
 to be told its own name.
@@ -451,7 +451,7 @@ re-running that one line reproduces the launch by hand.
 
 **A model is a hole in the launch command, not another agent type.** Before
 `--model`, running a worker on a different model meant the human adding a whole
-type to `bp/agent-orchestration-launch-commands` (`claude-opus`, `claude-haiku`,
+type to `agent-sessions-orchestration-launch-commands` (`claude-opus`, `claude-haiku`,
 …), which multiplies types by models and hides a per-spawn choice in a config
 file. So the template grew placeholders — `%b` for the brief, `%m` for the model
 flag — and a second alist says how each type *spells* that flag. Two knobs
@@ -489,7 +489,7 @@ nothing can resume a bare shell.
 So there are two structures, and they answer different questions. The hash table
 is the working copy, keyed the way mail is addressed, and it is what the render
 path reads — the render path must never query the database. The `mail` table is
-the record; `bp/agent-orchestration--hydrate` copies unread rows into the working
+the record; `agent-sessions-orchestration--hydrate` copies unread rows into the working
 copy at the two moments a session's durable identity becomes known: a hook event
 (which is also how a session restored with `R` gets its mail back, attached to
 the conversation rather than to the terminal that used to hold it) and an
@@ -497,7 +497,7 @@ explicit inbox read. Hydration is idempotent by message id, and ids carry the
 minting Emacs's pid so a restored message cannot collide with a new one. Reads
 write `read_at` through, or a restart would redeliver mail the agent has already
 acted on. A killed terminal drops its working copy in
-`bp/agent-session--cleanup`, never the record.
+`agent-sessions--cleanup`, never the record.
 
 One consequence worth stating: a message can outlive the terminal that sent it,
 so the sender is resolved through its durable key at display time. The reply
@@ -554,7 +554,7 @@ human has sent that draft; delivery then bracket-pastes the mail into the
 available composer and invokes `chat:queueSubmit`, putting it behind the
 human's message.
 The queue-submit key bytes are customizable as
-`bp/agent-orchestration-claude-queue-submit-key` for users who rebind that
+`agent-sessions-orchestration-claude-queue-submit-key` for users who rebind that
 Claude action.
 
 Claude's inline Tab completion also occupies the composer, but it is not a
@@ -620,7 +620,7 @@ submission. Other agents keep the idle behavior because typing into a busy TUI
 is not a portable queue API.
 
 Idle delivery fires on the `Stop` hook (via
-`bp/agent-orchestration-deliver`) and on arrival. It requires both a non-running
+`agent-sessions-orchestration-deliver`) and on arrival. It requires both a non-running
 status and something holding the terminal's foreground, and is only the fallback
 for agents without a known queue action. Inbox reads, queue acceptance, and
 idle delivery consume mail on Emacs's single thread, so whichever gets a message
@@ -672,7 +672,7 @@ command no longer has. This is the one idea worth keeping from Orca's own design
 (`orchestration/provenance.md`).
 
 **Org links are composed by Org and pasted by the terminal backend.** `C-c C-l`
-in a session terminal (`bp/agent-sessions-terminal-mode`) runs `org-insert-link' in a temporary
+in a session terminal (`agent-sessions-terminal-mode`) runs `org-insert-link' in a temporary
 Org buffer, preserving the normal stored-link completion and description
 prompt. The finished Org markup is then bracket-pasted into the terminal input
 without Enter, so an agent-session link can be copied from the dashboard and
@@ -727,14 +727,14 @@ the user: the dashboard lists it at the top (with its unread count, oldest
 subject, and a not-running holder's lock if one still blocks it), and `RET`
 starts an agent in DIR prompted with `You are <name>. Read
 ~/dev/agents/PLAYBOOK.md and then ~/dev/agents/<name>/context.md` — the
-shared playbook in `bp/agent-mailboxes-agents-directory`, then the role's own
+shared playbook in `agent-sessions-mailboxes-agents-directory`, then the role's own
 context; the name is the mailbox directory's. Starting one automatically was considered and dropped: a burst of mail before the first
 instance took the lock would start several, and the second would sit refused
 on the lock waiting for the user anyway.
 
 **Unread mailbox mail has its own working copy.** It is not hydrated into any
 terminal's inbox — there is no fixed terminal to file it under — so
-`bp/agent-mailboxes--unread` holds per-mailbox counts for the render path,
+`agent-sessions-mailboxes--unread` holds per-mailbox counts for the render path,
 reloaded on mailbox send and read and alongside the lock copy on the poke and
 the heartbeat. `wait`/`check` read the `mail` table directly; they are not the
 render path.
@@ -797,7 +797,7 @@ true no-op and preserves the read state; changing a URL's label marks that row
 unread again while keeping its position. A new URL adds a new row.
 
 `emacs-share state STATE|--clear` sets the session's workflow state, the same
-field `t` cycles. The middle of `bp/agent-sessions-states` is the
+field `t` cycles. The middle of `agent-sessions-states` is the
 issue-workflow skill's phases, so an agent running it reports each transition
 and the column shows whose turn it is; the *-REVIEW states and `PR-OPEN` are the
 skill's gates, where the agent has stopped for the user. **One field, last
@@ -814,8 +814,8 @@ it has one, the buffer name otherwise, reading both and collapsing onto the
 first on write. So renaming a terminal keeps its attachments, one added to a
 bare shell survives `claude` starting in it, and a session brought back with
 `R` gets them back. The *caller* passes the terminal id, because that is what
-the shell environment has; `bp/agent-sessions-share-file` and
-`bp/agent-sessions-share-link` resolve it to a session, the same split the hook
+the shell environment has; `agent-sessions-share-file` and
+`agent-sessions-share-link` resolve it to a session, the same split the hook
 path makes. Like a note, a row outlives the session that owned it and nothing
 prunes it — the same trade, for the same reason.
 
@@ -867,7 +867,7 @@ void by design: a hook firing into a dead Emacs must not break the agent's
 turn. This one is the opposite — an agent that believes it has handed over a
 file when it has not will go on to tell the user about it — so a missing file,
 a terminal outside Emacs, an unreachable server and a refusal from Emacs each
-print to stderr and exit non-zero. `bp/agent-sessions-share-file` therefore
+print to stderr and exit non-zero. `agent-sessions-share-file` therefore
 *returns* its failures as strings rather than signalling: emacsclient's printed
 value is the only channel back to the agent. `emacs-share-file` is a symlink to
 `emacs-share` that selects file mode implicitly, so already-running agents keep
@@ -898,8 +898,8 @@ the column has no width when no session qualifies, like the lock column.
 - **The poll is adaptive: fast while a PR is in motion, slow while all are
   settled.** Checks running and the merge queue end by themselves, usually
   within minutes, so while any PR shown is in one of those states the next
-  poll is `bp/agent-sessions-pr-poll-interval-active` (20s) away; otherwise
-  `bp/agent-sessions-pr-poll-interval` (180s). Settled includes a failed
+  poll is `agent-sessions-pr-poll-interval-active` (20s) away; otherwise
+  `agent-sessions-pr-poll-interval` (180s). Settled includes a failed
   fetch, so an auth or network failure is retried slowly rather than hammered.
   The poll is therefore a one-shot timer re-armed by each fetch's completion,
   timed by the states that fetch just learned; a repeating timer would keep
@@ -910,7 +910,7 @@ the column has no width when no session qualifies, like the lock column.
   view --json` has no merge-queue field, which is why it is GraphQL. Each PR
   is an alias (`p0`, `p1`, …), and a tick that finds a request still running
   does nothing, so a slow GitHub cannot pile up processes; a request is killed
-  after `bp/agent-sessions-pr-fetch-timeout`.
+  after `agent-sessions-pr-fetch-timeout`.
 - **Failures are shown where they apply, and never erase a good state.** gh
   exits 1 when *one* PR fails but still prints the others' data with an
   `errors` entry naming the alias (verified), so the output is parsed whatever
@@ -1038,12 +1038,12 @@ locks are pointed at the terminal's process and read as running again. The
 check consults only the working copy, because it runs on every hook event.
 
 **Tests drive the real CLI.** `agent-sessions-lock-test.el` builds a temp
-database with `bp/agent-sessions--db`, strips every inherited agent identity,
+database with `agent-sessions--db`, strips every inherited agent identity,
 and sets `EMACS_LOCK_EMACSCLIENT=true` so a test never pokes the user's Emacs.
 
 ## Wiring is self-owned and additive, never authoritative
 
-`bp/agent-sessions-install` / `-uninstall` manage the hook entries in
+`agent-sessions-install` / `-uninstall` manage the hook entries in
 `~/.claude/settings.json` and `~/.codex/hooks.json`. The design constraints,
 which are the whole point of these commands existing:
 
@@ -1064,7 +1064,7 @@ which are the whole point of these commands existing:
   survive untouched; verify round-trips by equality against the original, not by
   eyeballing. A `.bak` is written before each change.
 
-`bp/agent-sessions-mode` does **not** run install — it writes user config files, so it stays
+`agent-sessions-mode` does **not** run install — it writes user config files, so it stays
 an explicit `M-x`. Point users there rather than editing the JSON by hand.
 
 ## Editing

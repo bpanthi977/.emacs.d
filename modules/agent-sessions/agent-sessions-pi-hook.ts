@@ -1,12 +1,12 @@
 /**
  * Forwards Pi session events to the Emacs agent-sessions dashboard.
  *
- * Installed into ~/.pi/agent/extensions/ by `bp/agent-sessions-install'.
+ * Installed into ~/.pi/agent/extensions/ by `agent-sessions-install'.
  * Gated on EMACS_AGENT_SESSION_ID, which modules/agent-sessions/
  * agent-sessions.el injects into every terminal buffer's shell env, so a
  * session only reports when it runs inside an Emacs-managed terminal.
  *
- * The payload goes to a temp file and reaches `bp/agent-hook-notify' over
+ * The payload goes to a temp file and reaches `agent-sessions-hook-notify' over
  * emacsclient — the same channel the Claude/Codex shell forwarders use —
  * with pi's event names translated into the Claude vocabulary the
  * dashboard's status table keys on (SessionStart / UserPromptSubmit /
@@ -45,7 +45,7 @@ export default function (pi) {
 				[
 					"--no-wait",
 					"-e",
-					`(bp/agent-hook-notify "${terminalId}" "pi" "${payloadFile}")`,
+					`(agent-sessions-hook-notify "${terminalId}" "pi" "${payloadFile}")`,
 				],
 				{ stdio: "ignore" },
 			);

@@ -11,7 +11,7 @@ from one invocation:
 
 1. bail out if the payload is empty, or if `DEVIN_PROJECT_DIR` is set;
 2. if `EMACS_AGENT_SESSION_ID` is set and `emacsclient` exists, spool the payload
-   to a temp file and call `(bp/agent-hook-notify <id> "claude" <file>)`
+   to a temp file and call `(agent-sessions-hook-notify <id> "claude" <file>)`
    `--no-wait`;
 3. source `$ORCA_AGENT_HOOK_ENDPOINT` (a four-line env file under
    `~/Library/Application Support/orca/agent-hooks/endpoint.env` carrying port,

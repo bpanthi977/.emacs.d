@@ -50,7 +50,7 @@ need_session() {
   # another live terminal, and mail sent as it would go astray.
   agent_session_id=${CODEX_THREAD_ID:-${CODEX_SESSION_ID:-}}
   if [ -n "$agent_session_id" ]; then
-    EMACS_AGENT_SESSION_ID=$(call "(bp/agent-sessions-terminal-id-for-agent \"$(esc "$agent_session_id")\")")
+    EMACS_AGENT_SESSION_ID=$(call "(agent-sessions-terminal-id-for-agent \"$(esc "$agent_session_id")\")")
     [ -n "$EMACS_AGENT_SESSION_ID" ] ||
       die "no Emacs agent session registered for agent id $agent_session_id"
   fi
@@ -170,13 +170,13 @@ stdin_body() {
 }
 
 do_send() { # do_send TO TYPE SUBJECT BODY [FROM]
-  out=$(call "(bp/agent-orchestration-send \"$(esc "$EMACS_AGENT_SESSION_ID")\" \"$(esc "$1")\" \"$(esc "$2")\" \"$(esc "$3")\" \"$(esc "$4")\" \"$(esc "${5:-}")\")")
+  out=$(call "(agent-sessions-orchestration-send \"$(esc "$EMACS_AGENT_SESSION_ID")\" \"$(esc "$1")\" \"$(esc "$2")\" \"$(esc "$3")\" \"$(esc "$4")\" \"$(esc "${5:-}")\")")
   report "$out" 'Sent*'
 }
 
 do_check() { # do_check CONSUME -> prints "messages: N" and the messages
   consume=t; [ -n "$1" ] || consume=nil
-  call "(bp/agent-orchestration-check \"$(esc "$EMACS_AGENT_SESSION_ID")\" $consume \"$(esc "$mailbox")\")"
+  call "(agent-sessions-orchestration-check \"$(esc "$EMACS_AGENT_SESSION_ID")\" $consume \"$(esc "$mailbox")\")"
 }
 
 count_of() { printf '%s' "$1" | sed -n '1s/^messages: \([0-9]*\)$/\1/p'; }
@@ -231,7 +231,7 @@ case "$verb" in
       from=$(mailbox_path "$from") || exit 1
       claim_mailbox "$from" "spawning a worker for this mailbox"
     fi
-    out=$(call "(bp/agent-orchestration-spawn \"$(esc "$EMACS_AGENT_SESSION_ID")\" \"$(esc "$type_")\" \"$(esc "$worktree")\" \"$(esc "$task")\" \"$(esc "$title")\" \"$(esc "$model")\" \"$(esc "$from")\")")
+    out=$(call "(agent-sessions-orchestration-spawn \"$(esc "$EMACS_AGENT_SESSION_ID")\" \"$(esc "$type_")\" \"$(esc "$worktree")\" \"$(esc "$task")\" \"$(esc "$title")\" \"$(esc "$model")\" \"$(esc "$from")\")")
     report "$out" 'Spawned*'
     ;;
 
@@ -284,12 +284,12 @@ case "$verb" in
 
   list)
     need_session
-    call "(bp/agent-orchestration-list \"$(esc "$EMACS_AGENT_SESSION_ID")\")"
+    call "(agent-sessions-orchestration-list \"$(esc "$EMACS_AGENT_SESSION_ID")\")"
     ;;
 
   worktrees)
     need_session
-    out=$(call "(bp/agent-orchestration-worktrees \"$(esc "$EMACS_AGENT_SESSION_ID")\")")
+    out=$(call "(agent-sessions-orchestration-worktrees \"$(esc "$EMACS_AGENT_SESSION_ID")\")")
     report "$out" 'repo:*'
     ;;
 

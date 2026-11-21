@@ -23,7 +23,7 @@ usage() {
   fi
 }
 
-# The full help.  The states are bp/agent-sessions-states in Emacs, in the
+# The full help.  The states are agent-sessions-states in Emacs, in the
 # order the dashboard's `t' cycles them; a test keeps this list in step.
 help() {
   usage
@@ -141,7 +141,7 @@ case "$mode" in
     esac
 
     need_session
-    output=$(call "(bp/agent-sessions-share-file \"$(esc "$EMACS_AGENT_SESSION_ID")\" \"$(esc "$absolute_path")\" \"$(esc "$label")\" \"$(esc "$agent_session_id")\")")
+    output=$(call "(agent-sessions-share-file \"$(esc "$EMACS_AGENT_SESSION_ID")\" \"$(esc "$absolute_path")\" \"$(esc "$label")\" \"$(esc "$agent_session_id")\")")
     case "$output" in
       Shared*) printf '%s\n' "$output" ;;
       *) die "$output" ;;
@@ -154,7 +154,7 @@ case "$mode" in
     [ "$state" = "--clear" ] && state=
 
     need_session
-    output=$(call "(bp/agent-sessions-share-state \"$(esc "$EMACS_AGENT_SESSION_ID")\" \"$(esc "$state")\" \"$(esc "$agent_session_id")\")")
+    output=$(call "(agent-sessions-share-state \"$(esc "$EMACS_AGENT_SESSION_ID")\" \"$(esc "$state")\" \"$(esc "$agent_session_id")\")")
     case "$output" in
       State*) printf '%s\n' "$output" ;;
       *) die "$output" ;;
@@ -169,7 +169,7 @@ case "$mode" in
     label=${3:-}
 
     need_session
-    output=$(call "(bp/agent-sessions-share-link \"$(esc "$EMACS_AGENT_SESSION_ID")\" \"$(esc "$kind")\" \"$(esc "$url")\" \"$(esc "$label")\" \"$(esc "$agent_session_id")\")")
+    output=$(call "(agent-sessions-share-link \"$(esc "$EMACS_AGENT_SESSION_ID")\" \"$(esc "$kind")\" \"$(esc "$url")\" \"$(esc "$label")\" \"$(esc "$agent_session_id")\")")
     case "$output" in
       Linked*) printf '%s\n' "$output" ;;
       *) die "$output" ;;

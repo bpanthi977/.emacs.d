@@ -88,4 +88,4 @@ restore and still fails.
 `emacs-agent` only exists inside a terminal Emacs manages, and needs that Emacs
 running with its server started. If the command is missing, say so plainly —
 there is nothing to orchestrate from here, and the user's dashboard is where this
-feature lives (`M-x bp/agent-sessions-list`, `M-x bp/agent-orchestration-install-skill`).
+feature lives (`M-x agent-sessions-list`, `M-x agent-sessions-orchestration-install-skill`).

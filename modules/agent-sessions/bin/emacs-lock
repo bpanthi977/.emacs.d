@@ -201,7 +201,7 @@ detail_of() { printf '%s\n' "$1" | sed -n "s/^S$US[^$US]*$US\\(.*\\)/\\1/p" | he
 poke() {
   client=${EMACS_LOCK_EMACSCLIENT:-emacsclient}
   command -v "$client" >/dev/null 2>&1 || return 0
-  ( "$client" -e "(when (fboundp 'bp/agent-locks-changed) (bp/agent-locks-changed))" \
+  ( "$client" -e "(when (fboundp 'agent-sessions-locks-changed) (agent-sessions-locks-changed))" \
       >/dev/null 2>&1 & ) >/dev/null 2>&1
 }
 
